@@ -1,0 +1,20 @@
+name: Sync fork with upstream
+
+on:
+  schedule:
+    # 每天 UTC 01:00（北京时间 09:00）自动运行
+    - cron: "0 1 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Sync fork from upstream
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh repo sync tigerwind888/WinShun -b main
