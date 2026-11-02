@@ -14,6 +14,9 @@
 #ifndef OutputDir
   #define OutputDir "..\dist"
 #endif
+#ifndef PackageSuffix
+  #define PackageSuffix ""
+#endif
 
 #define AppName "Win顺"
 #define AppExe "WinShun.exe"
@@ -63,6 +66,10 @@ UsePreviousTasks=yes
 ; It is closed in PrepareToInstall, the way it saves its index.
 CloseApplications=no
 RestartApplications=no
+; The ws task puts {app}\bin on the PATH (the system's or the user's, by the
+; install mode): the programs that are open are told to read it again, at the
+; end of Setup and of the uninstall alike.
+ChangesEnvironment=yes
 
 WizardStyle=modern dynamic windows11
 ; Win顺's own pictures, light and dark (tools/make_installer_images.py).
@@ -78,7 +85,7 @@ ShowLanguageDialog=no
 LanguageDetectionMethod=uilanguage
 
 OutputDir={#OutputDir}
-OutputBaseFilename=WinShun-{#AppVersion}-x64-setup
+OutputBaseFilename=WinShun-{#AppVersion}-x64{#PackageSuffix}-setup
 Compression=lzma2/ultra64
 SolidCompression=yes
 
@@ -136,8 +143,14 @@ chinesesimplified.AiTool=AI 工具
 ; them): %1 is the list, one per line.
 english.FilesInUseTitle=Some programs are still using WinShun's files
 chinesesimplified.FilesInUseTitle=还有程序在用 Win顺 的文件
-english.FilesInUse=While these are open, Setup cannot replace WinShun's files:%n%n%1%nClose them, then click Try again. One that runs as administrator has to be closed where it runs.
-chinesesimplified.FilesInUse=这些程序开着，Win顺 的文件就换不了：%n%n%1%n请先关掉它们，再点“重试”。%n以管理员身份运行的，要在它那边关。
+english.FilesInUse=These programs may be using WinShun's files:%n%n%1%nClose programs that prevent the update, then retry. If security software is only reading the files, you can try installing. Setup will ask if a file really cannot be replaced.
+chinesesimplified.FilesInUse=这些程序可能正在访问 Win顺 的文件：%n%n%1%n请关闭阻止更新的程序后重试。如果只是安全软件读取文件，可以尝试安装；实际无法替换文件时会再提示处理。
+english.FilesRetry=&Retry
+chinesesimplified.FilesRetry=重新检测(&R)
+english.FilesTryInstall=&Try installing
+chinesesimplified.FilesTryInstall=尝试安装(&I)
+english.FilesCancel=&Cancel
+chinesesimplified.FilesCancel=取消安装(&C)
 english.FilesInUseAi=%1 (connected to WinShun)
 chinesesimplified.FilesInUseAi=%1（连着 Win顺）
 english.FilesNotFreed=Other programs are still using WinShun's files, so nothing was installed. Close them and run Setup again.
@@ -145,9 +158,20 @@ chinesesimplified.FilesNotFreed=还有程序在用 Win顺 的文件，这次没�
 ; The Start menu shortcut users pin to the taskbar (WinShunSearch.exe).
 english.SearchShortcut=WinShun Search
 chinesesimplified.SearchShortcut=Win顺 搜索
+; The command line ws (bin\ws.exe, src/cli): the task that puts its folder on the PATH.
+english.WsGroup=Command line:
+chinesesimplified.WsGroup=命令行：
+english.WsCommand=Add the ws command (search files from the command line)
+chinesesimplified.WsCommand=添加 ws 命令（在命令行里搜索文件）
+english.WsNewTerminal=To use the ws command, type ws in a newly opened terminal. Terminals that are already open do not see the change (restart VS Code for its terminal).
+chinesesimplified.WsNewTerminal=要用 ws 命令，请在新打开的终端里输入 ws。已经开着的终端看不到这个变化（VS Code 的终端要重开 VS Code）。
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
+; Checked, as asking costs a click and the command is no use unless it is on the PATH.
+; Not a [Registry] entry: the PATH is one value that other programs write
+; too, and it is only appended to (AddWsToPath), never replaced.
+Name: "wscommand"; Description: "{cm:WsCommand}"; GroupDescription: "{cm:WsGroup}"
 
 [Files]
 ; Everything build.ps1 -Deploy put in dist\WinShun, the index service
@@ -163,6 +187,18 @@ Source: "{#SourceDir}\*"; DestDir: "{app}"; Excludes: "WinShunService.exe,\WinSh
 Source: "{#SourceDir}\WinShunService.exe"; DestDir: "{app}"; Flags: ignoreversion; Check: IsAdminInstallMode
 Source: "{#SourceDir}\WinShunMcp.exe"; DestDir: "{app}"; Flags: ignoreversion
 
+[InstallDelete]
+; The full regular face covers the original characters; Qt synthesizes bold.
+Type: files; Name: "{app}\fonts\AlibabaPuHuiTi-3-85-Bold.ttf"
+; Plugins that came with an earlier Win顺 and are in the plugin library now
+; (GitHub #138): an upgrade would leave their old folders in plugins\, and
+; Win顺 would go on taking them for bundled ones. Who had one on gets it
+; from the library at the next start (MovedPlugins), settings kept.
+Type: filesandordirs; Name: "{app}\plugins\winshun.localsend"
+Type: filesandordirs; Name: "{app}\plugins\winshun.semantic"
+Type: filesandordirs; Name: "{app}\plugins\winshun.translate"
+Type: filesandordirs; Name: "{app}\plugins\winshun.bookmarks"
+
 [Icons]
 Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExe}"
 ; The taskbar button. Its AppUserModelID, the one WinShunSearch.exe sets for
@@ -175,14 +211,12 @@ Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: desktopico
 ; (LocalSystem, automatic start) and started, by the installer's own
 ; (elevated) rights; installed again, it is pointed at the new files.
 Filename: "{app}\WinShunService.exe"; Parameters: "--install"; Flags: runhidden waituntilterminated runascurrentuser; Check: IsAdminInstallMode
-; LAN transfer (the bundled plugin winshun.localsend, GitHub #113): phones and
-; computers on the same network reach it on its LocalSend ports, from the
-; local subnet only, on any network type (the plugin itself asks before it
-; receives on a public one). Win顺 never changes the firewall; this admin
-; install does, anew every time (silent ones too); the uninstaller removes it.
+; LAN transfer (winshun.localsend, GitHub #113) came with 0.16.0, and its
+; firewall rules for {app}\plugins\winshun.localsend with it. It is in the
+; plugin library now (GitHub #138; [InstallDelete] takes the old folder
+; away): Windows asks the first time it listens, as for any program, so
+; the rules for a program no longer there go too.
 Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=""WinShun LAN transfer"""; Flags: runhidden waituntilterminated runascurrentuser; Check: IsAdminInstallMode
-Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall add rule name=""WinShun LAN transfer"" dir=in action=allow program=""{app}\plugins\winshun.localsend\WinShunLocalSend.exe"" protocol=TCP localport=53317-53320 remoteip=localsubnet profile=any enable=yes"; Flags: runhidden waituntilterminated runascurrentuser; Check: IsAdminInstallMode
-Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall add rule name=""WinShun LAN transfer"" dir=in action=allow program=""{app}\plugins\winshun.localsend\WinShunLocalSend.exe"" protocol=UDP localport=53317 remoteip=localsubnet profile=any enable=yes"; Flags: runhidden waituntilterminated runascurrentuser; Check: IsAdminInstallMode
 ; The rest as the user who started Setup, with normal rights (runasoriginaluser):
 ; WinShun runs so, and its autostart task and settings are that user's, not
 ; the administrator's who answered UAC for a standard user (GitHub #21).
@@ -200,7 +234,8 @@ Filename: "{app}\{#AppExe}"; Parameters: "--background"; Flags: nowait runasorig
 Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent runasoriginaluser
 
 [UninstallRun]
-; LAN transfer's firewall rules ([Run]): they go with Win顺.
+; LAN transfer's firewall rules of 0.16.0 ([Run]), should an upgrade not have
+; removed them (a per-user Setup over an admin one): they go with Win顺.
 Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=""WinShun LAN transfer"""; Flags: runhidden waituntilterminated; Check: IsAdminInstallMode; RunOnceId: "DelLanTransferRules"
 
 [UninstallDelete]
@@ -650,6 +685,229 @@ end;
 var
   FilesInstalled: Boolean; // the new files are in (ssPostInstall)
 
+// ---- The command line ws: {app}\bin on the PATH ----------------------------
+
+const
+  SystemEnvironmentKey = 'SYSTEM\CurrentControlSet\Control\Session Manager\Environment';
+  UserEnvironmentKey = 'Environment';
+  // Where WinShun's settings page notes the folder it put on the user's PATH.
+  CliRecordKey = 'Software\WinShun';
+  CliRecordName = 'CliPathEntry';
+
+var
+  WsOnPath: Boolean; // the folder is on the PATH now (put there, or there already)
+
+// ws.exe lives alone in {app}\bin, and only that folder goes on the PATH: the
+// install folder holds Qt's DLLs, which other programs would find through the
+// PATH and use.
+function WsFolder(): String;
+begin
+  Result := ExpandConstant('{app}\bin');
+end;
+
+// The PATH of the install mode: the system's for all users, the user's own
+// for "only me" (HKA is HKLM or HKCU by the same mode).
+function PathKey(): String;
+begin
+  if IsAdminInstallMode then
+    Result := SystemEnvironmentKey
+  else
+    Result := UserEnvironmentKey;
+end;
+
+// Whether a PATH entry names Folder: compared without quotes, a closing
+// backslash and case. A %VAR% entry is not expanded: not recognised, it stays.
+function EntryIsFolder(Entry, Folder: String): Boolean;
+begin
+  Entry := Trim(Entry);
+  if (Length(Entry) >= 2) and (Entry[1] = '"') and (Entry[Length(Entry)] = '"') then
+    Entry := Trim(Copy(Entry, 2, Length(Entry) - 2));
+  StringChangeEx(Entry, '/', '\', True);
+  while (Length(Entry) > 3) and (Entry[Length(Entry)] = '\') do
+    Delete(Entry, Length(Entry), 1);
+  Result := CompareText(Entry, Folder) = 0;
+end;
+
+// Takes the first entry off Path: up to the first ";" outside double quotes, as
+// Windows reads a PATH, where a folder with a ";" in its name is one entry
+// ("C:\a;b\bin"). Entry is that text without the ";", Path what follows it.
+// False when it was the last entry (Path is then empty).
+function NextPathEntry(var Path, Entry: String): Boolean;
+var
+  I: Integer;
+  InQuotes: Boolean;
+begin
+  InQuotes := False;
+  for I := 1 to Length(Path) do
+  begin
+    if Path[I] = '"' then
+      InQuotes := not InQuotes
+    else if (Path[I] = ';') and not InQuotes then
+    begin
+      Entry := Copy(Path, 1, I - 1);
+      Delete(Path, 1, I);
+      Result := True;
+      exit;
+    end;
+  end;
+  Entry := Path;
+  Path := '';
+  Result := False;
+end;
+
+function PathHasFolder(Path, Folder: String): Boolean;
+var
+  Entry: String;
+  More: Boolean;
+begin
+  Result := False;
+  repeat
+    More := NextPathEntry(Path, Entry);
+    Result := Result or EntryIsFolder(Entry, Folder);
+  until not More;
+end;
+
+// Path without the entries that name Folder, each with one ";"; every other
+// character as it was (quotes, %VAR%, empty entries).
+function PathWithoutFolder(Path, Folder: String; var Found: Boolean): String;
+var
+  Part: String;
+  First, More: Boolean;
+begin
+  Result := '';
+  Found := False;
+  First := True;
+  repeat
+    More := NextPathEntry(Path, Part);
+    if EntryIsFolder(Part, Folder) then
+      Found := True
+    else
+    begin
+      if not First then
+        Result := Result + ';';
+      Result := Result + Part;
+      First := False;
+    end;
+  until not More;
+end;
+
+// How Folder is written on a PATH: in quotes when its name holds a ";", which
+// would otherwise cut it in two.
+function PathEntryOf(Folder: String): String;
+begin
+  if Pos(';', Folder) > 0 then
+    Result := '"' + Folder + '"'
+  else
+    Result := Folder;
+end;
+
+// The PATH value of Key, to change it. False: leave it alone. A value that is
+// there but that RegQueryStringValue cannot read (REG_BINARY, say, or no access
+// to it) is not an absent one, and writing it anew would replace everything on
+// the PATH by one folder. Exists says whether the value is there at all; it
+// is not, Path is empty.
+function ReadPathToChange(Root: Integer; Key: String; var Path: String; var Exists: Boolean): Boolean;
+begin
+  Path := '';
+  Result := True;
+  Exists := RegValueExists(Root, Key, 'Path');
+  if Exists and not RegQueryStringValue(Root, Key, 'Path', Path) then
+  begin
+    Log('The PATH value in ' + Key + ' exists but cannot be read as text (a type other than REG_SZ or REG_EXPAND_SZ, or no access): left as it is.');
+    Path := '';
+    Result := False;
+  end;
+end;
+
+// Appended to the PATH of the install mode (RegQueryStringValue does not expand
+// it, so %VAR% entries go back as they were); not twice, which an update would
+// otherwise do. Not when ws.exe is not in the folder: no entry for a folder
+// that holds nothing. A PATH value that cannot be read as text is left alone
+// (ReadPathToChange), and WsOnPath says "yes" only when the folder is on the
+// PATH for sure, so that the last page does not promise ws where it is not.
+procedure AddWsToPath();
+var
+  Path, Folder: String;
+  Exists, Written: Boolean;
+begin
+  Folder := WsFolder();
+  if not FileExists(Folder + '\ws.exe') then
+    exit;
+  if not ReadPathToChange(HKA, PathKey(), Path, Exists) then
+    exit;
+  if Exists and PathHasFolder(Path, Folder) then
+  begin
+    WsOnPath := True;
+    exit;
+  end;
+  if Path = '' then
+    Path := PathEntryOf(Folder)
+  else if Path[Length(Path)] = ';' then
+    Path := Path + PathEntryOf(Folder)
+  else
+    Path := Path + ';' + PathEntryOf(Folder);
+  // The type stays as it is: RegWriteStringValue keeps a REG_EXPAND_SZ (Windows'
+  // own PATH is one) and a REG_SZ stays what it is; a PATH that is not there yet is made REG_EXPAND_SZ.
+  if Exists then
+    Written := RegWriteStringValue(HKA, PathKey(), 'Path', Path)
+  else
+    Written := RegWriteExpandStringValue(HKA, PathKey(), 'Path', Path);
+  if Written then
+    WsOnPath := True
+  else
+    Log('The PATH value in ' + PathKey() + ' could not be written: ' + Folder + ' is not on the PATH.');
+end;
+
+// Folder out of the PATH of Root\Key, if it is there; nothing is written when
+// the value is absent or cannot be read as text, or has no such entry.
+procedure RemoveFolderFromPath(Root: Integer; Key, Folder: String);
+var
+  Path: String;
+  Exists, Found: Boolean;
+begin
+  if not ReadPathToChange(Root, Key, Path, Exists) or not Exists then
+    exit;
+  Path := PathWithoutFolder(Path, Folder, Found);
+  // The value is there, so RegWriteStringValue keeps its type (REG_EXPAND_SZ or REG_SZ).
+  if Found and not RegWriteStringValue(Root, Key, 'Path', Path) then
+    Log('The PATH value in ' + Key + ' could not be written: ' + Folder + ' is still on it.');
+end;
+
+// Uninstalling takes that entry out and nothing else: from the PATH of the
+// install mode, and, for all users, from the user's own, where the settings
+// page may have put it for whoever runs this. The note it keeps of that goes.
+procedure RemoveWsFromPath();
+var
+  Recorded: String;
+begin
+  RemoveFolderFromPath(HKA, PathKey(), WsFolder());
+  if IsAdminInstallMode then
+    RemoveFolderFromPath(HKCU, UserEnvironmentKey, WsFolder());
+  if RegQueryStringValue(HKCU, CliRecordKey, CliRecordName, Recorded) and EntryIsFolder(Recorded, WsFolder()) then
+  begin
+    RegDeleteValue(HKCU, CliRecordKey, CliRecordName);
+    RegDeleteKeyIfEmpty(HKCU, CliRecordKey);
+  end;
+end;
+
+// The last page says where to try it: terminals that are open now do not see a new PATH.
+procedure CurPageChanged(CurPageID: Integer);
+var
+  Delta: Integer;
+begin
+  if (CurPageID <> wpFinished) or not WsOnPath then
+    exit;
+  WizardForm.FinishedLabel.Caption := WizardForm.FinishedLabel.Caption + #13#10#13#10 + CustomMessage('WsNewTerminal');
+  // A label is as high as it was made, not as its text: Setup's own call sizes it
+  // to the new text and says by how much; what is under it moves down by as much.
+  Delta := WizardForm.AdjustLabelHeight(WizardForm.FinishedLabel);
+  if Delta > 0 then
+  begin
+    WizardForm.RunList.Top := WizardForm.RunList.Top + Delta;
+    WizardForm.RunList.Height := WizardForm.RunList.Height - Delta;
+  end;
+end;
+
 // Started in the tray as the files were in place ([Run]); "run Win顺" left
 // unticked on the last page, it goes again. A silent install leaves it
 // running, as it was before an update.
@@ -663,6 +921,13 @@ begin
     FilesInstalled := True;
     RemoveTapCopies();
     RemoveMovedRelay(True);
+    if WizardIsTaskSelected('wscommand') then
+      AddWsToPath()
+    else
+      // Unticked on an update: the entry an earlier install added goes, from the
+      // PATH of the install mode as at the uninstall (the user's own list of an
+      // all-users install, where the settings page may have put it, is not touched).
+      RemoveFolderFromPath(HKA, PathKey(), WsFolder());
   end;
   // After [Run] re-registered the service from {app}: a portable copy's old
   // service folder is now stale.
@@ -956,7 +1221,7 @@ end;
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
   Tools, Holders: String;
-  Tries, ResultCode: Integer;
+  Tries, ResultCode, Choice: Integer;
 begin
   // AI tools using Win顺 are asked about before anything is closed (GitHub
   // #97). A silent Setup (an update run by a script) goes on, as before.
@@ -997,9 +1262,25 @@ begin
     // let go when WebClient gives the request up (~61 s, see pitfalls.md).
     if (Tries < 2) or (WizardSilent() and (Tries < 90)) then
       Sleep(1000)
-    else if WizardSilent() or (TaskDialogMsgBox(CustomMessage('FilesInUseTitle'),
-      FmtMessage(CustomMessage('FilesInUse'), [Holders]), mbError, MB_RETRYCANCEL, [], 0) <> IDRETRY) then
-      break;
+    else if WizardSilent() then
+      break
+    else
+    begin
+      // Restart Manager also lists readers that allow replacement, such as
+      // antivirus software (#97). This choice bypasses only that advisory
+      // list: Inno Setup still handles real write/sharing failures normally.
+      Choice := TaskDialogMsgBox(CustomMessage('FilesInUseTitle'),
+        FmtMessage(CustomMessage('FilesInUse'), [Holders]), mbInformation, MB_ABORTRETRYIGNORE, [
+        CustomMessage('FilesRetry'), CustomMessage('FilesTryInstall'), CustomMessage('FilesCancel')], 0);
+      if Choice = IDIGNORE then
+      begin
+        Log('User chose to attempt installation despite Restart Manager file users: ' + Holders);
+        Holders := '';
+        break;
+      end;
+      if Choice <> IDRETRY then
+        break;
+    end;
   until False;
   if Holders <> '' then
   begin
@@ -1145,6 +1426,7 @@ begin
       Exec(ExpandConstant('{app}\WinShunService.exe'), '--uninstall', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
     RemoveAutostart();
     RemoveExplorerMenu();
+    RemoveWsFromPath(); // ChangesEnvironment tells the other programs when the uninstall ends
     // Directory Opus's double click on blank space, if Win顺 set it to run this copy.
     Exec(ExpandConstant('{app}\WinShunSearch.exe'), '--opus-menu-off', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
     GiveBackKey('Clipboard', 'WinV', 'V');

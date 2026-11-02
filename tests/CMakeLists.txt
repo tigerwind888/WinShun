@@ -1,5 +1,25 @@
 find_package(Qt6 6.8 REQUIRED COMPONENTS Test QuickTest)
 
+qt_add_executable(tst_contentdetails tst_contentdetails.cpp
+    ${PROJECT_SOURCE_DIR}/src/app/platform/ContentReportPrint.cpp)
+target_include_directories(tst_contentdetails PRIVATE ${PROJECT_SOURCE_DIR}/src/app)
+target_link_libraries(tst_contentdetails PRIVATE wscore Qt6::Test miniz comdlg32 gdi32 ole32)
+set_target_properties(tst_contentdetails PROPERTIES WIN32_EXECUTABLE FALSE QT_QML_MODULE_NO_IMPORT_SCAN TRUE)
+add_test(NAME tst_contentdetails COMMAND tst_contentdetails -o -,txt)
+set_tests_properties(tst_contentdetails PROPERTIES TIMEOUT 90
+    ENVIRONMENT "QT_FORCE_STDERR_LOGGING=1"
+    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+add_test(NAME tst_contentpane COMMAND $<TARGET_FILE:WinShun>
+    --preview-results "${CMAKE_CURRENT_BINARY_DIR}/content-pane" --content-pane --renderer d3d11)
+set_tests_properties(tst_contentpane PROPERTIES RUN_SERIAL TRUE TIMEOUT 120
+    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+
+# Clipboard sizing uses the production QML/native frame with temporary history.
+add_test(NAME tst_clipboardsizing COMMAND $<TARGET_FILE:WinShun>
+    --preview-results "${CMAKE_CURRENT_BINARY_DIR}/clipboard-sizing" --clipboard-sizing --renderer d3d11)
+set_tests_properties(tst_clipboardsizing PROPERTIES RUN_SERIAL TRUE TIMEOUT 90
+    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+
 qt_add_executable(tst_querysyntax tst_querysyntax.cpp)
 target_link_libraries(tst_querysyntax PRIVATE wscore Qt6::Test)
 set_target_properties(tst_querysyntax PROPERTIES WIN32_EXECUTABLE FALSE)
@@ -31,6 +51,29 @@ add_test(NAME tst_launchernavigation COMMAND tst_launchernavigation)
 set_tests_properties(tst_launchernavigation PROPERTIES
     ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
 
+# Real QML windows, real name searches, temporary files, process-local input.
+add_test(NAME tst_searchnavigation COMMAND $<TARGET_FILE:WinShun>
+    --preview-results "${CMAKE_CURRENT_BINARY_DIR}/search-navigation" --search-navigation --renderer d3d11)
+set_tests_properties(tst_searchnavigation PROPERTIES RUN_SERIAL TRUE TIMEOUT 90
+    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+
+# #153: production Main.qml/Launcher/SearchEngine over temporary OOXML/text
+# files and content indexes, including the explicit continuation action.
+add_test(NAME tst_searchworkload COMMAND $<TARGET_FILE:WinShun>
+    --preview-results "${CMAKE_CURRENT_BINARY_DIR}/search-workload" --search-workload --renderer d3d11)
+set_tests_properties(tst_searchworkload PROPERTIES RUN_SERIAL TRUE TIMEOUT 90
+    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+
+# First-run gating and draft/commit behavior in the real App and QML, with
+# temporary profiles and process-local HKCU redirection. No clipboard writes.
+foreach(case IN ITEMS fresh later apply legacy)
+    add_test(NAME tst_onboarding_${case} COMMAND $<TARGET_FILE:WinShun>
+        --probe-runtime "${CMAKE_CURRENT_BINARY_DIR}/onboarding-${case}"
+        --onboarding-probe ${case} --renderer d3d11)
+    set_tests_properties(tst_onboarding_${case} PROPERTIES RUN_SERIAL TRUE TIMEOUT 90
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+endforeach()
+
 qt_add_executable(tst_notificationturns tst_notificationturns.cpp)
 target_include_directories(tst_notificationturns PRIVATE ${PROJECT_SOURCE_DIR}/src/app/platform)
 target_link_libraries(tst_notificationturns PRIVATE winshun_options Qt6::Test)
@@ -60,12 +103,21 @@ add_test(NAME tst_displaygeometry COMMAND tst_displaygeometry -o -,txt)
 set_tests_properties(tst_displaygeometry PROPERTIES
     ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
 
-qt_add_executable(tst_filedialog tst_filedialog.cpp
-    ${PROJECT_SOURCE_DIR}/src/app/platform/FileDialog.cpp)
+set(file_dialog_backend
+    ${PROJECT_SOURCE_DIR}/src/app/platform/FileDialog.cpp
+    ${PROJECT_SOURCE_DIR}/src/app/platform/BlenderFileDialog.cpp)
+qt_add_executable(tst_filedialog tst_filedialog.cpp ${file_dialog_backend})
 target_include_directories(tst_filedialog PRIVATE ${PROJECT_SOURCE_DIR}/src/app)
 target_link_libraries(tst_filedialog PRIVATE wscore Qt6::Test ole32 oleaut32 uiautomationcore user32)
-add_test(NAME tst_filedialog COMMAND tst_filedialog)
-set_tests_properties(tst_filedialog PROPERTIES
+# Process identity is part of the CAD adapter's guard. This is a copy of our
+# native protocol fixture, never AutoCAD; no Autodesk software is installed.
+set(cad_dialog_fixture "$<TARGET_FILE_DIR:tst_filedialog>/cad-dialog-fixture/acad.exe")
+add_custom_command(TARGET tst_filedialog POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:tst_filedialog>/cad-dialog-fixture"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:tst_filedialog>" "${cad_dialog_fixture}")
+add_test(NAME tst_filedialog COMMAND "${cad_dialog_fixture}" -o -,txt)
+add_test(NAME tst_filedialog_other_program COMMAND tst_filedialog customRejectsOtherProgram -o -,txt)
+set_tests_properties(tst_filedialog tst_filedialog_other_program PROPERTIES
     ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
 
 # The Qt-free dialog-navigation classifier used by the #104 service helper,
@@ -80,16 +132,76 @@ set_tests_properties(tst_dialognav PROPERTIES
 # Launch only a short-lived copy of this test, writing into QTemporaryDir.
 qt_add_executable(tst_shelllaunch WIN32 tst_shelllaunch.cpp
     ${PROJECT_SOURCE_DIR}/src/app/platform/Shell.cpp
+    ${PROJECT_SOURCE_DIR}/src/app/platform/ShellDialogs.cpp
     ${PROJECT_SOURCE_DIR}/src/app/platform/DragOut.cpp
-    ${PROJECT_SOURCE_DIR}/src/app/platform/FileDialog.cpp
+    ${file_dialog_backend}
     ${PROJECT_SOURCE_DIR}/src/app/platform/FileManagers.cpp
     ${PROJECT_SOURCE_DIR}/src/app/platform/FolderViewHit.cpp
     ${PROJECT_SOURCE_DIR}/src/app/platform/Integrity.cpp)
 target_include_directories(tst_shelllaunch PRIVATE ${PROJECT_SOURCE_DIR}/src/app)
 target_link_libraries(tst_shelllaunch PRIVATE wscore Qt6::Gui Qt6::Test
-    ole32 oleaut32 oleacc shell32 shlwapi user32 advapi32 taskschd uiautomationcore)
+    ole32 oleaut32 oleacc shell32 shlwapi user32 advapi32 taskschd uiautomationcore userenv)
 add_test(NAME tst_shelllaunch COMMAND tst_shelllaunch -o -,txt)
 set_tests_properties(tst_shelllaunch PROPERTIES
+    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+
+# Folder-menu commands use the production shell worker and temporary files.
+qt_add_executable(tst_foldermenu tst_foldermenu.cpp
+    ${PROJECT_SOURCE_DIR}/src/app/FolderMenu.cpp
+    ${PROJECT_SOURCE_DIR}/src/app/FileIconProvider.cpp
+    ${PROJECT_SOURCE_DIR}/src/app/SiteIconImage.cpp
+    ${PROJECT_SOURCE_DIR}/src/app/SvgIcon.cpp
+    ${PROJECT_SOURCE_DIR}/src/app/SystemTheme.cpp
+    ${PROJECT_SOURCE_DIR}/src/app/Phosphor.cpp
+    ${PROJECT_SOURCE_DIR}/src/app/platform/SiteIcons.cpp
+    ${PROJECT_SOURCE_DIR}/src/app/platform/Http.cpp
+    ${PROJECT_SOURCE_DIR}/src/app/RecentFolders.cpp
+    ${PROJECT_SOURCE_DIR}/src/app/platform/ComWorker.cpp
+    ${PROJECT_SOURCE_DIR}/src/app/platform/KeyRouter.cpp
+    ${PROJECT_SOURCE_DIR}/src/app/platform/WindowEffects.cpp
+    ${PROJECT_SOURCE_DIR}/src/app/platform/Foreground.cpp
+    ${PROJECT_SOURCE_DIR}/src/app/platform/Shell.cpp
+    ${PROJECT_SOURCE_DIR}/src/app/platform/ShellDialogs.cpp
+    ${PROJECT_SOURCE_DIR}/src/app/platform/DragOut.cpp
+    ${file_dialog_backend}
+    ${PROJECT_SOURCE_DIR}/src/app/platform/FileManagers.cpp
+    ${PROJECT_SOURCE_DIR}/src/app/platform/FolderViewHit.cpp
+    ${PROJECT_SOURCE_DIR}/src/app/platform/Integrity.cpp)
+target_include_directories(tst_foldermenu PRIVATE ${PROJECT_SOURCE_DIR}/src/app)
+target_link_libraries(tst_foldermenu PRIVATE wscore wsplugin Qt6::Quick Qt6::Svg Qt6::Test
+    ole32 oleaut32 oleacc shell32 shlwapi user32 advapi32 taskschd uiautomationcore userenv dwmapi comctl32 shcore gdi32 winhttp)
+target_compile_definitions(tst_foldermenu PRIVATE WINSHUN_QML_DIR="${PROJECT_SOURCE_DIR}/src/app/qml")
+qt_add_resources(tst_foldermenu "menu_icons"
+    PREFIX /fonts BASE "${PROJECT_SOURCE_DIR}/third_party/phosphor"
+    FILES "${PROJECT_SOURCE_DIR}/third_party/phosphor/Phosphor.ttf"
+          "${PROJECT_SOURCE_DIR}/third_party/phosphor/Phosphor-Fill.ttf")
+set_target_properties(tst_foldermenu PROPERTIES WIN32_EXECUTABLE FALSE QT_QML_MODULE_NO_IMPORT_SCAN TRUE)
+add_test(NAME tst_foldermenu COMMAND tst_foldermenu -o -,txt)
+set_tests_properties(tst_foldermenu PROPERTIES
+    RUN_SERIAL TRUE
+    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+
+# The command line ws as the settings page sees it (src/app/CommandLine,
+# McpClients): the PATH as text, where ws is, the user's PATH written in keys
+# of the test's own, and Claude Code's Skill installed through a stand-in for
+# ws.exe (fake_ws.cpp).
+add_executable(fake_ws fake_ws.cpp)
+set_target_properties(fake_ws PROPERTIES AUTOMOC OFF)
+qt_add_executable(tst_commandline tst_commandline.cpp
+    ${PROJECT_SOURCE_DIR}/src/app/CommandLine.cpp
+    ${PROJECT_SOURCE_DIR}/src/app/McpClients.cpp
+    ${PROJECT_SOURCE_DIR}/src/app/platform/Shell.cpp
+    ${PROJECT_SOURCE_DIR}/src/app/platform/FileManagers.cpp
+    ${PROJECT_SOURCE_DIR}/src/app/platform/FolderViewHit.cpp
+    ${PROJECT_SOURCE_DIR}/src/app/platform/Integrity.cpp)
+target_include_directories(tst_commandline PRIVATE ${PROJECT_SOURCE_DIR}/src/app)
+target_link_libraries(tst_commandline PRIVATE wscore Qt6::Gui Qt6::Test
+    ole32 oleaut32 oleacc shell32 shlwapi user32 advapi32 taskschd userenv)
+target_compile_definitions(tst_commandline PRIVATE WINSHUN_FAKE_WS="$<TARGET_FILE:fake_ws>")
+add_dependencies(tst_commandline fake_ws)
+set_target_properties(tst_commandline PROPERTIES WIN32_EXECUTABLE FALSE)
+add_test(NAME tst_commandline COMMAND tst_commandline)
+set_tests_properties(tst_commandline PROPERTIES
     ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
 
 qt_add_executable(tst_windowvisibility tst_windowvisibility.cpp
@@ -227,6 +339,15 @@ add_test(NAME tst_settings COMMAND tst_settings)
 set_tests_properties(tst_settings PROPERTIES
     ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
 
+# The screenshot plugin's settings, capture.ini (src/capture-plugin/CaptureSettings).
+qt_add_executable(tst_capturesettings tst_capturesettings.cpp ${PROJECT_SOURCE_DIR}/src/capture-plugin/CaptureSettings.cpp)
+target_include_directories(tst_capturesettings PRIVATE ${PROJECT_SOURCE_DIR}/src/capture-plugin ${PROJECT_SOURCE_DIR}/src/app ${PROJECT_SOURCE_DIR}/src/core)
+target_link_libraries(tst_capturesettings PRIVATE winshun_options Qt6::Gui Qt6::Qml Qt6::Test)
+set_target_properties(tst_capturesettings PROPERTIES WIN32_EXECUTABLE FALSE QT_QML_MODULE_NO_IMPORT_SCAN TRUE)
+add_test(NAME tst_capturesettings COMMAND tst_capturesettings)
+set_tests_properties(tst_capturesettings PROPERTIES
+    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+
 # The screen capture's geometry, HDR mapping and state machine (src/capture),
 # without windows.
 qt_add_executable(tst_capture tst_capture.cpp ${PROJECT_SOURCE_DIR}/src/capture/CaptureSession.cpp
@@ -329,8 +450,28 @@ set_tests_properties(tst_annotmodel PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software"
     ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
 
+qt_add_executable(tst_traymenu tst_traymenu.cpp
+    ${PROJECT_SOURCE_DIR}/src/app/TrayMenu.cpp
+    ${PROJECT_SOURCE_DIR}/src/app/SystemTheme.cpp
+    ${PROJECT_SOURCE_DIR}/src/app/Phosphor.cpp
+    ${PROJECT_SOURCE_DIR}/src/app/platform/WindowEffects.cpp
+    ${PROJECT_SOURCE_DIR}/src/app/platform/Foreground.cpp)
+target_include_directories(tst_traymenu PRIVATE ${PROJECT_SOURCE_DIR}/src/app)
+target_compile_definitions(tst_traymenu PRIVATE WINSHUN_QML_DIR="${PROJECT_SOURCE_DIR}/src/app/qml")
+qt_add_resources(tst_traymenu "phosphor"
+    PREFIX /fonts
+    BASE "${PROJECT_SOURCE_DIR}/third_party/phosphor"
+    FILES "${PROJECT_SOURCE_DIR}/third_party/phosphor/Phosphor.ttf"
+          "${PROJECT_SOURCE_DIR}/third_party/phosphor/Phosphor-Fill.ttf")
+target_link_libraries(tst_traymenu PRIVATE wscore Qt6::Test Qt6::Quick comctl32 dwmapi gdi32 ole32 oleacc oleaut32 shcore user32)
+set_target_properties(tst_traymenu PROPERTIES QT_QML_MODULE_NO_IMPORT_SCAN TRUE)
+add_test(NAME tst_traymenu COMMAND tst_traymenu)
+set_tests_properties(tst_traymenu PROPERTIES
+    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+
 qt_add_executable(tst_appearance tst_appearance.cpp
     ${PROJECT_SOURCE_DIR}/src/app/Settings.cpp
+    ${PROJECT_SOURCE_DIR}/src/app/WindowFrame.cpp
     ${PROJECT_SOURCE_DIR}/src/app/SystemTheme.cpp
     ${PROJECT_SOURCE_DIR}/src/app/Phosphor.cpp
     ${PROJECT_SOURCE_DIR}/src/app/platform/WindowEffects.cpp
@@ -395,6 +536,7 @@ qt_add_executable(tst_cliplifecycle tst_cliplifecycle.cpp
     ${PROJECT_SOURCE_DIR}/src/app/platform/ClipboardWatcher.cpp
     ${PROJECT_SOURCE_DIR}/src/app/platform/TextRecognizer.cpp
     ${PROJECT_SOURCE_DIR}/src/app/platform/PaddleOcr.cpp
+    ${PROJECT_SOURCE_DIR}/src/app/platform/OcrFiles.cpp
     ${PROJECT_SOURCE_DIR}/src/app/ClipImage.cpp)
 target_include_directories(tst_cliplifecycle PRIVATE ${PROJECT_SOURCE_DIR}/src/app)
 target_link_libraries(tst_cliplifecycle PRIVATE winshun_options wscore wscapture Qt6::Gui Qt6::Test
@@ -458,6 +600,18 @@ target_link_libraries(tst_favorites PRIVATE wscore Qt6::Test)
 qt_add_executable(tst_commandlaunch tst_commandlaunch.cpp)
 target_link_libraries(tst_commandlaunch PRIVATE wscore Qt6::Test)
 
+# The plugins that left the setup for the plugin library (GitHub #138,
+# src/app/MovedPlugins): the screenshot's settings moved to its plugin.
+qt_add_executable(tst_movedplugins tst_movedplugins.cpp ${PROJECT_SOURCE_DIR}/src/app/MovedPlugins.cpp
+    ${PROJECT_SOURCE_DIR}/src/app/platform/Http.cpp)
+target_include_directories(tst_movedplugins PRIVATE ${PROJECT_SOURCE_DIR}/src/app)
+target_link_libraries(tst_movedplugins PRIVATE wscore wsplugin Qt6::Test winhttp ws2_32)
+target_compile_definitions(tst_movedplugins PRIVATE WINSHUN_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+set_target_properties(tst_movedplugins PROPERTIES WIN32_EXECUTABLE FALSE)
+add_test(NAME tst_movedplugins COMMAND tst_movedplugins)
+set_tests_properties(tst_movedplugins PROPERTIES
+    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+
 # The proxy setting (GitHub #84): the address check, and WinHTTP going where
 # the setting says, against two small servers of the test's own.
 qt_add_executable(tst_proxy tst_proxy.cpp ${PROJECT_SOURCE_DIR}/src/app/platform/Http.cpp)
@@ -478,8 +632,9 @@ qt_add_executable(tst_commandicons tst_commandicons.cpp
     ${PROJECT_SOURCE_DIR}/src/app/platform/SiteIcons.cpp
     ${PROJECT_SOURCE_DIR}/src/app/platform/Http.cpp
     ${PROJECT_SOURCE_DIR}/src/app/platform/Shell.cpp
+    ${PROJECT_SOURCE_DIR}/src/app/platform/ShellDialogs.cpp
     ${PROJECT_SOURCE_DIR}/src/app/platform/DragOut.cpp
-    ${PROJECT_SOURCE_DIR}/src/app/platform/FileDialog.cpp
+    ${file_dialog_backend}
     ${PROJECT_SOURCE_DIR}/src/app/platform/FileManagers.cpp
     ${PROJECT_SOURCE_DIR}/src/app/platform/FolderViewHit.cpp
     ${PROJECT_SOURCE_DIR}/src/app/platform/Integrity.cpp
@@ -487,7 +642,7 @@ qt_add_executable(tst_commandicons tst_commandicons.cpp
     ${PROJECT_SOURCE_DIR}/src/app/platform/Foreground.cpp)
 target_include_directories(tst_commandicons PRIVATE ${PROJECT_SOURCE_DIR}/src/app)
 target_link_libraries(tst_commandicons PRIVATE wscore wsplugin Qt6::Quick Qt6::Svg Qt6::Test
-    comctl32 gdi32 dwmapi ole32 oleaut32 oleacc shell32 shlwapi user32 advapi32 taskschd uiautomationcore winhttp)
+    comctl32 gdi32 dwmapi ole32 oleaut32 oleacc shell32 shlwapi user32 advapi32 taskschd uiautomationcore userenv winhttp)
 set_target_properties(tst_commandicons PROPERTIES WIN32_EXECUTABLE FALSE QT_QML_MODULE_NO_IMPORT_SCAN TRUE)
 add_test(NAME tst_commandicons COMMAND tst_commandicons)
 set_tests_properties(tst_commandicons PROPERTIES
@@ -547,11 +702,47 @@ target_link_libraries(tst_siteicon PRIVATE Qt6::Gui Qt6::Svg Qt6::Test)
 
 # The words in pictures: PP-OCRv6 through ONNX Runtime, the real models.
 qt_add_executable(tst_ocr tst_ocr.cpp ${PROJECT_SOURCE_DIR}/src/app/platform/PaddleOcr.cpp
+    ${PROJECT_SOURCE_DIR}/src/app/platform/OcrFiles.cpp
     ${PROJECT_SOURCE_DIR}/src/capture/CaptureOcr.cpp)
 target_include_directories(tst_ocr PRIVATE ${PROJECT_SOURCE_DIR}/src/app/platform)
 target_include_directories(tst_ocr PRIVATE ${PROJECT_SOURCE_DIR}/src/app)
 target_link_libraries(tst_ocr PRIVATE winshun_options wscapture Qt6::Qml Qt6::Test onnxruntime_headers)
 set_target_properties(tst_ocr PROPERTIES QT_QML_MODULE_NO_IMPORT_SCAN TRUE)
+
+qt_add_executable(tst_ocrpackage tst_ocrpackage.cpp
+    ${PROJECT_SOURCE_DIR}/src/capture/CaptureOcr.cpp
+    ${PROJECT_SOURCE_DIR}/src/app/platform/OcrPackage.cpp
+    ${PROJECT_SOURCE_DIR}/src/app/platform/OcrFiles.cpp
+    ${PROJECT_SOURCE_DIR}/src/app/platform/PaddleOcr.cpp
+    ${PROJECT_SOURCE_DIR}/src/app/platform/Http.cpp)
+target_include_directories(tst_ocrpackage PRIVATE ${PROJECT_SOURCE_DIR}/src/app)
+target_link_libraries(tst_ocrpackage PRIVATE winshun_options wscore wscapture miniz Qt6::Gui Qt6::Qml Qt6::Network Qt6::Test onnxruntime_headers winhttp)
+set_target_properties(tst_ocrpackage PROPERTIES QT_QML_MODULE_NO_IMPORT_SCAN TRUE)
+set_source_files_properties("${PROJECT_SOURCE_DIR}/resources/ocr/package.json" PROPERTIES QT_RESOURCE_ALIAS ocr.json)
+set_source_files_properties("${PROJECT_SOURCE_DIR}/third_party/ppocr/LICENSE" PROPERTIES QT_RESOURCE_ALIAS paddleocr-license.txt)
+qt_add_resources(tst_ocrpackage "ocr_package_test"
+    PREFIX /components
+    FILES
+        "${PROJECT_SOURCE_DIR}/resources/ocr/package.json"
+        "${PROJECT_SOURCE_DIR}/third_party/ppocr/LICENSE")
+add_test(NAME tst_ocrpackage COMMAND tst_ocrpackage)
+
+qt_add_executable(tst_uifont tst_uifont.cpp)
+target_link_libraries(tst_uifont PRIVATE winshun_options Qt6::Gui Qt6::Test)
+add_test(NAME tst_uifont_freetype COMMAND tst_uifont)
+set_tests_properties(tst_uifont_freetype PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=windows:fontengine=freetype")
+add_test(NAME tst_uifont_gdi COMMAND tst_uifont)
+set_tests_properties(tst_uifont_gdi PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=windows:fontengine=gdi")
+set_tests_properties(tst_ocrpackage tst_uifont_freetype tst_uifont_gdi PROPERTIES
+    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+
+qt_add_executable(tst_download tst_download.cpp)
+target_link_libraries(tst_download PRIVATE winshun_options wsplugin Qt6::Test)
+add_test(NAME tst_download COMMAND tst_download)
+set_tests_properties(tst_download PROPERTIES
+    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+add_test(NAME tst_download_cmake COMMAND ${CMAKE_COMMAND}
+    "-DTEST_DIR=${CMAKE_CURRENT_BINARY_DIR}/download-cmake" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/tst_download.cmake")
 
 # What a drop target gets when results are dragged out of Win顺.
 qt_add_executable(tst_dragout tst_dragout.cpp ${PROJECT_SOURCE_DIR}/src/app/platform/DragOut.cpp)
@@ -563,12 +754,35 @@ target_link_libraries(tst_dragout PRIVATE winshun_options Qt6::Core Qt6::Test)
 # real switch thread. Nothing of the system is read or changed.
 qt_add_executable(tst_switches tst_switches.cpp ${PROJECT_SOURCE_DIR}/src/app/Switches.cpp
     ${PROJECT_SOURCE_DIR}/src/app/Switches.h ${PROJECT_SOURCE_DIR}/src/app/platform/ComWorker.cpp
-    ${PROJECT_SOURCE_DIR}/src/app/platform/SwitchKeepAwake.cpp) # keep awake is built in, over a fake clock
-target_include_directories(tst_switches PRIVATE ${PROJECT_SOURCE_DIR}/src/app ${PROJECT_SOURCE_DIR}/src/app/platform)
+    ${PROJECT_SOURCE_DIR}/src/switches-plugin/platform/SwitchKeepAwake.cpp) # keep awake is built in, over a fake clock
+target_include_directories(tst_switches PRIVATE ${PROJECT_SOURCE_DIR}/src/app ${PROJECT_SOURCE_DIR}/src/app/platform ${PROJECT_SOURCE_DIR}/src/switches-plugin)
 target_link_libraries(tst_switches PRIVATE wscore Qt6::Test ole32 powrprof)
 set_target_properties(tst_switches PROPERTIES WIN32_EXECUTABLE FALSE)
 add_test(NAME tst_switches COMMAND tst_switches)
 set_tests_properties(tst_switches PROPERTIES
+    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+
+# Host -> runner -> production service, with isolated fake hardware writes;
+# the actual bundled plugin is also read and its own power request released.
+qt_add_executable(tst_switchplugin tst_switchplugin.cpp
+    ${PROJECT_SOURCE_DIR}/src/app/SwitchPlugin.cpp ${PROJECT_SOURCE_DIR}/src/app/SwitchPlugin.h
+    ${PROJECT_SOURCE_DIR}/src/app/Switches.cpp ${PROJECT_SOURCE_DIR}/src/app/Switches.h
+    ${PROJECT_SOURCE_DIR}/src/app/platform/SettingBroadcast.cpp)
+target_link_libraries(tst_switchplugin PRIVATE wsplugin wsswitch_service Qt6::Test psapi)
+target_compile_definitions(tst_switchplugin PRIVATE
+    WINSHUN_PLUGIN_HOST="$<TARGET_FILE:WinShunPluginHost>"
+    WINSHUN_QT_BIN="$<TARGET_FILE_DIR:Qt6::Core>"
+    WINSHUN_SWITCH_EXE="$<TARGET_FILE:WinShunSwitches>"
+    WINSHUN_SWITCH_DLL="$<TARGET_FILE:WinShunSwitchesApp>"
+    WINSHUN_SWITCH_MANIFEST="${PROJECT_SOURCE_DIR}/src/switches-plugin/package/plugin.json")
+add_dependencies(tst_switchplugin WinShunPluginHost WinShunSwitches WinShunSwitchesApp)
+set_target_properties(tst_switchplugin PROPERTIES WIN32_EXECUTABLE FALSE)
+add_test(NAME tst_switchplugin COMMAND tst_switchplugin -o -,txt)
+set_tests_properties(tst_switchplugin PROPERTIES TIMEOUT 180
+    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+add_test(NAME tst_switchprovider_ui COMMAND WinShun --preview-results
+    "${CMAKE_CURRENT_BINARY_DIR}/switch-provider-ui" --switch-provider-probe)
+set_tests_properties(tst_switchprovider_ui PROPERTIES TIMEOUT 40 RUN_SERIAL TRUE
     ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
 
 # Win+S / Win+V and Explorer's DisabledHotkeys (platform/WinV): the decision and
@@ -594,6 +808,20 @@ target_compile_definitions(tst_mcp PRIVATE
     WINSHUN_PLUGIN_FAKE="$<TARGET_FILE:plugin_fake>")
 add_dependencies(tst_mcp WinShunMcp WinShunPluginHost plugin_fake)
 
+# The command line ws.exe (src/cli): its pieces built in again (the option
+# table, the parser, the encoder, the start decision), and the real ws.exe,
+# whose path it is told, against the MCP server in the test on a test pipe.
+# The runner's JSON and Launch.cpp are built in as ws has them (wsplugin
+# would bring the JSON in twice).
+qt_add_executable(tst_cli tst_cli.cpp ${WS_CLI_SOURCES}
+    ${PROJECT_SOURCE_DIR}/src/plugin/runner/Json.cpp ${PROJECT_SOURCE_DIR}/src/mcp/Launch.cpp)
+target_include_directories(tst_cli PRIVATE ${PROJECT_SOURCE_DIR}/src/cli ${PROJECT_SOURCE_DIR}/src/plugin/runner ${PROJECT_SOURCE_DIR}/src/mcp)
+target_link_libraries(tst_cli PRIVATE wsmcp Qt6::Test ntdll shell32 ole32 oleaut32 uuid advapi32)
+target_compile_definitions(tst_cli PRIVATE
+    WINSHUN_CLI="$<TARGET_FILE:ws>"
+    WINSHUN_CLI_SKILL="${PROJECT_SOURCE_DIR}/src/cli/SKILL.md")
+add_dependencies(tst_cli ws)
+
 # The pieces of the tools plugin that compute (src/tools-plugin), built in
 # again: the calculator and the conversions have edges (division by zero,
 # overflow, bad input) worth pinning down.
@@ -617,9 +845,46 @@ target_link_libraries(tst_semantic PRIVATE winshun_options Qt6::Test winhttp)
 # LocalSend's HTTP and JSON, a receiver and a sender talking TLS on 127.0.0.1.
 qt_add_executable(tst_localsend tst_localsend.cpp)
 target_link_libraries(tst_localsend PRIVATE wslocalsend Qt6::Test)
+target_compile_definitions(tst_localsend PRIVATE WINSHUN_LOCALSEND_EXE="$<TARGET_FILE:WinShunLocalSend>")
+add_dependencies(tst_localsend WinShunLocalSend)
 set_target_properties(tst_localsend PROPERTIES WIN32_EXECUTABLE FALSE)
 add_test(NAME tst_localsend COMMAND tst_localsend)
 set_tests_properties(tst_localsend PROPERTIES
+    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+
+# winshun.break's clock (src/break-plugin/Schedule), built in again: the
+# notice, the wait for a pause in typing, long breaks, time away, quiet
+# times, postpone, skip and strict, with made-up times.
+qt_add_executable(tst_break tst_break.cpp ${PROJECT_SOURCE_DIR}/src/break-plugin/Schedule.cpp)
+target_include_directories(tst_break PRIVATE ${PROJECT_SOURCE_DIR}/src/break-plugin)
+target_link_libraries(tst_break PRIVATE winshun_options Qt6::Test)
+set_target_properties(tst_break PROPERTIES WIN32_EXECUTABLE FALSE)
+add_test(NAME tst_break COMMAND tst_break)
+set_tests_properties(tst_break PROPERTIES
+    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+
+# winshun.bookmarks (src/bookmarks-plugin/Bookmarks), built in again: reading
+# Bookmarks files, the folder text, percent-decoding, matching, scoring,
+# the 50-row cap and the "nothing found" rows.
+qt_add_executable(tst_bookmarks tst_bookmarks.cpp ${PROJECT_SOURCE_DIR}/src/bookmarks-plugin/Bookmarks.cpp)
+target_include_directories(tst_bookmarks PRIVATE ${PROJECT_SOURCE_DIR}/src/bookmarks-plugin ${PROJECT_SOURCE_DIR}/src/plugins-sdk)
+target_link_libraries(tst_bookmarks PRIVATE winshun_options Qt6::Test)
+set_target_properties(tst_bookmarks PROPERTIES WIN32_EXECUTABLE FALSE)
+add_test(NAME tst_bookmarks COMMAND tst_bookmarks)
+set_tests_properties(tst_bookmarks PROPERTIES
+    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+
+# winshun.translate's logic (src/translate-plugin/Translate), built in again:
+# the target language, the DeepL and chat requests, reading the answers and
+# the services' errors, and the rows in both languages; the production HTTP
+# path against local servers that stall before headers or in the body.
+qt_add_executable(tst_translate tst_translate.cpp ${PROJECT_SOURCE_DIR}/src/translate-plugin/Translate.cpp
+    ${PROJECT_SOURCE_DIR}/src/translate-plugin/Http.cpp)
+target_include_directories(tst_translate PRIVATE ${PROJECT_SOURCE_DIR}/src/translate-plugin ${PROJECT_SOURCE_DIR}/src/plugins-sdk)
+target_link_libraries(tst_translate PRIVATE winshun_options Qt6::Test Qt6::Network winhttp)
+set_target_properties(tst_translate PROPERTIES WIN32_EXECUTABLE FALSE)
+add_test(NAME tst_translate COMMAND tst_translate)
+set_tests_properties(tst_translate PROPERTIES
     ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
 
 # The plugin system (src/plugin): manifests, items, zero-code, the catalog,
@@ -656,7 +921,8 @@ add_test(NAME tst_ocr COMMAND tst_ocr)
 add_test(NAME tst_tools COMMAND tst_tools)
 add_test(NAME tst_semantic COMMAND tst_semantic)
 add_test(NAME tst_mcp COMMAND tst_mcp)
-add_test(NAME tst_plugin COMMAND tst_plugin)
+add_test(NAME tst_cli COMMAND tst_cli)
+add_test(NAME tst_plugin COMMAND tst_plugin -o -,txt)
 # Importing clipboard history (Ditto, text, CSV): the reader with a real store.
 qt_add_executable(tst_clipimport tst_clipimport.cpp ${PROJECT_SOURCE_DIR}/src/app/ClipImport.cpp
     ${PROJECT_SOURCE_DIR}/src/app/ClipImage.cpp
@@ -669,7 +935,7 @@ set_tests_properties(tst_clipimport PROPERTIES
     ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
 # A native file picker, enabled explicitly with WINSHUN_TEST_NATIVE_DIALOG=1.
 qt_add_executable(tst_filepaste tst_filepaste.cpp ${PROJECT_SOURCE_DIR}/src/app/ClipFiles.cpp
-    ${PROJECT_SOURCE_DIR}/src/app/platform/FileDialog.cpp)
+    ${file_dialog_backend})
 target_include_directories(tst_filepaste PRIVATE ${PROJECT_SOURCE_DIR}/src/app)
 target_link_libraries(tst_filepaste PRIVATE wscore Qt6::Test)
 set_target_properties(tst_filepaste PROPERTIES WIN32_EXECUTABLE FALSE)
@@ -697,7 +963,7 @@ add_test(NAME tst_clipselect COMMAND tst_clipselect)
 set_tests_properties(tst_clipselect PROPERTIES
     ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
 # Let ctest find the Qt DLLs without a deploy step.
-set_tests_properties(tst_core tst_service tst_keylistener tst_clipboard tst_favorites tst_backup tst_color tst_elide tst_savedfile tst_placement tst_dragout tst_siteicon tst_ocr tst_tools tst_semantic tst_mcp tst_plugin PROPERTIES
+set_tests_properties(tst_core tst_service tst_keylistener tst_clipboard tst_favorites tst_backup tst_color tst_elide tst_savedfile tst_placement tst_dragout tst_siteicon tst_ocr tst_tools tst_semantic tst_mcp tst_cli tst_plugin PROPERTIES
     ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
 
 # The in-app update (Updater): the update service's answer, downloads from
@@ -713,4 +979,19 @@ set_target_properties(tst_updater PROPERTIES WIN32_EXECUTABLE FALSE)
 add_dependencies(tst_updater WinShunUpdate)
 add_test(NAME tst_updater COMMAND tst_updater)
 set_tests_properties(tst_updater PROPERTIES
+    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+
+# Clipboard pinning: real native formats on a private window station, WIC
+# file decoding, asynchronous provenance and physical multi-monitor placement.
+qt_add_executable(tst_pinclipboard tst_pinclipboard.cpp
+    ${PROJECT_SOURCE_DIR}/src/capture-plugin/PinImage.cpp
+    ${PROJECT_SOURCE_DIR}/src/app/PictureFile.cpp
+    ${PROJECT_SOURCE_DIR}/src/app/ClipImage.cpp
+    ${PROJECT_SOURCE_DIR}/src/app/platform/ClipboardWatcher.cpp)
+target_include_directories(tst_pinclipboard PRIVATE ${PROJECT_SOURCE_DIR}/src/capture-plugin ${PROJECT_SOURCE_DIR}/src/app)
+target_link_libraries(tst_pinclipboard PRIVATE wscore Qt6::Gui Qt6::Test user32 gdi32 shell32 ole32 windowscodecs version)
+set_target_properties(tst_pinclipboard PROPERTIES WIN32_EXECUTABLE FALSE QT_QML_MODULE_NO_IMPORT_SCAN TRUE)
+add_test(NAME tst_pinclipboard COMMAND tst_pinclipboard -o -,txt)
+set_tests_properties(tst_pinclipboard PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=windows;QT_FORCE_STDERR_LOGGING=1"
     ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")

@@ -70,6 +70,8 @@ class Clipboard : public QObject {
     // Its width as the user dragged it (logical pixels); 0: the default.
     Q_PROPERTY(int previewWidth READ previewWidth WRITE setPreviewWidth NOTIFY previewWidthChanged FINAL)
     Q_PROPERTY(int listWidth READ listWidth WRITE setListWidth NOTIFY listWidthChanged FINAL)
+    // 0 keeps the automatic height; a user resize remembers logical pixels.
+    Q_PROPERTY(int windowHeight READ windowHeight WRITE setWindowHeight NOTIFY windowHeightChanged FINAL)
     // The entries in "固定" listed before the rest, in their own order (the
     // switch at the end of the tabs): what is kept at hand stays at the top,
     // on the same Alt+number. Off: newest first, as Windows lists them.
@@ -141,6 +143,9 @@ public:
         RenameGroup, // on a category tab
         RemoveGroup,
         RemoveAll, // everything listed (not what is in a group, unless a group's tab)
+        SaveFiles, // 保存为文件: a file each, in a folder asked for (saveAsFiles)
+        SaveMerged, // the words of all in one file
+        SendLan, // this history selection, without replacing the system clipboard
         MoveToGroup = 1000, // + the group's id
     };
     Q_ENUM(Action)
@@ -204,6 +209,8 @@ public:
     void setPreviewWidth(int width);
     int listWidth() const { return m_listWidth; }
     void setListWidth(int width);
+    int windowHeight() const { return m_windowHeight; }
+    void setWindowHeight(int height);
     bool pinnedFirst() const { return m_pinnedFirst; }
     void setPinnedFirst(bool on);
 
@@ -224,25 +231,31 @@ public:
     void historyChanged(); // the store changed outside this class (copied, limits, cleared)
     void resumeHistory(); // the store was reopened: restore preferences and schedule unread pictures
     void suspendHistory(); // stop OCR work and discard transient rows before closing the store
+    void refreshRecognition(); // an enhanced OCR package became available
     void retranslate();
 
     // On a row; on all of them, when it is one of several picked.
     Q_INVOKABLE void paste(int row, bool plainText);
     Q_INVOKABLE void quickPaste(int number, bool plainText); // Alt+1 ... Alt+9: the nth row
     Q_INVOKABLE void copy(int row);
-    // An image exported as a PNG file; its history entry remains unchanged.
+    // Dragged out as files (clipfiles::plan): pictures as they were copied,
+    // words made files, files and folders as they are. The entries stay.
     Q_INVOKABLE void dragOut(int row);
     bool dragging() const { return m_dragging; } // do not hide the window during OLE's modal loop
     // A colour's other notation, as a new entry unless it would not read back
     // as that colour (#AARRGGBB).
     Q_INVOKABLE void copyText(const QString& text, bool remember);
+    // Whether a plugin pins and edits pictures (App::picturePlugin): 贴到屏幕
+    // and 编辑 on a picture's menu only then.
+    void setPictureVerbs(bool pin, bool edit) { m_pictureVerbs = {pin, edit}; }
+    void setLanSendAvailable(bool available, bool update = false) { m_lanSendAvailable = available; m_lanSendUpdate = update; }
     // A picture (a screen capture, a pin) onto the clipboard, the way copyText
     // puts text there: with `remember`, as a new history entry on top, whose
     // words are then read like any copied picture's; `screenshot`: one Win顺's
     // capture took (Clip::screenshot, the screenshot history). The PNG is made
     // off the GUI thread. `project`: the annotated picture's editable form
     // (opaque bytes, empty: none), kept with the history entry.
-    void copyImage(const QImage& image, bool remember, bool screenshot = false, QByteArray project = {});
+    void copyImage(const QImage& image, bool remember, bool screenshot = false, QByteArray project = {}, QString imageOrigin = {});
     // A picture (saved, pinned) as a screenshot entry in the history only:
     // the system clipboard is left alone and nothing is announced. Subject to
     // the same switch and pause as copyImage's `remember`; the same pixels
@@ -298,18 +311,23 @@ public:
     Q_INVOKABLE void prepareMenuWindow(QWindow* menu) const;
 
 signals:
+    void lanSendRequested(const QString& text, const QStringList& files);
+    void lanSendSetupRequested(bool update);
     void quickPasteFailed(const QString& message); // no panel to show a failure in: App's notification
+    void saveProblem(const QString& message); // saveAsFiles, the panel gone: App's notification
     void numberKeysChanged();
     void rowOptionsChanged();
     void layoutOptionsChanged();
     void holdChanged();
     void stepped(int row); // the hold moved on to this row: the current one now
+    void browseStepRequested(); // own-window hotkey: next row, no paste on release
     void activeChanged();
     void keysRoutedChanged();
     void pinnedChanged();
     void previewOpenChanged();
     void previewWidthChanged();
     void listWidthChanged();
+    void windowHeightChanged();
     void pinnedFirstChanged();
     void keysWanted(); // a search-field click: acquire or refresh routing (App)
     void keysReleased(); // pinned, Esc (or the hotkey again): the keys and the focus back to the program (App)
@@ -337,13 +355,13 @@ signals:
     void fieldChanged();
     // The field the window goes back to: its own window in front again (App).
     void fieldRequested(QQuickItem* field);
-    // 贴到屏幕 on a picture's row: its file, for the app to pin (PinManager).
-    void pinRequested(const QString& imagePath);
-    // 编辑 on a picture: the entry's id, for the editing window (its project
-    // if it has one, else the picture as the base of an empty document).
+    // 贴到屏幕 and 编辑 on a picture: the entry's id, for the plugin that
+    // does them (App::pictureAction; the screenshot plugin).
+    void pinRequested(qint64 id);
     void editRequested(qint64 id);
 
 private:
+    struct { bool pin = false; bool edit = false; } m_pictureVerbs;
     struct Category {
         ClipFilter::Category kind;
         qint64 group = 0;
@@ -368,41 +386,53 @@ private:
     ClipWrite writeFor(
         const std::vector<const Clip*>& clips, bool plainText, QString* problem, HWND target = nullptr) const;
     void startPaste(ClipWrite write, Into into, std::vector<qint64> touched, QString done);
-    void encodeImage(const QImage& image, bool remember, bool screenshot, QByteArray project, bool toClipboard);
+    void encodeImage(const QImage& image, bool remember, bool screenshot, QByteArray project, bool toClipboard, QString imageOrigin = {});
     // copyImage's (and recordImage's), encoded
     void storeImage(const QByteArray& png, const QByteArray& hash, QSize size, bool remember, bool screenshot,
-        const QByteArray& project, bool toClipboard);
+        const QByteArray& project, bool toClipboard, const QString& imageOrigin);
     void onWritten(bool ok);
     void returnToField(QString text); // `text` typed into it; none: Esc
     void fillField(); // it has the keyboard again (or waited long enough)
     void dropUndo();
     QString separator() const;
     void loadHistoryState();
+    // The row (or the picked ones) as files in a folder asked for, starting
+    // in the one shown by the file manager it was opened over (else the last
+    // one); selected there afterwards.
+    void saveAsFiles(int row, bool merged);
+    void sendLan(int row);
 
     ClipStore* m_store;
     ClipboardWatcher* m_watcher;
     ClipModel m_model;
     TextRecognizer m_recognizer; // the words in pictures, for the search
     QTimer m_backlogTimer;
+    bool m_refreshRecognition = false;
     QSet<qint64> m_rereading; // read by another recognizer before: once all are back, it is noted
     QPointer<QWindow> m_window;
     // Pictures dragged out, copied here first (a folder each, by id): kept
     // until the app ends, as the program dropped on may copy them later.
     // Made on the first drag; what a crash left is removed at the start.
     QString m_dragFolder;
+    int m_drags = 0; // words dragged out: a folder of their own each time, under the names they make
     bool m_dragging = false;
+    bool m_saving = false; // saveAsFiles: from the menu until written
+    bool m_sending = false; // preparing this selection, before choosing a device
+    bool m_lanSendAvailable = false;
+    bool m_lanSendUpdate = false;
     bool m_active = false;
     bool m_keysRouted = false;
     bool m_pinned = false;
     bool m_previewOpen = false;
     int m_previewWidth = 0;
     int m_listWidth = 480;
+    int m_windowHeight = 0;
     bool m_pinnedFirst = false;
     bool m_recording = true;
     bool m_paused = false;
     QString m_shortcut;
     QString m_numberKeys = QStringLiteral("alt");
-    QString m_numberHints = QStringLiteral("held");
+    QString m_numberHints = QStringLiteral("always");
     unsigned m_numberKeysLeft = 0;
     bool m_clickToPaste = false;
     bool m_largePictures = false;
@@ -446,6 +476,8 @@ private:
     QElapsedTimer m_returnClock;
     QTimer m_returnTimer; // waits for the field to have the keyboard
     std::unique_ptr<ComWorker> m_filePasteWorker;
+    std::unique_ptr<ComWorker> m_saveWorker; // saveAsFiles: asks the file manager, copies the files
+    std::unique_ptr<ComWorker> m_sendWorker; // exports a stable history selection, without copying source folders
     std::jthread m_imageEncoder; // copyImage's PNG; last, so joined first
 };
 

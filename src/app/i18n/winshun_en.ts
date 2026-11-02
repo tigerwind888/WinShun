@@ -4,26 +4,6 @@
 <context>
     <name>AiAccessSection</name>
     <message>
-        <source>Claude、Cursor、VS Code 等 AI 助手通过 MCP（Model Context Protocol）连接 Win顺，就能搜文件名、文件里的文字和最近改过的文件：和你在搜索框里一样快，拼音也行。默认只读，不改动任何文件。</source>
-        <translation>AI assistants such as Claude, Cursor and VS Code connect to WinShun through MCP (Model Context Protocol) and can then search file names, the text inside files and the files changed lately, as fast as you do from the search box, pinyin included. Read-only by default: nothing is changed.</translation>
-    </message>
-    <message>
-        <source>允许 AI 连接</source>
-        <translation>Allow AI assistants to connect</translation>
-    </message>
-    <message>
-        <source>MCP;AI;Claude;Cursor;智能;助手;大模型;人工智能</source>
-        <translation>MCP;AI;Claude;Cursor;assistant;model;LLM</translation>
-    </message>
-    <message>
-        <source>关着时 AI 客户端连不上 Win顺</source>
-        <translation>Off: AI clients cannot reach WinShun</translation>
-    </message>
-    <message>
-        <source>AI 客户端启动 WinShunMcp.exe 就能连上</source>
-        <translation>An AI client connects by starting WinShunMcp.exe</translation>
-    </message>
-    <message>
         <source>允许 AI 打开文件和文件夹</source>
         <translation>Allow AI to open files and folders</translation>
     </message>
@@ -32,8 +12,28 @@
         <translation>open;folder;show;reveal;AI</translation>
     </message>
     <message>
-        <source>用默认程序打开文件、在文件管理器里显示；以普通权限打开，AI 客户端每次会先问你</source>
-        <translation>Opens files with their default program and shows them in the file manager, with your normal rights; the AI client asks you first each time</translation>
+        <source>Claude、Cursor、VS Code 等 AI 助手通过 MCP（Model Context Protocol）连接 Win顺，就能搜文件名、文件里的文字和最近改过的文件：和你在搜索框里一样快，拼音也行。能运行命令的 AI 助手和你自己也可以在终端里用命令行 ws。默认只读，不改动任何文件。</source>
+        <translation>AI assistants such as Claude, Cursor and VS Code connect to WinShun through MCP (Model Context Protocol) and can then search file names, the text inside files and the files changed lately, as fast as you do from the search box, pinyin included. Assistants that can run commands, and you, can also use the command line ws in a terminal. Read-only by default: nothing is changed.</translation>
+    </message>
+    <message>
+        <source>允许 AI 助手和命令行连接</source>
+        <translation>Allow AI assistants and the command line to connect</translation>
+    </message>
+    <message>
+        <source>MCP;AI;Claude;Cursor;智能;助手;大模型;人工智能;命令行;终端;ws;command line;cli;terminal;shell;powershell;cmd</source>
+        <translation>MCP;AI;Claude;Cursor;assistant;model;LLM;command line;terminal;ws;cli;shell;powershell;cmd;命令行;终端</translation>
+    </message>
+    <message>
+        <source>关着时 AI 客户端和命令行 ws 都连不上 Win顺</source>
+        <translation>Off: AI clients and the command line (ws) cannot reach WinShun</translation>
+    </message>
+    <message>
+        <source>AI 客户端启动 WinShunMcp.exe 就能连上；在终端里输入 ws 也行</source>
+        <translation>An AI client connects by starting WinShunMcp.exe; in a terminal, type ws</translation>
+    </message>
+    <message>
+        <source>只管通过 MCP 连接的 AI 客户端：用默认程序打开文件、在文件管理器里显示；以普通权限打开，客户端每次会先问你。命令行的 ws open 按你自己的权限打开，不受这个开关管</source>
+        <translation>Only for AI clients connected through MCP: opens files with their default program and shows them in the file manager, with your normal rights; the client asks you first each time. ws open on the command line opens with your own rights and is not governed by this switch</translation>
     </message>
     <message>
         <source>允许 AI 读取剪贴板历史</source>
@@ -119,20 +119,32 @@
 <context>
     <name>AiClientsSection</name>
     <message>
-        <source>点“连接”就写进那个客户端的配置（原文件先备份成 .bak）。装了的客户端才列出来。</source>
-        <translation>“Connect” writes WinShun into that client&apos;s configuration (the file is backed up as .bak first). Only installed clients are listed.</translation>
-    </message>
-    <message>
         <source>没找到 WinShunMcp.exe，重新安装 Win顺 就有了。</source>
         <translation>WinShunMcp.exe is missing; reinstalling WinShun brings it back.</translation>
     </message>
     <message>
-        <source>连接;配置;MCP;AI;%1</source>
-        <translation>connect;configure;MCP;AI;%1</translation>
+        <source>点“连接”就写进那个客户端的配置（原文件先备份成 .bak）。装了的客户端才列出来。Claude Code 还可以“装 Skill”：让它在终端里用命令行 ws，比 MCP 更省上下文。</source>
+        <translation>“Connect” writes WinShun into that client&apos;s configuration (the file is backed up as .bak first). Only installed clients are listed. For Claude Code you can also “Install Skill”: it then uses the command line ws, which costs less context than MCP.</translation>
+    </message>
+    <message>
+        <source>连接;配置;MCP;AI;Skill;%1</source>
+        <translation>connect;configure;MCP;AI;Skill;%1</translation>
     </message>
     <message>
         <source>已连接 · %1</source>
         <translation>Connected · %1</translation>
+    </message>
+    <message>
+        <source>已装 Skill · %1</source>
+        <translation>Skill installed · %1</translation>
+    </message>
+    <message>
+        <source>没找到 ws.exe，装不了 Skill；重新安装 Win顺 就有了</source>
+        <translation>ws.exe was not found, so the Skill cannot be installed; reinstalling WinShun brings it back</translation>
+    </message>
+    <message>
+        <source>ws 还没加进 PATH：Skill 里写着 ws.exe 的完整路径，照样能用；建议先在“权限”页的“命令行”里启用</source>
+        <translation>ws is not on the PATH yet: the Skill carries ws.exe&apos;s full path and works anyway, but it is better to turn on the command line first (Permissions tab, “Command line”)</translation>
     </message>
     <message>
         <source>重新连接</source>
@@ -141,6 +153,14 @@
     <message>
         <source>连接</source>
         <translation>Connect</translation>
+    </message>
+    <message>
+        <source>重装 Skill</source>
+        <translation>Reinstall Skill</translation>
+    </message>
+    <message>
+        <source>装 Skill</source>
+        <translation>Install Skill</translation>
     </message>
     <message>
         <source>复制命令</source>
@@ -177,6 +197,109 @@
     <message>
         <source>知道了</source>
         <translation>Got it</translation>
+    </message>
+</context>
+<context>
+    <name>AiCommandLineSection</name>
+    <message>
+        <source>正在检查…</source>
+        <translation>Checking…</translation>
+    </message>
+    <message>
+        <source>没找到 ws.exe（应在 %1），重新安装 Win顺 就有了</source>
+        <translation>ws.exe was not found (it should be in %1); reinstalling WinShun brings it back</translation>
+    </message>
+    <message>
+        <source>已在系统的 PATH 里（安装程序添加，由它管理）：%1</source>
+        <translation>On the system PATH (added by the installer, which manages it): %1</translation>
+    </message>
+    <message>
+        <source>已在你的 PATH 里（Win顺 加的）：%1</source>
+        <translation>On your PATH (added by WinShun): %1</translation>
+    </message>
+    <message>
+        <source>已在你的 PATH 里：%1</source>
+        <translation>On your PATH: %1</translation>
+    </message>
+    <message>
+        <source>ws.exe 在 %1，这个文件夹还不在 PATH 里：终端里输入 ws 会找不到</source>
+        <translation>ws.exe is in %1, but this folder is not on the PATH yet: typing ws in a terminal finds nothing</translation>
+    </message>
+    <message>
+        <source>你的 PATH 在注册表里不是文本类型，Win顺 读不了它，也不会去改它</source>
+        <translation>Your PATH is not a text value in the registry: WinShun cannot read it and will not change it</translation>
+    </message>
+    <message>
+        <source>没能读出 PATH（错误 %1），上面说的可能不全</source>
+        <translation>Could not read the PATH (error %1), so what is said above may be incomplete</translation>
+    </message>
+    <message>
+        <source>注意：PATH 里已有另一个叫 ws 的程序，终端里会先运行它：</source>
+        <translation>Note: another program called ws is already on the PATH, and a terminal runs it first:</translation>
+    </message>
+    <message>
+        <source>上面的开关关着：ws 连不上 Win顺</source>
+        <translation>The switch above is off: ws cannot reach WinShun</translation>
+    </message>
+    <message>
+        <source>命令行</source>
+        <translation>Command line</translation>
+    </message>
+    <message>
+        <source>在终端里输入 ws，就能搜文件名、搜文件里的文字、读出 Word 和 PDF 的文字。能运行命令的 AI 助手（Claude Code 这类）用它比 MCP 更省上下文。和 MCP 共用上面的开关。</source>
+        <translation>Type ws in a terminal to search file names, search the text inside files, and read out the text of Word and PDF files. AI assistants that can run commands (Claude Code and the like) use it with less context than MCP. It shares the switch above with MCP.</translation>
+    </message>
+    <message>
+        <source>ws 命令</source>
+        <translation>ws command</translation>
+    </message>
+    <message>
+        <source>命令行;终端;ws;command line;cli;terminal;shell;PowerShell;cmd;PATH;环境变量;启用</source>
+        <translation>command line;terminal;ws;cli;shell;PowerShell;cmd;PATH;environment variable;enable;命令行;终端</translation>
+    </message>
+    <message>
+        <source>启用命令行</source>
+        <translation>Turn on the command line</translation>
+    </message>
+    <message>
+        <source>从 PATH 移除</source>
+        <translation>Remove from PATH</translation>
+    </message>
+    <message>
+        <source>试一试</source>
+        <translation>Try it</translation>
+    </message>
+    <message>
+        <source>示例;例子;试试;命令行;ws;example;try;terminal;终端</source>
+        <translation>example;try;command line;terminal;ws;命令行;终端</translation>
+    </message>
+    <message>
+        <source>新打开的终端才认得新的 PATH，已经开着的不行（VS Code 的终端要重开 VS Code）。在终端里输入：</source>
+        <translation>Only newly opened terminals know a new PATH; ones already open do not (restart VS Code for its terminal). Type in a terminal:</translation>
+    </message>
+    <message>
+        <source>复制命令</source>
+        <translation>Copy command</translation>
+    </message>
+    <message>
+        <source>刚才的结果</source>
+        <translation>Last result</translation>
+    </message>
+    <message>
+        <source>知道了</source>
+        <translation>Got it</translation>
+    </message>
+    <message>
+        <source>调用记录</source>
+        <translation>Calls so far</translation>
+    </message>
+    <message>
+        <source>调用;次数;最近;命令行;ws;calls;last;recent;history</source>
+        <translation>calls;count;last;recent;history;command line;ws;调用;次数;命令行</translation>
+    </message>
+    <message>
+        <source>还没有调用；在终端里用一次 ws，这里就会显示</source>
+        <translation>No calls yet; run ws once in a terminal and it shows here</translation>
     </message>
 </context>
 <context>
@@ -617,8 +740,24 @@
         <translation>Double-click to open results</translation>
     </message>
     <message>
+        <source>搜索应用</source>
+        <translation>Search applications</translation>
+    </message>
+    <message>
+        <source>搜索系统设置</source>
+        <translation>Search system settings</translation>
+    </message>
+    <message>
+        <source>正则模式</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
         <source>显示修改日期</source>
         <translation>Show the date modified</translation>
+    </message>
+    <message>
+        <source>较早的日期也显示时间</source>
+        <translation>Include the time for older dates</translation>
     </message>
     <message>
         <source>显示文件大小</source>
@@ -793,80 +932,8 @@
         <translation>Clean up</translation>
     </message>
     <message>
-        <source>屏幕截图</source>
-        <translation>Screen capture</translation>
-    </message>
-    <message>
-        <source>截图快捷键</source>
-        <translation>Screenshot shortcut</translation>
-    </message>
-    <message>
-        <source>PrtScn 键也截图</source>
-        <translation>PrtScn also takes a screenshot</translation>
-    </message>
-    <message>
-        <source>选中后直接复制</source>
-        <translation>Copy right after selecting</translation>
-    </message>
-    <message>
-        <source>框选时显示放大镜</source>
-        <translation>Show the magnifier while selecting</translation>
-    </message>
-    <message>
-        <source>HDR 屏幕上同时保存 HDR 图片</source>
-        <translation>Also save an HDR picture on HDR screens</translation>
-    </message>
-    <message>
-        <source>截图：双击左键</source>
-        <translation>Screenshot: double click</translation>
-    </message>
-    <message>
-        <source>截图：右键</source>
-        <translation>Screenshot: right button</translation>
-    </message>
-    <message>
-        <source>截图：中键</source>
-        <translation>Screenshot: middle button</translation>
-    </message>
-    <message>
-        <source>截图：侧键（后退）</source>
-        <translation>Screenshot: side button (back)</translation>
-    </message>
-    <message>
-        <source>截图：侧键（前进）</source>
-        <translation>Screenshot: side button (forward)</translation>
-    </message>
-    <message>
-        <source>无</source>
-        <translation>Nothing</translation>
-    </message>
-    <message>
         <source>关闭</source>
         <translation>Off</translation>
-    </message>
-    <message>
-        <source>复制并关闭</source>
-        <translation>Copy and close</translation>
-    </message>
-    <message>
-        <source>保存</source>
-        <translation>Save</translation>
-    </message>
-    <message>
-        <source>贴图</source>
-        <translation>Pin to screen</translation>
-    </message>
-    <message>
-        <source>识别文字</source>
-        <translation>Recognize text</translation>
-    </message>
-    <message>
-        <source>取消截图</source>
-        <translation>Cancel the capture</translation>
-    </message>
-    <message>
-        <source>后退（重新框选）</source>
-        <translation>Step back (select again)</translation>
     </message>
     <message>
         <source>截图历史的关键词</source>
@@ -960,10 +1027,6 @@
         <translation>Advanced</translation>
     </message>
     <message>
-        <source>截图</source>
-        <translation>Screenshot</translation>
-    </message>
-    <message>
         <source>索引哪些地方</source>
         <translation>What to index</translation>
     </message>
@@ -988,18 +1051,6 @@
         <translation>Only at startup</translation>
     </message>
     <message>
-        <source>识别文字并复制</source>
-        <translation>Read text and copy</translation>
-    </message>
-    <message>
-        <source>识别文字并搜索</source>
-        <translation>Read text and search</translation>
-    </message>
-    <message>
-        <source>识别文字并网页搜索</source>
-        <translation>Read text and search the web</translation>
-    </message>
-    <message>
         <source>面板内数字键粘贴</source>
         <translation>Number keys inside the panel</translation>
     </message>
@@ -1012,654 +1063,59 @@
         <translation>Show the logo by the search box</translation>
     </message>
     <message>
-        <source>录屏时显示按键</source>
-        <translation>Show keys in recordings</translation>
+        <source>预览文件</source>
+        <translation>Preview files</translation>
     </message>
     <message>
-        <source>仅快捷键</source>
-        <translation>Shortcuts only</translation>
+        <source>预览快捷键</source>
+        <translation>Preview shortcut</translation>
     </message>
     <message>
-        <source>全部按键</source>
-        <translation>All keys</translation>
+        <source>同时用中键打开文件夹菜单</source>
+        <translation>Also open the folder menu with a middle click</translation>
     </message>
     <message>
-        <source>录屏时显示鼠标按键</source>
-        <translation>Show mouse buttons in recordings</translation>
-    </message>
-</context>
-<context>
-    <name>AnnotateLayer</name>
-    <message>
-        <source>再按一次关掉 · [ ] 改粗细 · H 隐藏工具条</source>
-        <translation>Press the key again to turn it off · [ ] changes the size · H hides the toolbar</translation>
+        <source>剪贴板打开位置</source>
+        <translation>Clipboard position</translation>
     </message>
     <message>
-        <source>按 H 显示工具条</source>
-        <translation>Press H to show the toolbar</translation>
+        <source>最近打开的数量</source>
+        <translation>Recently opened items</translation>
     </message>
-</context>
-<context>
-    <name>AnnotateObjects</name>
     <message>
-        <source>输入文字，Esc 跳过</source>
-        <translation>Type words, Esc to skip</translation>
+        <source>不输入时显示收藏</source>
+        <translation>Show favorites before typing</translation>
     </message>
-</context>
-<context>
-    <name>AnnotateSmartHint</name>
     <message>
-        <source>发现 %1 处 · 点此打码</source>
-        <translation>%1 found · click to redact</translation>
+        <source>不显示最近项目</source>
+        <translation>Hide recent items</translation>
+    </message>
+    <message>
+        <source>项</source>
+        <translation>items</translation>
+    </message>
+    <message>
+        <source>全屏时不响应剪贴板快捷键</source>
+        <translation>Pause clipboard hotkeys in full screen</translation>
     </message>
 </context>
 <context>
-    <name>AnnotateStylePanel</name>
+    <name>AppearancePreview</name>
     <message>
-        <source>马赛克</source>
-        <translation>Mosaic</translation>
+        <source>界面大小效果预览</source>
+        <translation>Interface size preview</translation>
     </message>
     <message>
-        <source>模糊</source>
-        <translation>Blur</translation>
+        <source>搜索文件、文件夹…</source>
+        <translation>Search files and folders…</translation>
     </message>
     <message>
-        <source>纯色</source>
-        <translation>Solid</translation>
+        <source>项目资料</source>
+        <translation>Project files</translation>
     </message>
     <message>
-        <source>粗细 %1</source>
-        <translation>Width %1</translation>
-    </message>
-    <message>
-        <source>不填充</source>
-        <translation>No fill</translation>
-    </message>
-    <message>
-        <source>浅色填充</source>
-        <translation>Light fill</translation>
-    </message>
-    <message>
-        <source>实心填充</source>
-        <translation>Solid fill</translation>
-    </message>
-    <message>
-        <source>字号 %1</source>
-        <translation>Font size %1</translation>
-    </message>
-    <message>
-        <source>粗体</source>
-        <translation>Bold</translation>
-    </message>
-    <message>
-        <source>底框</source>
-        <translation>Box</translation>
-    </message>
-    <message>
-        <source>描边</source>
-        <translation>Outline</translation>
-    </message>
-    <message>
-        <source>无边</source>
-        <translation>None</translation>
-    </message>
-    <message>
-        <source>文字不描边</source>
-        <translation>No outline on the text</translation>
-    </message>
-    <message>
-        <source>细</source>
-        <translation>Thin</translation>
-    </message>
-    <message>
-        <source>中</source>
-        <translation>Medium</translation>
-    </message>
-    <message>
-        <source>粗</source>
-        <translation>Thick</translation>
-    </message>
-    <message>
-        <source>描边 %1</source>
-        <translation>Outline %1</translation>
-    </message>
-    <message>
-        <source>描边颜色：开启后，色块改为选描边的颜色</source>
-        <translation>Outline colour: while on, the swatches pick the outline's colour</translation>
-    </message>
-    <message>
-        <source>自动</source>
-        <translation>Auto</translation>
-    </message>
-    <message>
-        <source>描边颜色自动：深色字配白边，浅色字配深边</source>
-        <translation>Automatic outline: white round dark text, dark round light text</translation>
-    </message>
-    <message>
-        <source>格子 %1</source>
-        <translation>Cell %1</translation>
-    </message>
-    <message>
-        <source>起始</source>
-        <translation>Start</translation>
-    </message>
-    <message>
-        <source>起始值减 1</source>
-        <translation>Start one lower</translation>
-    </message>
-    <message>
-        <source>起始值加 1</source>
-        <translation>Start one higher</translation>
-    </message>
-    <message>
-        <source>另起一组</source>
-        <translation>New group</translation>
-    </message>
-    <message>
-        <source>之后的序号从 1 重新数</source>
-        <translation>The next numbers count from 1 again</translation>
-    </message>
-    <message>
-        <source>上移一层</source>
-        <translation>Up one layer</translation>
-    </message>
-    <message>
-        <source>下移一层</source>
-        <translation>Down one layer</translation>
-    </message>
-    <message>
-        <source>删除</source>
-        <translation>Delete</translation>
-    </message>
-    <message>
-        <source>吸管：点图上的一点，取它的颜色</source>
-        <translation>Eyedropper: click a point on the picture to take its colour</translation>
-    </message>
-    <message>
-        <source>恢复默认样式</source>
-        <translation>Restore the default style</translation>
-    </message>
-    <message>
-        <source>序号写成 1 2 3</source>
-        <translation>Numbers as 1 2 3</translation>
-    </message>
-    <message>
-        <source>序号写成 A B C</source>
-        <translation>Numbers as A B C</translation>
-    </message>
-    <message>
-        <source>序号写成 a b c</source>
-        <translation>Numbers as a b c</translation>
-    </message>
-    <message>
-        <source>序号写成 Ⅰ Ⅱ Ⅲ（罗马数字）</source>
-        <translation>Numbers as Ⅰ Ⅱ Ⅲ (Roman numerals)</translation>
-    </message>
-    <message>
-        <source>序号写成 ① ② ③（圈里的数字）</source>
-        <translation>Numbers as ① ② ③ (digits in a ring)</translation>
-    </message>
-    <message>
-        <source>抹平</source>
-        <translation>Smooth</translation>
-    </message>
-    <message>
-        <source>用四周的底色盖住，像擦掉了一样</source>
-        <translation>Covered with the ground colour around it, as if rubbed out</translation>
-    </message>
-    <message>
-        <source>框</source>
-        <translation>Box</translation>
-    </message>
-    <message>
-        <source>拖出一个框来打码</source>
-        <translation>Drag out a box to redact</translation>
-    </message>
-    <message>
-        <source>涂抹</source>
-        <translation>Brush</translation>
-    </message>
-    <message>
-        <source>沿着鼠标走过的地方打码</source>
-        <translation>Redact where the mouse goes</translation>
-    </message>
-    <message>
-        <source>笔宽 %1</source>
-        <translation>Brush width %1</translation>
-    </message>
-    <message>
-        <source>识别中…</source>
-        <translation>Reading…</translation>
-    </message>
-    <message>
-        <source>智能打码 %1</source>
-        <translation>Smart redact %1</translation>
-    </message>
-    <message>
-        <source>智能打码</source>
-        <translation>Smart redact</translation>
-    </message>
-    <message>
-        <source>找出图里的手机号、证件号、银行卡、邮箱、密钥和本机用户名，一次全部打码</source>
-        <translation>Finds the phone numbers, ID numbers, bank cards, e-mail addresses, keys and this computer&apos;s user name in the picture and redacts them all at once</translation>
-    </message>
-    <message>
-        <source>直线</source>
-        <translation>Straight</translation>
-    </message>
-    <message>
-        <source>折线</source>
-        <translation>Polyline</translation>
-    </message>
-    <message>
-        <source>曲线</source>
-        <translation>Curve</translation>
-    </message>
-    <message>
-        <source>单击加点，点击起点闭合；双击/回车结束，退格撤回节点</source>
-        <translation>Click to add points, click the start to close; double-click or Enter to finish, Backspace to remove a point</translation>
-    </message>
-    <message>
-        <source>拖出曲线，再拖动两个圆形控制点调整弧度</source>
-        <translation>Drag a curve, then move its two round control points to adjust the bend</translation>
-    </message>
-    <message>
-        <source>拖动绘制直线，Shift 吸附角度</source>
-        <translation>Drag a straight line; hold Shift to snap the angle</translation>
-    </message>
-    <message>
-        <source>涂画</source>
-        <translation>Freehand</translation>
-    </message>
-    <message>
-        <source>矩形</source>
-        <translation>Rectangle</translation>
-    </message>
-    <message>
-        <source>新荧光笔标注的绘制方式；叠在文字上仍可读</source>
-        <translation>Shape of new highlights; text stays readable underneath</translation>
-    </message>
-</context>
-<context>
-    <name>AnnotateToolbar</name>
-    <message>
-        <source>按住拖动工具条</source>
-        <translation>Drag to move the toolbar</translation>
-    </message>
-    <message>
-        <source>移动工具条</source>
-        <translation>Move toolbar</translation>
-    </message>
-    <message>
-        <source>按住拖动；聚焦后可用方向键移动，Shift 加速</source>
-        <translation>Drag to move. When focused, use the arrow keys; hold Shift to move faster.</translation>
-    </message>
-    <message>
-        <source>延时：关掉这次截图，倒计时后重新截（秒数在设置里选）</source>
-        <translation>Delay: ends this capture and captures again after a countdown (the seconds are set in the settings)</translation>
-    </message>
-    <message>
-        <source>二维码：识别选区里的二维码，可复制文字或打开链接</source>
-        <translation>QR code: reads the QR codes in the selection; copy the text or open a link</translation>
-    </message>
-    <message>
-        <source>延时</source>
-        <translation>Delay</translation>
-    </message>
-    <message>
-        <source>二维码</source>
-        <translation>QR code</translation>
-    </message>
-    <message>
-        <source>延时截图：关掉这次，倒计时后再截</source>
-        <translation>Delayed capture: end this one and capture again after a countdown</translation>
-    </message>
-    <message>
-        <source>识别选区里的二维码</source>
-        <translation>Read the QR codes in the selection</translation>
-    </message>
-    <message>
-        <source>还没选区时：用上一次的选区</source>
-        <translation>With no selection yet: use the last selection</translation>
-    </message>
-    <message>
-        <source>复制颜色并结束截图；单按 Shift 换颜色格式（HEX、RGB、HSL）</source>
-        <translation>Copy the colour and end the capture; Shift alone changes its format (HEX, RGB, HSL)</translation>
-    </message>
-    <message>
-        <source>识别选区里的文字并复制</source>
-        <translation>Read the words in the selection and copy them</translation>
-    </message>
-    <message>
-        <source>复制</source>
-        <translation>Copy</translation>
-    </message>
-    <message>
-        <source>保存</source>
-        <translation>Save</translation>
-    </message>
-    <message>
-        <source>贴图</source>
-        <translation>Pin</translation>
-    </message>
-    <message>
-        <source>识别文字</source>
-        <translation>Read text</translation>
-    </message>
-    <message>
-        <source>取消</source>
-        <translation>Cancel</translation>
-    </message>
-    <message>
-        <source>全部按键</source>
-        <translation>All keys</translation>
-    </message>
-    <message>
-        <source>撤销 %1</source>
-        <translation>Undo %1</translation>
-    </message>
-    <message>
-        <source>撤销</source>
-        <translation>Undo</translation>
-    </message>
-    <message>
-        <source>重做 %1</source>
-        <translation>Redo %1</translation>
-    </message>
-    <message>
-        <source>重做</source>
-        <translation>Redo</translation>
-    </message>
-    <message>
-        <source>贴图：留在屏幕上，可拖动、缩放</source>
-        <translation>Pin: stays on the screen; drag it, zoom it</translation>
-    </message>
-    <message>
-        <source>识别文字：识别图里的文字，可复制或拿去搜索</source>
-        <translation>Recognise text: reads the words in the picture; copy them or search with them</translation>
-    </message>
-    <message>
-        <source>识别文字：没有安装文字识别模型（Win顺 文件夹里的 ocr 文件夹），无法识别文字</source>
-        <translation>Recognise text: the text recognition models are not installed (the ocr folder in the WinShun folder), so no text can be read</translation>
-    </message>
-    <message>
-        <source>按键</source>
-        <translation>Keys</translation>
-    </message>
-    <message>
-        <source>R E A L P M T N B 或 1–9</source>
-        <translation>R E A L P M T N B or 1–9</translation>
-    </message>
-    <message>
-        <source>选工具：矩形、椭圆、箭头、直线、画笔、荧光笔、文字、序号、打码</source>
-        <translation>Pick a tool: rectangle, ellipse, arrow, line, pen, highlighter, text, number, redact</translation>
-    </message>
-    <message>
-        <source>工具键再按一次</source>
-        <translation>The tool key again</translation>
-    </message>
-    <message>
-        <source>关掉工具</source>
-        <translation>Turns the tool off</translation>
-    </message>
-    <message>
-        <source>删除选中的对象</source>
-        <translation>Deletes the selected object</translation>
-    </message>
-    <message>
-        <source>方向键</source>
-        <translation>Arrow keys</translation>
-    </message>
-    <message>
-        <source>挪动选中的对象，按住 Shift 一次 10 像素；没有选中时微调选区</source>
-        <translation>Move the selected object, 10 pixels at a time with Shift; with none selected they nudge the selection</translation>
-    </message>
-    <message>
-        <source>粗细、字号、格子小一档 / 大一档</source>
-        <translation>Width, font size, cell: one step smaller / larger</translation>
-    </message>
-    <message>
-        <source>下移一层 / 上移一层，加 Shift 到底 / 到顶</source>
-        <translation>Down / up one layer; with Shift to the bottom / top</translation>
-    </message>
-    <message>
-        <source>滚轮</source>
-        <translation>Wheel</translation>
-    </message>
-    <message>
-        <source>有工具或选中对象时改粗细</source>
-        <translation>Changes the size while a tool is on or an object is selected</translation>
-    </message>
-    <message>
-        <source>画的时候按住 Shift</source>
-        <translation>Hold Shift while drawing</translation>
-    </message>
-    <message>
-        <source>正方形、正圆；线吸附 15°；画笔、荧光笔画直线</source>
-        <translation>Squares and circles; lines snap to 15°; the pen and highlighter draw straight</translation>
-    </message>
-    <message>
-        <source>双击</source>
-        <translation>Double click</translation>
-    </message>
-    <message>
-        <source>文字：改文字；序号：改号，序号旁的字：改字</source>
-        <translation>Text: edit it; number: change it; the words by a number: edit them</translation>
-    </message>
-    <message>
-        <source>写完文字（Enter 换行；序号旁的字 Enter 就写完）</source>
-        <translation>Finish the text (Enter breaks the line; for the words by a number, Enter finishes them)</translation>
-    </message>
-    <message>
-        <source>隐藏 / 显示工具条</source>
-        <translation>Hide / show the toolbar</translation>
-    </message>
-    <message>
-        <source>Esc、右键</source>
-        <translation>Esc, right click</translation>
-    </message>
-    <message>
-        <source>退一步：写完文字、放弃标注、关闭截图</source>
-        <translation>One step back: finish the text, put the annotations down, close the capture</translation>
-    </message>
-    <message>
-        <source>挪动选中的对象，按住 Shift 一次 10 像素；没有选中时滚动图片</source>
-        <translation>Move the selected object, 10 pixels at a time with Shift; with none selected they scroll the picture</translation>
-    </message>
-    <message>
-        <source>Shift+点击、拖空白处</source>
-        <translation>Shift+click, drag on the empty picture</translation>
-    </message>
-    <message>
-        <source>多选；Ctrl+A 全选，Ctrl+D 复制一份</source>
-        <translation>Select several; Ctrl+A selects all, Ctrl+D copies them</translation>
-    </message>
-    <message>
-        <source>吸管：点图上的一点，取它的颜色</source>
-        <translation>Eyedropper: click a point on the picture to take its colour</translation>
-    </message>
-    <message>
-        <source>拖图片的边</source>
-        <translation>Drag the picture&apos;s edge</translation>
-    </message>
-    <message>
-        <source>裁剪（没有工具时；有工具时从图外拖）</source>
-        <translation>Crop (with no tool on; with a tool, drag from outside the picture)</translation>
-    </message>
-    <message>
-        <source>上下滚动，Shift 左右；Alt+滚轮改粗细</source>
-        <translation>Scroll up and down, sideways with Shift; Alt+wheel changes the width</translation>
-    </message>
-    <message>
-        <source>Ctrl+滚轮、Ctrl+加号 / 减号</source>
-        <translation>Ctrl+wheel, Ctrl+plus / minus</translation>
-    </message>
-    <message>
-        <source>缩放</source>
-        <translation>Zoom</translation>
-    </message>
-    <message>
-        <source>适合窗口 / 100%</source>
-        <translation>Fit the window / 100%</translation>
-    </message>
-    <message>
-        <source>空格 + 拖动，或中键拖动</source>
-        <translation>Space + drag, or middle-button drag</translation>
-    </message>
-    <message>
-        <source>平移</source>
-        <translation>Pan</translation>
-    </message>
-    <message>
-        <source>Esc</source>
-        <translation>Esc</translation>
-    </message>
-    <message>
-        <source>写完文字；有改动时放弃全部（Ctrl+Z 恢复）；没有改动时关闭</source>
-        <translation>Finish the text; with changes, give them all up (Ctrl+Z brings them back); with none, close</translation>
-    </message>
-    <message>
-        <source>智能打码：自动找出手机号、证件号、卡号、邮箱、密钥，一次全部打码</source>
-        <translation>Smart redact: finds phone numbers, ID and card numbers, e-mail addresses and keys, and redacts them all at once</translation>
-    </message>
-    <message>
-        <source>长截图</source>
-        <translation>Long screenshot</translation>
-    </message>
-    <message>
-        <source>长截图：滚动着截下选区里更长的内容</source>
-        <translation>Long screenshot: scroll and capture more of what is in the selection</translation>
-    </message>
-    <message>
-        <source>长截图：选区里的内容一边滚动一边截</source>
-        <translation>Long screenshot: the selection’s content captured while it scrolls</translation>
-    </message>
-    <message>
-        <source>区域录屏：把选区里的操作录成 MP4</source>
-        <translation>Record the selected area as an MP4 video</translation>
-    </message>
-    <message>
-        <source>录屏</source>
-        <translation>Record screen</translation>
-    </message>
-    <message>
-        <source>区域录屏：录制选区里的操作，保存为 MP4</source>
-        <translation>Record activity in the selected area as MP4</translation>
-    </message>
-    <message>
-        <source>区域录屏：把选区里的操作录成 MP4 或 GIF</source>
-        <translation>Region recording: capture actions as MP4 or GIF</translation>
-    </message>
-    <message>
-        <source>区域录屏：录制选区里的操作，保存为 MP4 或 GIF</source>
-        <translation>Region recording: record actions in the selection as MP4 or GIF</translation>
-    </message>
-</context>
-<context>
-    <name>Annotation</name>
-    <message>
-        <source>添加</source>
-        <translation>Add</translation>
-    </message>
-    <message>
-        <source>删除</source>
-        <translation>Delete</translation>
-    </message>
-    <message>
-        <source>移动</source>
-        <translation>Move</translation>
-    </message>
-    <message>
-        <source>改形状</source>
-        <translation>Reshape</translation>
-    </message>
-    <message>
-        <source>改样式</source>
-        <translation>Restyle</translation>
-    </message>
-    <message>
-        <source>改文字</source>
-        <translation>Edit text</translation>
-    </message>
-    <message>
-        <source>改序号</source>
-        <translation>Renumber</translation>
-    </message>
-    <message>
-        <source>调层</source>
-        <translation>Reorder</translation>
-    </message>
-    <message>
-        <source>另起一组</source>
-        <translation>New group</translation>
-    </message>
-    <message>
-        <source>改起始值</source>
-        <translation>Change start</translation>
-    </message>
-    <message>
-        <source>裁剪</source>
-        <translation>Crop</translation>
-    </message>
-    <message>
-        <source>标注文件已损坏。</source>
-        <translation>The annotation file is damaged.</translation>
-    </message>
-    <message>
-        <source>这不是 Win顺 的标注文件。</source>
-        <translation>This is not a WinShun annotation file.</translation>
-    </message>
-    <message>
-        <source>这张图是新版 Win顺 存的，升级后才能编辑</source>
-        <translation>This picture was saved by a newer WinShun; update to edit it</translation>
-    </message>
-    <message>
-        <source>矩形</source>
-        <translation>Rectangle</translation>
-    </message>
-    <message>
-        <source>椭圆</source>
-        <translation>Ellipse</translation>
-    </message>
-    <message>
-        <source>箭头</source>
-        <translation>Arrow</translation>
-    </message>
-    <message>
-        <source>直线</source>
-        <translation>Line</translation>
-    </message>
-    <message>
-        <source>画笔</source>
-        <translation>Pen</translation>
-    </message>
-    <message>
-        <source>荧光笔</source>
-        <translation>Highlighter</translation>
-    </message>
-    <message>
-        <source>文字</source>
-        <translation>Text</translation>
-    </message>
-    <message>
-        <source>序号</source>
-        <translation>Number</translation>
-    </message>
-    <message>
-        <source>打码</source>
-        <translation>Redact</translation>
-    </message>
-    <message>
-        <source>放弃修改</source>
-        <translation>Give up changes</translation>
-    </message>
-    <message>
-        <source>改序号格式</source>
-        <translation>Change number format</translation>
-    </message>
-    <message>
-        <source>智能打码</source>
-        <translation>Smart redaction</translation>
+        <source>文件夹 · 效果预览</source>
+        <translation>Folder · Preview</translation>
     </message>
 </context>
 <context>
@@ -1683,428 +1139,6 @@
     <message>
         <source>展开%1设置</source>
         <translation>Expand the %1 settings</translation>
-    </message>
-</context>
-<context>
-    <name>CaptureCard</name>
-    <message>
-        <source>设成“鼠标穿透”的贴图点不到时，按它让所有贴图都能点；平时按住 Ctrl 把鼠标放上去也行</source>
-        <translation>When pins set to “click through” cannot be clicked, press it to make all pins take the mouse again; or hold Ctrl with the mouse over one</translation>
-    </message>
-    <message>
-        <source>找回穿透贴图的快捷键</source>
-        <translation>Shortcut to get click-through pins back</translation>
-    </message>
-    <message>
-        <source>按一下藏起所有贴图，再按一下放回来；新贴一张图时也会放回来。不设就只能从托盘菜单或贴图的右键菜单操作</source>
-        <translation>Press once to hide every pin and again to bring them back; pinning a new picture brings them back too. Without one, use the tray menu or a pin’s right-click menu</translation>
-    </message>
-    <message>
-        <source>隐藏 / 显示全部贴图的快捷键</source>
-        <translation>Shortcut to hide / show all pins</translation>
-    </message>
-    <message>
-        <source>%1 秒</source>
-        <translation>%1 s</translation>
-    </message>
-    <message>
-        <source>延时截图</source>
-        <translation>Delayed capture</translation>
-    </message>
-    <message>
-        <source>双击贴图</source>
-        <translation>Double-clicking a pin</translation>
-    </message>
-    <message>
-        <source>复位：回到原来的大小；关闭：贴图不要了；收起：缩成小方块，点一下再展开。按 Esc 总是关闭</source>
-        <translation>Reset: back to its original size. Close: the pin goes away. Collapse: it shrinks to a small tile; click it to open it again. Esc always closes it</translation>
-    </message>
-    <message>
-        <source>复位</source>
-        <translation>Reset</translation>
-    </message>
-    <message>
-        <source>关闭</source>
-        <translation>Close</translation>
-    </message>
-    <message>
-        <source>收起</source>
-        <translation>Collapse</translation>
-    </message>
-    <message>
-        <source>不做</source>
-        <translation>Nothing</translation>
-    </message>
-    <message>
-        <source>识别 WinUI 等程序里的控件</source>
-        <translation>Find controls in WinUI and similar programs</translation>
-    </message>
-    <message>
-        <source>截图带上鼠标指针</source>
-        <translation>Include the mouse cursor</translation>
-    </message>
-    <message>
-        <source>HDR 屏幕上同时保存 HDR 图片</source>
-        <translation>Also save an HDR picture on HDR screens</translation>
-    </message>
-    <message>
-        <source>延时</source>
-        <translation>Delay</translation>
-    </message>
-    <message>
-        <source>二维码</source>
-        <translation>QR code</translation>
-    </message>
-    <message>
-        <source>截图</source>
-        <translation>Screenshot</translation>
-    </message>
-    <message>
-        <source>内置</source>
-        <translation>Built in</translation>
-    </message>
-    <message>
-        <source>关着</source>
-        <translation>Off</translation>
-    </message>
-    <message>
-        <source>开着：按 %1，或从托盘菜单截图</source>
-        <translation>On: press %1, or use the tray menu</translation>
-    </message>
-    <message>
-        <source>开着：按 PrtScn，或从托盘菜单截图</source>
-        <translation>On: press PrtScn, or use the tray menu</translation>
-    </message>
-    <message>
-        <source>快捷键</source>
-        <translation>Shortcut</translation>
-    </message>
-    <message>
-        <source>按它开始截图，截图时再按一次取消</source>
-        <translation>Starts a screenshot; pressing it again during one cancels it</translation>
-    </message>
-    <message>
-        <source>清除</source>
-        <translation>Clear</translation>
-    </message>
-    <message>
-        <source>截图历史关键词</source>
-        <translation>Screenshot history keyword</translation>
-    </message>
-    <message>
-        <source>在搜索框输入“%1”加空格，列出截过的图，再输入文字按图里识别出的文字筛选；Enter 复制并粘贴，Ctrl+Enter 贴到屏幕，Delete 删除</source>
-        <translation>Type “%1” and a space in the search box to list your screenshots, then words to filter by the text recognized in them; Enter copies and pastes, Ctrl+Enter pins to the screen, Delete removes</translation>
-    </message>
-    <message>
-        <source>用 PrtScn 键截图</source>
-        <translation>Take screenshots with PrtScn</translation>
-    </message>
-    <message>
-        <source>让 PrtScn 不再打开 Windows 的截图工具，改用这里的截图。Win顺 没在运行时，PrtScn 会把整个屏幕复制到剪贴板；关掉这项恢复原来的设置</source>
-        <translation>PrtScn takes a screenshot here instead of opening the Windows Snipping Tool. While WinShun is not running, PrtScn copies the whole screen to the clipboard; turning this off restores the previous setting</translation>
-    </message>
-    <message>
-        <source>选好就复制</source>
-        <translation>Copy as soon as it is picked</translation>
-    </message>
-    <message>
-        <source>框选时显示放大镜</source>
-        <translation>Show the magnifier while selecting</translation>
-    </message>
-    <message>
-        <source>在指针旁放大显示像素和颜色值。关闭后，按 C 复制颜色、按 Shift 换颜色格式也一并停用。</source>
-        <translation>Magnified pixels and the colour value beside the pointer. When off, C (copy colour) and Shift (colour format) do nothing either.</translation>
-    </message>
-    <message>
-        <source>框选后的鼠标操作</source>
-        <translation>Mouse buttons after a selection</translation>
-    </message>
-    <message>
-        <source>双击左键</source>
-        <translation>Double click</translation>
-    </message>
-    <message>
-        <source>右键</source>
-        <translation>Right button</translation>
-    </message>
-    <message>
-        <source>中键</source>
-        <translation>Middle button</translation>
-    </message>
-    <message>
-        <source>侧键（后退）</source>
-        <translation>Side button (back)</translation>
-    </message>
-    <message>
-        <source>侧键（前进）</source>
-        <translation>Side button (forward)</translation>
-    </message>
-    <message>
-        <source>无</source>
-        <translation>Nothing</translation>
-    </message>
-    <message>
-        <source>复制并关闭</source>
-        <translation>Copy and close</translation>
-    </message>
-    <message>
-        <source>保存</source>
-        <translation>Save</translation>
-    </message>
-    <message>
-        <source>贴图</source>
-        <translation>Pin to screen</translation>
-    </message>
-    <message>
-        <source>识别文字</source>
-        <translation>Recognize text</translation>
-    </message>
-    <message>
-        <source>取消截图</source>
-        <translation>Cancel the capture</translation>
-    </message>
-    <message>
-        <source>后退（重新框选）</source>
-        <translation>Step back (select again)</translation>
-    </message>
-    <message>
-        <source>识别文字并复制</source>
-        <translation>Read text and copy</translation>
-    </message>
-    <message>
-        <source>识别文字并搜索</source>
-        <translation>Read text and search</translation>
-    </message>
-    <message>
-        <source>识别文字并网页搜索</source>
-        <translation>Read text and search the web</translation>
-    </message>
-    <message>
-        <source>撤销</source>
-        <translation>Undo</translation>
-    </message>
-    <message>
-        <source>重做</source>
-        <translation>Redo</translation>
-    </message>
-    <message>
-        <source>复制</source>
-        <translation>Copy</translation>
-    </message>
-    <message>
-        <source>取消</source>
-        <translation>Cancel</translation>
-    </message>
-    <message>
-        <source>工具条上的按钮</source>
-        <translation>Toolbar buttons</translation>
-    </message>
-    <message>
-        <source>智能打码</source>
-        <translation>Smart redaction</translation>
-    </message>
-    <message>
-        <source>在打码工具里点“智能打码”（或按 Shift+B），自动找出图里的手机号、身份证号、银行卡号、邮箱、密钥和密码、本机用户名，一次全部盖住，Ctrl+Z 一次撤销。识别在本机完成，图和文字都不会发出去；自动找的可能有漏，发出去前再看一眼</source>
-        <translation>In the redact tool click &quot;Smart redact&quot; (or press Shift+B) to find the phone numbers, ID numbers, bank card numbers, e-mail addresses, keys, passwords and this computer&apos;s user name in the picture and cover them all at once; Ctrl+Z undoes it in one go. Reading happens on this computer: neither the picture nor its text is sent anywhere. What is found automatically can miss some, so take a look before you send it</translation>
-    </message>
-    <message>
-        <source>框选后自动识别</source>
-        <translation>Look for it as soon as a selection is made</translation>
-    </message>
-    <message>
-        <source>选好区域停一会儿，就在后台找要打码的内容，找到了在工具条边上提示“发现 N 处”。关掉后，点“智能打码”时才识别</source>
-        <translation>Once the selection has held still for a moment, the picture is searched in the background and the toolbar says &quot;N found&quot;. Turned off, it is read only when you click &quot;Smart redact&quot;</translation>
-    </message>
-    <message>
-        <source>也打码 IP 和 MAC 地址</source>
-        <translation>Also redact IP and MAC addresses</translation>
-    </message>
-    <message>
-        <source>把所有文字都打码</source>
-        <translation>Redact all text</translation>
-    </message>
-    <message>
-        <source>点“智能打码”就盖住图里每一行字</source>
-        <translation>&quot;Smart redact&quot; then covers every line of text in the picture</translation>
-    </message>
-    <message>
-        <source>我自己的词</source>
-        <translation>My own words</translation>
-    </message>
-    <message>
-        <source>图里出现这些词就打码，用逗号隔开，比如项目代号、客户名</source>
-        <translation>These words are redacted wherever they appear in the picture; separate them with commas, such as project code names or client names</translation>
-    </message>
-    <message>
-        <source>长截图</source>
-        <translation>Long screenshot</translation>
-    </message>
-    <message>
-        <source>复制并贴图</source>
-        <translation>Copy and pin</translation>
-    </message>
-    <message>
-        <source>复制截图时同时贴图</source>
-        <translation>Pin screenshots when copying</translation>
-    </message>
-    <message>
-        <source>双击贴图;隐藏 / 显示全部贴图的快捷键;找回穿透贴图的快捷键</source>
-        <translation>Double-clicking a pin;Shortcut to hide / show all pins;Shortcut to get click-through pins back</translation>
-    </message>
-    <message>
-        <source>展开截图设置</source>
-        <translation>Expand screenshot settings</translation>
-    </message>
-    <message>
-        <source>工具条</source>
-        <translation>Toolbar</translation>
-    </message>
-    <message>
-        <source>工具条上的按钮;撤销;重做;长截图;二维码;显示按钮;隐藏按钮</source>
-        <translation>Toolbar buttons;Undo;Redo;Long screenshot;QR code;Show buttons;Hide buttons</translation>
-    </message>
-    <message>
-        <source>开着：从托盘菜单截图，也可以在设置里录一个快捷键</source>
-        <translation>On: use the tray menu, or record a shortcut in Settings</translation>
-    </message>
-    <message>
-        <source>截图快捷键;截图历史关键词;PrtScn;Print Screen</source>
-        <translation>Screenshot shortcut;Screenshot history keyword;PrtScn;Print Screen</translation>
-    </message>
-    <message>
-        <source>截图设置分类</source>
-        <translation>Screenshot settings categories</translation>
-    </message>
-    <message>
-        <source>打码</source>
-        <translation>Redaction</translation>
-    </message>
-    <message>
-        <source>收起截图设置</source>
-        <translation>Collapse screenshot settings</translation>
-    </message>
-    <message>
-        <source>收起设置</source>
-        <translation>Collapse settings</translation>
-    </message>
-    <message>
-        <source>智能打码;框选后自动识别;IP;MAC;把所有文字都打码;我自己的词</source>
-        <translation>Smart redaction;Look for it as soon as a selection is made;IP;MAC;Redact all text;My own words</translation>
-    </message>
-    <message>
-        <source>框选后的鼠标操作;双击左键;右键;中键;侧键;复制并贴图;识别文字并复制;识别文字并搜索;识别文字并网页搜索</source>
-        <translation>Mouse buttons after a selection;Double click;Right button;Middle button;Side button;Copy and pin;Read text and copy;Read text and search;Read text and search the web</translation>
-    </message>
-    <message>
-        <source>设置</source>
-        <translation>Settings</translation>
-    </message>
-    <message>
-        <source>选好就复制;复制截图时同时贴图;鼠标指针;识别控件;Electron;WinUI;延时截图</source>
-        <translation>Copy as soon as it is picked;Pin screenshots when copying;Mouse cursor;Detect controls;Electron;WinUI;Delayed capture</translation>
-    </message>
-    <message>
-        <source>鼠标</source>
-        <translation>Mouse</translation>
-    </message>
-    <message>
-        <source>框选窗口或区域，标注、识别文字、复制和贴图</source>
-        <translation>Select a window or area, annotate, recognize text, copy or pin it.</translation>
-    </message>
-    <message>
-        <source>松开鼠标或点选窗口后立即复制，跳过标注和调整。关闭时可继续编辑，再按 Enter 复制或 Ctrl+S 保存。鼠标动作在“鼠标”分类设置。</source>
-        <translation>Copy immediately after selecting, skipping annotation and adjustments. When off, edit first, then Enter to copy or Ctrl+S to save. Set button actions in the Mouse category.</translation>
-    </message>
-    <message>
-        <source>复制时同步贴到屏幕，也适用于“选好就复制”。只想偶尔使用，可在“鼠标”分类设置“复制并贴图”。</source>
-        <translation>Pin the picture whenever you copy it, including instant copying. For occasional use, assign &quot;Copy and pin&quot; in the Mouse category.</translation>
-    </message>
-    <message>
-        <source>在图片中保留截图那一刻的鼠标指针，复制、保存、贴图均生效。</source>
-        <translation>Include the cursor as it appeared when the screen was captured. Applies to copied, saved and pinned pictures.</translation>
-    </message>
-    <message>
-        <source>在开着 HDR 的屏幕上保存截图时，PNG 旁边再存一份同名的 .jxr，亮的地方保持原来的亮度，可用 Windows 自带的“照片”查看。复制和贴图不变。</source>
-        <translation>When you save a screenshot on a screen with HDR on, a .jxr of the same name goes beside the PNG and keeps the bright parts as bright. Open it in Windows Photos. Copies and pins don&apos;t change.</translation>
-    </message>
-    <message>
-        <source>自动框选设置、计算器等程序中的按钮和侧栏。Chrome、Edge、VS Code 这类 Chromium 程序不问（一问它们就打开屏幕阅读器模式），只框子窗口或整个窗口，可手动框选；管理员权限程序中的控件可能不可用。</source>
-        <translation>Detect buttons and sidebars in apps such as Settings and Calculator. Chromium apps (Chrome, Edge, VS Code) are not asked, because asking makes them switch to screen reader mode: only their child windows or the whole window are picked; select manually when you need more. Controls in administrator apps may be unavailable.</translation>
-    </message>
-    <message>
-        <source>从托盘菜单“截图 › 延时截图”开始，或截图时按 D，适合截菜单和悬停提示。再次按截图快捷键或点击倒计时可取消。</source>
-        <translation>Start from the tray menu’s Screenshot › Delayed capture, or press D during capture. Useful for menus and tooltips. Press the capture shortcut again or click the countdown to cancel.</translation>
-    </message>
-    <message>
-        <source>选好区域后使用以下动作。标注时右键撤回当前笔画，其他鼠标动作暂停；Esc 可取消选区、重新框选。</source>
-        <translation>These actions apply after selection. While annotating, right-click cancels the current stroke and other mouse actions are paused. Esc clears the selection so you can select again.</translation>
-    </message>
-    <message>
-        <source>识别出的文字可直接复制、送到 Win顺 搜索，或用网页搜索列表中的第一个网站查询。</source>
-        <translation>Recognized text can be copied, sent to WinShun search, or searched using the first site in your Web search list.</translation>
-    </message>
-    <message>
-        <source>亮起的按钮会显示，点一下切换。隐藏后快捷键仍可使用；标注工具始终显示。识别文字没有快捷键，隐藏后可在“鼠标”分类设置动作。</source>
-        <translation>Highlighted buttons are visible; click to toggle. Shortcuts still work when buttons are hidden. Annotation tools always stay visible. Text recognition has no shortcut; assign a mouse action if you hide its button.</translation>
-    </message>
-    <message>
-        <source>选好就复制;框选时显示放大镜;复制截图时同时贴图;鼠标指针;识别控件;Electron;WinUI;延时截图;截图保存文件夹;保存目录;录屏;HDR;JXR</source>
-        <translation>Copy on selection;Show the magnifier while selecting;Pin when copying;Mouse pointer;Detect controls;Electron;WinUI;Delayed capture;Screenshot folder;Save folder;Screen recording;HDR;JXR</translation>
-    </message>
-    <message>
-        <source>双击贴图;贴上最近一次截图的快捷键;隐藏 / 显示全部贴图的快捷键;找回穿透贴图的快捷键</source>
-        <translation>Pin double-click;Pin last screenshot shortcut;Hide / show all pins shortcut;Restore click-through pins shortcut</translation>
-    </message>
-    <message>
-        <source>录屏</source>
-        <translation>Record screen</translation>
-    </message>
-    <message>
-        <source>截图保存文件夹</source>
-        <translation>Screenshot folder</translation>
-    </message>
-    <message>
-        <source>系统的“屏幕截图”文件夹</source>
-        <translation>The system Screenshots folder</translation>
-    </message>
-    <message>
-        <source>选择文件夹…</source>
-        <translation>Choose folder…</translation>
-    </message>
-    <message>
-        <source>选择截图保存文件夹</source>
-        <translation>Choose screenshot folder</translation>
-    </message>
-    <message>
-        <source>使用系统默认</source>
-        <translation>Use system default</translation>
-    </message>
-    <message>
-        <source>贴上最近一次截图的快捷键</source>
-        <translation>Pin last screenshot shortcut</translation>
-    </message>
-    <message>
-        <source>把最近截过的图贴回原位置，保留标注；不设时仍可从托盘菜单操作</source>
-        <translation>Pin the last screenshot at its original position, including annotations. Also available from the tray menu.</translation>
-    </message>
-</context>
-<context>
-    <name>CaptureOverlay</name>
-    <message>
-        <source>C 复制 · Shift 换格式</source>
-        <translation>C copies · Shift changes the format</translation>
-    </message>
-    <message>
-        <source>截图</source>
-        <translation>Screenshot</translation>
-    </message>
-    <message>
-        <source>%1 × %2</source>
-        <translation>%1 × %2</translation>
-    </message>
-    <message>
-        <source>位置 %1, %2</source>
-        <translation>Position %1, %2</translation>
     </message>
 </context>
 <context>
@@ -2134,7 +1168,7 @@
     </message>
     <message>
         <source>图片加载失败，请重新复制</source>
-        <translation>Couldn't load the image. Copy it again.</translation>
+        <translation>Couldn&apos;t load the image. Copy it again.</translation>
     </message>
     <message>
         <source>正在保存图片…</source>
@@ -2510,17 +1544,6 @@
     </message>
 </context>
 <context>
-    <name>EditWindow</name>
-    <message>
-        <source>编辑图片</source>
-        <translation>Edit picture</translation>
-    </message>
-    <message>
-        <source>缩放</source>
-        <translation>Zoom</translation>
-    </message>
-</context>
-<context>
     <name>ElsewhereCaption</name>
     <message>
         <source>%1 里没有，以下在其他位置</source>
@@ -2559,7 +1582,7 @@
     </message>
     <message>
         <source>自动使用程序图标；也可选择 PNG、ICO、SVG，或从其他程序、快捷方式提取</source>
-        <translation>Uses the program's icon automatically. Choose a PNG, ICO or SVG, or extract an icon from another program or shortcut.</translation>
+        <translation>Uses the program&apos;s icon automatically. Choose a PNG, ICO or SVG, or extract an icon from another program or shortcut.</translation>
     </message>
     <message>
         <source>名称</source>
@@ -2749,6 +1772,116 @@
     </message>
 </context>
 <context>
+    <name>FileTypesSection</name>
+    <message>
+        <source>文件类型</source>
+        <translation>File types</translation>
+    </message>
+    <message>
+        <source>类型;扩展名;后缀;筛选;前缀;快捷键;folder;filter;type;extension</source>
+        <translation>type;extension;suffix;filter;prefix;shortcut;folder</translation>
+    </message>
+    <message>
+        <source>输入“:folder 报告”只找文件夹；类型前缀可自定义，不区分大小写。留空可停用，Ctrl+Tab 仍可切换。</source>
+        <translation>Type “:folder report” to find folders. Prefixes are customizable and case-insensitive. Leave blank to disable; Ctrl+Tab still switches types.</translation>
+    </message>
+    <message>
+        <source>恢复默认</source>
+        <translation>Restore defaults</translation>
+    </message>
+    <message>
+        <source>名称</source>
+        <translation>Name</translation>
+    </message>
+    <message>
+        <source>扩展名</source>
+        <translation>Extensions</translation>
+    </message>
+    <message>
+        <source>搜索前缀（:）</source>
+        <translation>Prefix (:)</translation>
+    </message>
+    <message>
+        <source>文件夹</source>
+        <translation>Folders</translation>
+    </message>
+    <message>
+        <source>只搜索文件夹</source>
+        <translation>Search folders only</translation>
+    </message>
+    <message>
+        <source>文件夹搜索前缀</source>
+        <translation>Folder search prefix</translation>
+    </message>
+    <message>
+        <source>类型名称</source>
+        <translation>Type name</translation>
+    </message>
+    <message>
+        <source>%1的扩展名</source>
+        <translation>Extensions for %1</translation>
+    </message>
+    <message>
+        <source>未设置</source>
+        <translation>Not set</translation>
+    </message>
+    <message>
+        <source>%1的搜索前缀</source>
+        <translation>Search prefix for %1</translation>
+    </message>
+    <message>
+        <source>上移</source>
+        <translation>Move up</translation>
+    </message>
+    <message>
+        <source>下移</source>
+        <translation>Move down</translation>
+    </message>
+    <message>
+        <source>删除</source>
+        <translation>Remove</translation>
+    </message>
+    <message>
+        <source>新类型</source>
+        <translation>New type</translation>
+    </message>
+    <message>
+        <source>新类型名称</source>
+        <translation>New type name</translation>
+    </message>
+    <message>
+        <source>扩展名，例如 dwg dxf</source>
+        <translation>Extensions, e.g. dwg dxf</translation>
+    </message>
+    <message>
+        <source>新类型扩展名</source>
+        <translation>New type extensions</translation>
+    </message>
+    <message>
+        <source>添加</source>
+        <translation>Add</translation>
+    </message>
+</context>
+<context>
+    <name>FileViewSwitch</name>
+    <message>
+        <source>缩略图大小</source>
+        <translation>Thumbnail size</translation>
+    </message>
+    <message>
+        <source>列表</source>
+        <translation>List</translation>
+    </message>
+    <message>
+        <source>大图</source>
+        <translation>Large icons</translation>
+    </message>
+    <message>
+        <source>Alt+滚轮</source>
+        <translation>Alt+wheel</translation>
+    </message>
+</context>
+<context>
     <name>Footer</name>
     <message>
         <source>只搜当前文件夹，或也搜其他位置</source>
@@ -2843,6 +1976,14 @@
         <translation>Select several rows; Ctrl+click and Shift+click too</translation>
     </message>
     <message>
+        <source>打开操作菜单；→ 需光标在末尾且未选中文字</source>
+        <translation>Open the action menu; → requires the caret at the end with no text selected</translation>
+    </message>
+    <message>
+        <source>关闭操作菜单，返回结果列表</source>
+        <translation>Close the action menu and return to the results</translation>
+    </message>
+    <message>
         <source>以管理员身份运行</source>
         <translation>Run as administrator</translation>
     </message>
@@ -2869,6 +2010,10 @@
     <message>
         <source>钉住：点别处、打开文件后都不收起；再按一次取消</source>
         <translation>Pin: stays up through clicks elsewhere and opened files; again to unpin</translation>
+    </message>
+    <message>
+        <source>正则模式：每个词都按正则表达式匹配名字；再按一次关闭</source>
+        <translation type="unfinished"></translation>
     </message>
     <message>
         <source>打开第几行（图标上标着快捷键）</source>
@@ -3036,92 +2181,9 @@
         <source>未设置</source>
         <translation>Not set</translation>
     </message>
-</context>
-<context>
-    <name>LongCapturePanel</name>
     <message>
-        <source>等待滚动</source>
-        <translation>Ready to scroll</translation>
-    </message>
-    <message>
-        <source>拼接中</source>
-        <translation>Stitching</translation>
-    </message>
-    <message>
-        <source>已截取的内容</source>
-        <translation>Already captured</translation>
-    </message>
-    <message>
-        <source>需要接回</source>
-        <translation>Reconnect here</translation>
-    </message>
-    <message>
-        <source>到上限</source>
-        <translation>At the limit</translation>
-    </message>
-    <message>
-        <source>长截图</source>
-        <translation>Long screenshot</translation>
-    </message>
-    <message>
-        <source>等第一帧…</source>
-        <translation>Waiting for the first frame…</translation>
-    </message>
-    <message>
-        <source>高 %1 像素，有一段是推测着接上的</source>
-        <translation>%1 px high; one part was joined by a guess</translation>
-    </message>
-    <message>
-        <source>高 %1 像素</source>
-        <translation>%1 px high</translation>
-    </message>
-    <message>
-        <source>自动滚动</source>
-        <translation>Auto-scroll</translation>
-    </message>
-    <message>
-        <source>复制诊断信息</source>
-        <translation>Copy diagnostics</translation>
-    </message>
-    <message>
-        <source>取消</source>
-        <translation>Cancel</translation>
-    </message>
-    <message>
-        <source>完成</source>
-        <translation>Done</translation>
-    </message>
-    <message>
-        <source>有一段是推测着接上的，请检查预览</source>
-        <translation>Check the preview: part of the image was joined by a guess</translation>
-    </message>
-    <message>
-        <source>预览</source>
-        <translation>Preview</translation>
-    </message>
-    <message>
-        <source>诊断</source>
-        <translation>Diagnostics</translation>
-    </message>
-    <message>
-        <source>贴图</source>
-        <translation>Pin</translation>
-    </message>
-    <message>
-        <source>保存</source>
-        <translation>Save</translation>
-    </message>
-    <message>
-        <source>复制</source>
-        <translation>Copy</translation>
-    </message>
-    <message>
-        <source>完成并编辑</source>
-        <translation>Finish and edit</translation>
-    </message>
-    <message>
-        <source>长图预览</source>
-        <translation>Long image preview</translation>
+        <source>这个快捷键与其他操作冲突</source>
+        <translation>This shortcut conflicts with another action</translation>
     </message>
 </context>
 <context>
@@ -3289,6 +2351,85 @@
         <source>不认识的客户端</source>
         <translation>Unknown client</translation>
     </message>
+    <message>
+        <source>没找到 ws.exe，重新安装 Win顺 就有了</source>
+        <translation>ws.exe was not found; reinstalling WinShun brings it back</translation>
+    </message>
+    <message>
+        <source>没能运行 ws.exe</source>
+        <translation>Could not run ws.exe</translation>
+    </message>
+    <message>
+        <source>ws.exe 在 %1 秒内没有回答，已结束它</source>
+        <translation>ws.exe did not answer within %1 seconds and was ended</translation>
+    </message>
+    <message>
+        <source>已装 Skill：%1。Claude Code 新开的会话里就能用。</source>
+        <translation>Skill installed: %1. It works in new Claude Code sessions.</translation>
+    </message>
+    <message>
+        <source>装 Skill 没有成功（退出码 %1）：%2</source>
+        <translation>Installing the Skill failed (exit code %1): %2</translation>
+    </message>
+    <message>
+        <source>ws.exe 没有说明原因</source>
+        <translation>ws.exe gave no reason</translation>
+    </message>
+</context>
+<context>
+    <name>MovedPlugins</name>
+    <message>
+        <source>插件库里没有找到它</source>
+        <translation>It is not in the plugin library</translation>
+    </message>
+    <message>
+        <source>插件库里的版本要更新的 Win顺</source>
+        <translation>The library&apos;s version needs a newer Win顺</translation>
+    </message>
+    <message>
+        <source>插件包太大</source>
+        <translation>The plugin package is too large</translation>
+    </message>
+    <message>
+        <source>下载不下来（%1）</source>
+        <translation>Could not download it (%1)</translation>
+    </message>
+    <message>
+        <source>下载的文件校验不对</source>
+        <translation>The downloaded file failed its check</translation>
+    </message>
+    <message>
+        <source>读不出下载的插件</source>
+        <translation>Could not read the downloaded plugin</translation>
+    </message>
+    <message>
+        <source>下载来的是另一个插件（%1）</source>
+        <translation>The download is a different plugin (%1)</translation>
+    </message>
+    <message>
+        <source>拿不到插件库的列表（%1）</source>
+        <translation>Could not get the plugin library&apos;s list (%1)</translation>
+    </message>
+    <message>
+        <source>截图与录屏</source>
+        <translation>Screenshot and recording</translation>
+    </message>
+    <message>
+        <source>局域网传输</source>
+        <translation>LAN transfer</translation>
+    </message>
+    <message>
+        <source>按意思找</source>
+        <translation>Search by meaning</translation>
+    </message>
+    <message>
+        <source>翻译</source>
+        <translation>Translate</translation>
+    </message>
+    <message>
+        <source>浏览器书签</source>
+        <translation>Browser bookmarks</translation>
+    </message>
 </context>
 <context>
     <name>NameTip</name>
@@ -3299,37 +2440,6 @@
     <message>
         <source>创建于 %1</source>
         <translation>Created %1</translation>
-    </message>
-</context>
-<context>
-    <name>OcrPanel</name>
-    <message>
-        <source>打开链接</source>
-        <translation>Open link</translation>
-    </message>
-    <message>
-        <source>识别文字</source>
-        <translation>Read text</translation>
-    </message>
-    <message>
-        <source>正在识别…</source>
-        <translation>Reading…</translation>
-    </message>
-    <message>
-        <source>用它搜索</source>
-        <translation>Search for it</translation>
-    </message>
-    <message>
-        <source>复制全部</source>
-        <translation>Copy all</translation>
-    </message>
-    <message>
-        <source>关闭</source>
-        <translation>Close</translation>
-    </message>
-    <message>
-        <source>网页搜索</source>
-        <translation>Search the web</translation>
     </message>
 </context>
 <context>
@@ -3365,10 +2475,6 @@
     <message>
         <source>内容</source>
         <translation>Content</translation>
-    </message>
-    <message>
-        <source>类型</source>
-        <translation>Kind</translation>
     </message>
     <message>
         <source>不限</source>
@@ -3443,14 +2549,6 @@
         <translation>Choose a folder…</translation>
     </message>
     <message>
-        <source>名称</source>
-        <translation>Name</translation>
-    </message>
-    <message>
-        <source>路径</source>
-        <translation>Path</translation>
-    </message>
-    <message>
         <source>正在搜索文件内容…</source>
         <translation>Searching file contents…</translation>
     </message>
@@ -3478,21 +2576,29 @@
         <source>右键选择列；拖动表头调整顺序，拖动分隔线调整宽度</source>
         <translation>Right-click to choose columns; drag headers to reorder or dividers to resize</translation>
     </message>
+    <message>
+        <source>拖动调整列宽</source>
+        <translation>Drag to resize column</translation>
+    </message>
+    <message>
+        <source>文件夹大小按索引估算，不包含未索引内容；拖动分隔线调整宽度</source>
+        <translation>Folder sizes are index estimates and exclude unindexed content; drag a separator to resize</translation>
+    </message>
+    <message>
+        <source>收起内容详情</source>
+        <translation>Hide content details</translation>
+    </message>
+    <message>
+        <source>显示内容详情</source>
+        <translation>Show content details</translation>
+    </message>
+    <message>
+        <source>内容详情宽度，左右方向键调整</source>
+        <translation>Content details width; use Left and Right to adjust</translation>
+    </message>
 </context>
 <context>
     <name>PanelRow</name>
-    <message>
-        <source>网页</source>
-        <translation>Web</translation>
-    </message>
-    <message>
-        <source>系统</source>
-        <translation>System</translation>
-    </message>
-    <message>
-        <source>应用</source>
-        <translation>App</translation>
-    </message>
     <message>
         <source>离线</source>
         <translation>Offline</translation>
@@ -3586,6 +2692,10 @@
     <message>
         <source>关键字</source>
         <translation>Keywords</translation>
+    </message>
+    <message>
+        <source>设置</source>
+        <translation>Settings</translation>
     </message>
     <message>
         <source>默认</source>
@@ -3847,6 +2957,10 @@
         <source>要 Win顺 %1 或更新的版本，可以在“高级”里检查更新</source>
         <translation>Needs WinShun %1 or newer; you can check for updates under “Advanced”</translation>
     </message>
+    <message>
+        <source>安装并启用</source>
+        <translation>Install and enable</translation>
+    </message>
 </context>
 <context>
     <name>PluginGallerySection</name>
@@ -3922,6 +3036,10 @@
         <source>设置网络代理…</source>
         <translation>Set a network proxy…</translation>
     </message>
+    <message>
+        <source>只安装你需要的功能。下载后先核对文件，安装并启用时会先列出它要的权限，同意后即可使用。</source>
+        <translation>Install the features you need. Downloads are checked before installation. Review the permissions to install and enable a plugin.</translation>
+    </message>
 </context>
 <context>
     <name>PluginsPreview</name>
@@ -3970,7 +3088,7 @@
     </message>
     <message>
         <source>在文件列表中输入字母或数字，用 Win顺 搜索当前标签的文件夹；保留 Opus 的符号键、改名和地址栏输入</source>
-        <translation>Type letters or digits in the file list to search that tab's folder in WinShun; keep Opus punctuation, renaming and address-field input</translation>
+        <translation>Type letters or digits in the file list to search that tab&apos;s folder in WinShun; keep Opus punctuation, renaming and address-field input</translation>
     </message>
     <message>
         <source>插件看不到你在资源管理器里登录的网络位置</source>
@@ -4013,16 +3131,8 @@
         <translation>drag;drop;drag files;pie</translation>
     </message>
     <message>
-        <source>截图</source>
-        <translation>Screenshot</translation>
-    </message>
-    <message>
         <source>粘贴为文件</source>
         <translation>Paste as file</translation>
-    </message>
-    <message>
-        <source>随 Win顺 一起提供，用到哪个开哪个；关着的不占内存，不听按键，也不加右键菜单</source>
-        <translation>They come with WinShun; turn on the ones you want. One that is off takes no memory, watches no keys and adds nothing to menus</translation>
     </message>
     <message>
         <source>在资源管理器或桌面的空白处双击，弹出收藏的、最近的和别的窗口里的文件夹</source>
@@ -4124,10 +3234,6 @@
         <translation>Built-in features</translation>
     </message>
     <message>
-        <source>截图;截屏;屏幕截图;PrtScn;Print Screen;放大镜;取色;鼠标;中键;右键;侧键;双击;贴图;识别文字;框选;screenshot;capture;mouse</source>
-        <translation>screenshot;screen capture;snip;PrtScn;Print Screen;magnifier;colour picker;color picker;mouse;middle button;right button;side button;double click;pin;recognize text;OCR;select</translation>
-    </message>
-    <message>
         <source>从插件库挑选</source>
         <translation>From the plugin library</translation>
     </message>
@@ -4138,6 +3244,30 @@
     <message>
         <source>收起设置</source>
         <translation>Collapse settings</translation>
+    </message>
+    <message>
+        <source>恢复升级前的功能</source>
+        <translation>Restore features after upgrading</translation>
+    </message>
+    <message>
+        <source>升级;迁移;恢复;重试;离线;upgrade;restore;retry;offline</source>
+        <translation>upgrade;migration;restore;retry;offline</translation>
+    </message>
+    <message>
+        <source>正在恢复…</source>
+        <translation>Restoring…</translation>
+    </message>
+    <message>
+        <source>重试恢复</source>
+        <translation>Retry</translation>
+    </message>
+    <message>
+        <source>从本地安装插件包…</source>
+        <translation>Install a local plugin package…</translation>
+    </message>
+    <message>
+        <source>插件给搜索框加关键字命令，结果混进列表。它们只用你的普通权限；启用前会先列出权限，由你决定是否开启。</source>
+        <translation>Plugins add keyword commands to the search box and mix their results into the list. They run with your normal rights; review the permissions and choose which ones to enable.</translation>
     </message>
 </context>
 <context>
@@ -4247,6 +3377,17 @@
     </message>
 </context>
 <context>
+    <name>ResultTile</name>
+    <message>
+        <source>离线</source>
+        <translation>Offline</translation>
+    </message>
+    <message>
+        <source>已不存在</source>
+        <translation>Missing</translation>
+    </message>
+</context>
+<context>
     <name>ScopeTabs</name>
     <message>
         <source>全部</source>
@@ -4297,6 +3438,14 @@
     <message>
         <source>拖动可移动窗口 · 点击打开设置</source>
         <translation>Drag to move the window · click for the settings</translation>
+    </message>
+    <message>
+        <source>正则模式</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>正则模式：每个词都按正则表达式匹配名字 · 点击关闭</source>
+        <translation type="unfinished"></translation>
     </message>
     <message>
         <source>取消钉住</source>
@@ -4451,7 +3600,7 @@
     </message>
     <message>
         <source>文件列表有焦点时，从字母或数字开始输入，就用 Win顺 搜索当前标签的文件夹。符号键保留给 Opus，改名和地址栏不受影响。</source>
-        <translation>With the file list focused, start typing letters or digits to search that tab's folder in WinShun. Punctuation stays in Opus; renaming and address fields keep their input.</translation>
+        <translation>With the file list focused, start typing letters or digits to search that tab&apos;s folder in WinShun. Punctuation stays in Opus; renaming and address fields keep their input.</translation>
     </message>
     <message>
         <source>选中收藏文件夹时按 Tab</source>
@@ -4552,10 +3701,6 @@
     <message>
         <source>MCP;人工智能;大模型;Claude;Cursor;ai</source>
         <translation>MCP;AI;LLM;Claude;Cursor;assistant</translation>
-    </message>
-    <message>
-        <source>网络共享</source>
-        <translation>Network shares</translation>
     </message>
     <message>
         <source>权限</source>
@@ -5158,10 +4303,6 @@
         <translation>Keep a clipboard history</translation>
     </message>
     <message>
-        <source>密码管理器复制的密码不会被记录</source>
-        <translation>Passwords copied from password managers are not kept</translation>
-    </message>
-    <message>
         <source>用 Win+V 打开，代替 Windows 自带的剪贴板</source>
         <translation>Open with Win+V, instead of Windows’ clipboard</translation>
     </message>
@@ -5316,10 +4457,6 @@
     <message>
         <source>重新扫描;扫描;rescan</source>
         <translation>rescan;scan</translation>
-    </message>
-    <message>
-        <source>%1共享名，或映射的 Z:</source>
-        <translation>%1share, or a mapped Z:</translation>
     </message>
     <message>
         <source>登录</source>
@@ -5769,22 +4906,6 @@
         <translation>Uninstall the index service</translation>
     </message>
     <message>
-        <source>只收录文件名和文件夹名，搜索和本机文件一样快，不读取文件内容。服务器离线时，收录过的照样能搜到。</source>
-        <translation>Only the names of files and folders are read: they are searched as fast as your own files, and no file is opened. While a server is offline, what was read from it can still be searched.</translation>
-    </message>
-    <message>
-        <source>网络共享文件夹</source>
-        <translation>Shared network folders</translation>
-    </message>
-    <message>
-        <source>网络;共享;局域网;内网;NAS;服务器;SMB;映射;网络驱动器;network;share</source>
-        <translation>network;share;shared;LAN;intranet;NAS;server;SMB;mapped;network drive</translation>
-    </message>
-    <message>
-        <source>公司或家里的 NAS、别的电脑共享出来的文件夹，和本机文件一起搜索</source>
-        <translation>Folders shared by a NAS or other computers, at work or at home, searched with your own files</translation>
-    </message>
-    <message>
         <source>查看共享的文件夹</source>
         <translation>Show shared folders</translation>
     </message>
@@ -5921,8 +5042,76 @@
         <translation>extension;script;PowerShell;Python;built-in features;module;plugin</translation>
     </message>
     <message>
+        <source>截图的快捷键</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>截图;截屏;快捷键;热键;F1;PrtScn;PixPin;Snipaste;screenshot</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>截图功能还没打开：在“插件”的截图卡片上打开，再录一个快捷键，例如 F1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>现在是 %1，在“插件”的截图卡片上改；贴图等其他快捷键也在那里</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>还没设，在“插件”的截图卡片上录一个，例如 F1；贴图等其他快捷键也在那里</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>去设置</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
         <source>排除;忽略;扩展名;后缀;格式;exclude</source>
         <translation>exclude;ignore;extension;suffix;format;skip</translation>
+    </message>
+    <message>
+        <source>网络;共享;局域网;内网;NAS;服务器;SMB;映射;网络驱动器;WSL;Linux;Ubuntu;子系统;WebDAV;内容;全文;搜索文件内容;扫描;时段;时间;层数;深度;network;share;content;schedule;depth</source>
+        <translation>network;share;LAN;NAS;server;SMB;mapped;network drive;WSL;Linux;Ubuntu;subsystem;WebDAV;content;full text;scan;schedule;hours;time;levels;depth</translation>
+    </message>
+    <message>
+        <source>搜索应用</source>
+        <translation>Search applications</translation>
+    </message>
+    <message>
+        <source>应用;程序;软件;开始菜单;启动;全部;关闭;app</source>
+        <translation>applications;programs;software;start menu;launch;all;disable;app</translation>
+    </message>
+    <message>
+        <source>在“全部”里列出开始菜单里的程序和应用；关掉后只找文件和内容（收藏的应用仍会列出，在开始菜单里打字也一样）</source>
+        <translation>Include Start menu programs and apps in All. When off, search files and contents; favorite apps remain available. This also applies when typing in Start.</translation>
+    </message>
+    <message>
+        <source>搜索系统设置</source>
+        <translation>Search system settings</translation>
+    </message>
+    <message>
+        <source>设置;系统设置;控制面板;系统开关;蓝牙;音量;全部;关闭;settings</source>
+        <translation>settings;system;control panel;toggles;Bluetooth;volume;all;disable</translation>
+    </message>
+    <message>
+        <source>在“全部”里列出 Windows 设置页、控制面板和系统开关（如“关蓝牙”“音量 30”）；关掉后只找文件和内容</source>
+        <translation>Include Windows settings, Control Panel and system toggles in All, such as Bluetooth and volume. When off, search files and contents.</translation>
+    </message>
+    <message>
+        <source>正则模式（Ctrl+R）</source>
+        <translation>Regular expressions (Ctrl+R)</translation>
+    </message>
+    <message>
+        <source>正则;正则表达式;regex;Everything;Ctrl+R;匹配</source>
+        <translation>regex;regular expression;Everything;Ctrl+R;match</translation>
+    </message>
+    <message>
+        <source>在“全部”和“文件”里，每个词都按正则表达式匹配名字，如 ^IMG_d{4}；ext:、!排除、“ | ”照常可用。在搜索框里按 Ctrl+R 开关，开着时搜索框旁显示 .*。不开时也可在单个词前加 regex:</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>正则模式</source>
+        <translation>Regular expressions</translation>
     </message>
     <message>
         <source>预览;快速查看;看一眼;QuickLook;Seer;空格;Alt+P;preview</source>
@@ -5961,6 +5150,18 @@
         <translation>When you type words after a site keyword, list that site&apos;s search suggestions. Only then is what you type sent to that site</translation>
     </message>
     <message>
+        <source>截图历史关键词</source>
+        <translation>Screenshot history keyword</translation>
+    </message>
+    <message>
+        <source>截图;截图历史;截屏;关键词;screenshot</source>
+        <translation>screenshot;screenshot history;capture;keyword;jt</translation>
+    </message>
+    <message>
+        <source>在搜索框输入“%1”加空格，列出截过的图，再输入文字按图里识别出的文字筛选；Enter 复制并粘贴，Ctrl+Enter 贴到屏幕，Delete 删除</source>
+        <translation>Type “%1” and a space in the search box to list your screenshots, then words to filter by the text recognized in them; Enter copies and pastes, Ctrl+Enter pins to the screen, Delete removes</translation>
+    </message>
+    <message>
         <source>单击粘贴</source>
         <translation>Click to paste</translation>
     </message>
@@ -5982,7 +5183,7 @@
     </message>
     <message>
         <source>从列表里粘贴一条后，它留在原来的位置，不再跳到最前面。重新复制同样的内容，仍会排到最前。粘贴过的条目右下角带一个蓝色对勾，也不会因为“保留天数”到期而被删</source>
-        <translation>After you paste an entry from the list it stays where it is instead of jumping to the top. Copying the same content again still puts it first. Entries you have pasted carry a blue check mark and are not deleted when "keep for days" runs out</translation>
+        <translation>After you paste an entry from the list it stays where it is instead of jumping to the top. Copying the same content again still puts it first. Entries you have pasted carry a blue check mark and are not deleted when &quot;keep for days&quot; runs out</translation>
     </message>
     <message>
         <source>大图片缩略图</source>
@@ -6210,7 +5411,7 @@
     </message>
     <message>
         <source>选择 ZIP 备份，校验通过后恢复并重启；当前设置先存到本机数据文件夹的 backups 中。换机导出的备份保留本机的备份和索引位置。</source>
-        <translation>Choose a ZIP to check and restore, then restart. Current settings are saved in backups in the local data folder first. Transfer backups keep this PC's backup and index locations.</translation>
+        <translation>Choose a ZIP to check and restore, then restart. Current settings are saved in backups in the local data folder first. Transfer backups keep this PC&apos;s backup and index locations.</translation>
     </message>
     <message>
         <source>立即备份</source>
@@ -6600,10 +5801,6 @@
         <translation>File and content indexes; they can move to another internal drive</translation>
     </message>
     <message>
-        <source>显示在名字右边，例如“昨天 14:32”</source>
-        <translation>To the right of the name, such as “Yesterday 14:32”</translation>
-    </message>
-    <message>
         <source>检查更新访问 lcstp.com，只发送 Windows 版本和安装方式，不发送个人信息。</source>
         <translation>Checking for updates contacts lcstp.com and sends only the Windows version and the kind of install, nothing personal.</translation>
     </message>
@@ -6717,34 +5914,6 @@
         <translation>File types</translation>
     </message>
     <message>
-        <source>类型;扩展名;后缀;筛选;图片;文档;视频;音乐;压缩包;filter;type;extension</source>
-        <translation>type;extension;suffix;filter;picture;document;video;music;archive;kind</translation>
-    </message>
-    <message>
-        <source>“文件”里搜索框下面的一排，按 Ctrl+Tab 切换；每个类型是一组扩展名，用空格或逗号隔开</source>
-        <translation>The row under the search box in Files; Ctrl+Tab goes along it. Each type is a list of extensions, separated by spaces or commas</translation>
-    </message>
-    <message>
-        <source>上移</source>
-        <translation>Move up</translation>
-    </message>
-    <message>
-        <source>下移</source>
-        <translation>Move down</translation>
-    </message>
-    <message>
-        <source>删除</source>
-        <translation>Delete</translation>
-    </message>
-    <message>
-        <source>新类型</source>
-        <translation>New type</translation>
-    </message>
-    <message>
-        <source>扩展名，例如 dwg dxf</source>
-        <translation>Extensions, such as dwg dxf</translation>
-    </message>
-    <message>
         <source>诊断日志</source>
         <translation>Diagnostic logs</translation>
     </message>
@@ -6805,24 +5974,12 @@
         <translation>Only the files in these folders are found; you can also drag folders here from File Explorer</translation>
     </message>
     <message>
-        <source>现在索引整个磁盘；改成“只索引选中的文件夹”后用下面这些</source>
-        <translation>The whole disks are indexed now; with “Only chosen folders” these are used</translation>
-    </message>
-    <message>
         <source>添加文件夹…</source>
         <translation>Add folder…</translation>
     </message>
     <message>
         <source>选择要索引的文件夹</source>
         <translation>Choose a folder to index</translation>
-    </message>
-    <message>
-        <source>、</source>
-        <translation>, </translation>
-    </message>
-    <message>
-        <source>还没有选文件夹</source>
-        <translation>No folders chosen yet</translation>
     </message>
     <message>
         <source>还没有选文件夹：本机磁盘上的文件都搜不到</source>
@@ -6910,10 +6067,6 @@
     <message>
         <source>网络与 WSL 文件夹</source>
         <translation>Network and WSL folders</translation>
-    </message>
-    <message>
-        <source>网络;共享;局域网;内网;NAS;服务器;SMB;映射;网络驱动器;WSL;Linux;Ubuntu;子系统;WebDAV;内容;全文;搜索文件内容;network;share;content</source>
-        <translation>network;share;LAN;NAS;server;SMB;mapped;network drive;WSL;Linux;Ubuntu;subsystem;WebDAV;content;full text;search file contents</translation>
     </message>
     <message>
         <source>添加 NAS、共享文件夹或 WSL 中的项目、用户目录，和本机文件一起搜索</source>
@@ -7021,7 +6174,7 @@
     </message>
     <message>
         <source>插件库、检查更新等联网都走这里。“跟随系统”用 Windows 设置里的代理（包括自动检测和 PAC 脚本）；用代理软件时，打开它的“系统代理”就行，或者手动填地址</source>
-        <translation>The plugin library, update checks and the rest of WinShun's network use go through this. "Follow system" uses the proxy in Windows settings (automatic detection and PAC scripts included); with a proxy program, turn on its "system proxy", or enter the address by hand</translation>
+        <translation>The plugin library, update checks and the rest of WinShun&apos;s network use go through this. &quot;Follow system&quot; uses the proxy in Windows settings (automatic detection and PAC scripts included); with a proxy program, turn on its &quot;system proxy&quot;, or enter the address by hand</translation>
     </message>
     <message>
         <source>不使用代理</source>
@@ -7038,6 +6191,118 @@
     <message>
         <source>HTTP 代理，地址写 127.0.0.1:7890 或 http://127.0.0.1:7890。改完马上生效，不用重启</source>
         <translation>An HTTP proxy: write 127.0.0.1:7890 or http://127.0.0.1:7890. Takes effect at once, no restart</translation>
+    </message>
+    <message>
+        <source>预览文件</source>
+        <translation>Preview files</translation>
+    </message>
+    <message>
+        <source>用 Win顺 自己的预览窗口看一眼</source>
+        <translation>Preview files in WinShun's own window</translation>
+    </message>
+    <message>
+        <source>QuickLook 或 Seer 在后台运行时交给它，否则用 Win顺 自己的预览</source>
+        <translation>Use QuickLook or Seer when running; otherwise use WinShun's built-in preview</translation>
+    </message>
+    <message>
+        <source>预览快捷键</source>
+        <translation>Preview shortcut</translation>
+    </message>
+    <message>
+        <source>预览;快捷键;空格;Space;Alt+P;QuickLook;preview;shortcut</source>
+        <translation>preview;shortcut;hotkey;space;Space;Alt+P;QuickLook</translation>
+    </message>
+    <message>
+        <source>仅在搜索结果中生效，再按一次关闭。可直接录制空格；用 Shift+空格继续输入空格。Backspace 清除，Esc 取消。</source>
+        <translation>Only in search results. Press again to close. Space is supported; Shift+Space types a space. Backspace clears; Esc cancels.</translation>
+    </message>
+    <message>
+        <source>同时用中键打开文件夹菜单</source>
+        <translation>Also open the folder menu with a middle click</translation>
+    </message>
+    <message>
+        <source>中键;鼠标;滚轮;文件夹菜单;Listary</source>
+        <translation>middle click;mouse;wheel;folder menu;Listary</translation>
+    </message>
+    <message>
+        <source>在上面选中的资源管理器或桌面空白处，单击鼠标中键也能打开</source>
+        <translation>Middle-click an empty area in File Explorer or on the desktop, as enabled above.</translation>
+    </message>
+    <message>
+        <source>剪贴板打开位置</source>
+        <translation>Clipboard position</translation>
+    </message>
+    <message>
+        <source>位置;鼠标;指针;光标;跟随;弹出;输入框</source>
+        <translation>position;mouse;pointer;caret;follow;popup;text field</translation>
+    </message>
+    <message>
+        <source>每次打开时放在所选位置旁边，空间不足时自动调整到屏幕内</source>
+        <translation>Open beside the selected position, adjusting to stay on screen when space is limited.</translation>
+    </message>
+    <message>
+        <source>输入光标旁</source>
+        <translation>Beside the caret</translation>
+    </message>
+    <message>
+        <source>鼠标指针旁</source>
+        <translation>Beside the pointer</translation>
+    </message>
+    <message>
+        <source>打开搜索框还没输入时列出最近打开或最近修改的项目；底栏也能切换（Ctrl+S）。收藏由下面的开关单独控制</source>
+        <translation>Before typing, list recently opened or modified items. Switch in the footer too (Ctrl+S). Favorites have their own switch below.</translation>
+    </message>
+    <message>
+        <source>最近打开的数量</source>
+        <translation>Recently opened items</translation>
+    </message>
+    <message>
+        <source>最近;历史;数量;条数;上限;自定义;recent</source>
+        <translation>recent;history;count;items;limit;custom</translation>
+    </message>
+    <message>
+        <source>可填 1–200 项，按最近打开的顺序显示；仅在上面选择“最近打开”时生效</source>
+        <translation>Show 1–200 items, most recently opened first. Applies when Recently opened is selected above.</translation>
+    </message>
+    <message>
+        <source>不输入时显示收藏</source>
+        <translation>Show favorites before typing</translation>
+    </message>
+    <message>
+        <source>收藏;命令;显示;隐藏;关键词;空白;启动;favorite</source>
+        <translation>favorites;commands;show;hide;keyword;empty;start</translation>
+    </message>
+    <message>
+        <source>关闭后，收藏和自定义命令仍可通过名称或关键词找到</source>
+        <translation>When off, favorites and custom commands are still searchable by name or keyword.</translation>
+    </message>
+    <message>
+        <source>全屏时不响应剪贴板快捷键</source>
+        <translation>Pause clipboard hotkeys in full screen</translation>
+    </message>
+    <message>
+        <source>全屏;游戏;快捷键;屏蔽;暂停;clipboard;fullscreen</source>
+        <translation>full screen;game;hotkey;block;pause;clipboard;fullscreen</translation>
+    </message>
+    <message>
+        <source>其他程序全屏时，快捷键不弹出剪贴板；仍然记录复制内容，也能从菜单手动打开</source>
+        <translation>While another app is full screen, hotkeys do not open the clipboard. Copies are still recorded, and you can open it from the menu.</translation>
+    </message>
+    <message>
+        <source>在“全部”和“文件”里，每个词都按正则表达式匹配名字，如 ^IMG_\d{4}；ext:、!排除、“ | ”照常可用。在搜索框里按 Ctrl+R 开关，开着时搜索框旁显示 .*。不开时也可在单个词前加 regex:</source>
+        <translation>In All and Files, match names with a regular expression for each word, such as ^IMG_\d{4}. ext:, !exclude and | still work. Ctrl+R toggles this mode, shown as .* beside the box. With it off, prefix an individual word with regex: or re:.</translation>
+    </message>
+    <message>
+        <source>菜单里列出收藏夹</source>
+        <translation>List favorites in the menu</translation>
+    </message>
+    <message>
+        <source>包含收藏的文件夹、文件、应用和自定义命令</source>
+        <translation>Includes favorite folders, files, apps and custom commands</translation>
+    </message>
+    <message>
+        <source>双击;文件夹菜单;收藏;收藏夹;自定义命令</source>
+        <translation>double click;folder menu;favorites;bookmark;custom command</translation>
     </message>
 </context>
 <context>
@@ -7065,6 +6330,69 @@
     <message>
         <source>搜索文件内容</source>
         <translation>Search file contents</translation>
+    </message>
+</context>
+<context>
+    <name>ShareScanControls</name>
+    <message>
+        <source>每天 %1–%2</source>
+        <translation>Daily %1–%2</translation>
+    </message>
+    <message>
+        <source>不限时段</source>
+        <translation>Any time</translation>
+    </message>
+    <message>
+        <source>最多 %1 层</source>
+        <translation>Up to %1 levels</translation>
+    </message>
+    <message>
+        <source>不限层数</source>
+        <translation>Unlimited depth</translation>
+    </message>
+    <message>
+        <source>扫描设置</source>
+        <translation>Scan settings</translation>
+    </message>
+    <message>
+        <source>仅在指定时段自动扫描</source>
+        <translation>Scan automatically only during these hours</translation>
+    </message>
+    <message>
+        <source>扫描开始时间，24 小时制</source>
+        <translation>Scan start time, 24-hour clock</translation>
+    </message>
+    <message>
+        <source>扫描结束时间，24 小时制</source>
+        <translation>Scan end time, 24-hour clock</translation>
+    </message>
+    <message>
+        <source>本地时间，可跨午夜；相同时间表示全天</source>
+        <translation>Local time; may cross midnight. Equal times mean all day.</translation>
+    </message>
+    <message>
+        <source>最多扫描</source>
+        <translation>Scan up to</translation>
+    </message>
+    <message>
+        <source>最大扫描层数，0 表示不限</source>
+        <translation>Maximum scan depth; 0 means unlimited</translation>
+    </message>
+    <message>
+        <source>层（0 表示不限）</source>
+        <translation>levels (0 = unlimited)</translation>
+    </message>
+    <message>
+        <source>请输入 00:00–23:59 之间的时间</source>
+        <translation>Enter a time from 00:00 to 23:59</translation>
+    </message>
+    <message>
+        <source>请输入 0–1024 之间的层数，0 表示不限</source>
+        <translation>Enter a depth from 0 to 1024; 0 means unlimited</translation>
+    </message>
+    <message>
+        <source>1 层只读取当前文件夹，不进入子文件夹。时段外暂停后台读取，已有结果保留；“立即核对”可临时扫描一次文件名。</source>
+        <translation>Depth 1 lists this folder without entering subfolders. Background reads pause outside these hours; cached results stay available. Check now runs one manual scan of file names.</translation>
     </message>
 </context>
 <context>
@@ -7308,42 +6636,8 @@
 </context>
 <context>
     <name>ws::App</name>
-    <message>
-        <source>全部置顶</source>
-        <translation>All on top</translation>
-    </message>
-    <message>
-        <source>隐藏全部贴图</source>
-        <translation>Hide all pins</translation>
-    </message>
-    <message>
-        <source>显示全部贴图</source>
-        <translation>Show all pins</translation>
-    </message>
-    <message>
-        <source>10 秒</source>
-        <translation>10 s</translation>
-    </message>
-    <message>
-        <source>5 秒</source>
-        <translation>5 s</translation>
-    </message>
-    <message>
-        <source>3 秒</source>
-        <translation>3 s</translation>
-    </message>
-    <message>
-        <source>延时截图</source>
-        <translation>Delayed capture</translation>
-    </message>
-    <message>
-        <source>选区里没有找到二维码。</source>
-        <translation>No QR code was found in the selection.</translation>
-    </message>
-    <message>
-        <source>二维码</source>
-        <translation>QR code</translation>
-    </message>
+    <message><source>截图尚未启用</source><translation>Screen capture is not enabled yet</translation></message>
+    <message><source>点这里在插件库中继续安装并确认权限。</source><translation>Click here to continue installation and review permissions in the plugin library.</translation></message>
     <message>
         <source>没有打开“%1”</source>
         <translation>Didn’t open “%1”</translation>
@@ -7407,10 +6701,6 @@
     <message>
         <source>搜索</source>
         <translation>Search</translation>
-    </message>
-    <message>
-        <source>搜索应用和文件</source>
-        <translation>Search apps and files</translation>
     </message>
     <message>
         <source>没能重启资源管理器</source>
@@ -7593,18 +6883,6 @@
         <translation>The picture is still being saved; try again in a moment</translation>
     </message>
     <message>
-        <source>没能贴到屏幕</source>
-        <translation>Could not pin to the screen</translation>
-    </message>
-    <message>
-        <source>读不出这张图片：%1</source>
-        <translation>Cannot read this picture: %1</translation>
-    </message>
-    <message>
-        <source>找回刚放弃的标注</source>
-        <translation>Get back the annotations just given up</translation>
-    </message>
-    <message>
         <source>你在这台电脑上没有管理员权限，装不了索引服务。现在按文件夹遍历整个磁盘。</source>
         <translation>You have no administrator rights on this computer, so the index service cannot be installed. The whole disk is walked folder by folder.</translation>
     </message>
@@ -7643,6 +6921,22 @@
     <message>
         <source>粘贴为文件</source>
         <translation>Paste as file</translation>
+    </message>
+    <message>
+        <source>贴到屏幕</source>
+        <translation>Pin to screen</translation>
+    </message>
+    <message>
+        <source>没能打开这张图片</source>
+        <translation>Could not open this picture</translation>
+    </message>
+    <message>
+        <source>截图插件还没准备好</source>
+        <translation>The screenshot plugin is not ready yet</translation>
+    </message>
+    <message>
+        <source>请稍后再试。</source>
+        <translation>Please try again in a moment.</translation>
     </message>
     <message>
         <source>、</source>
@@ -7741,6 +7035,26 @@
         <translation>Reloaded %1</translation>
     </message>
     <message>
+        <source>%1（%2）</source>
+        <translation>%1 (%2)</translation>
+    </message>
+    <message>
+        <source>插件已从插件库装好</source>
+        <translation>Plugin installed from the plugin library</translation>
+    </message>
+    <message>
+        <source>%1 不再随 Win顺 自带，已经从插件库为你装上，设置照旧。</source>
+        <translation>%1 no longer comes with Win顺. It was installed for you from the plugin library, with your settings as they were.</translation>
+    </message>
+    <message>
+        <source>插件没能装上</source>
+        <translation>The plugin could not be installed</translation>
+    </message>
+    <message>
+        <source>%1 不再随 Win顺 自带，从插件库安装没有成功。可以到 设置 → 插件 → 插件库 里再装。</source>
+        <translation>%1 no longer comes with Win顺, and installing it from the plugin library failed. You can install it under Settings → Plugins → Plugin library.</translation>
+    </message>
+    <message>
         <source>%1（%2 次调用）</source>
         <translation>%1 (%2 calls)</translation>
     </message>
@@ -7751,6 +7065,10 @@
     <message>
         <source>已连接：%1</source>
         <translation>Connected: %1</translation>
+    </message>
+    <message>
+        <source>%1 次调用，最近 %2（%3）</source>
+        <translation>%1 calls, last at %2 (%3)</translation>
     </message>
     <message>
         <source>没能建立连接通道，详见 WinShun.log</source>
@@ -7933,60 +7251,12 @@
         <translation>The diagnostic archive is being created. Its folder will open when ready.</translation>
     </message>
     <message>
-        <source>截图</source>
-        <translation>Screenshot</translation>
-    </message>
-    <message>
-        <source>截图已保存</source>
-        <translation>Screenshot saved</translation>
-    </message>
-    <message>
-        <source>点击打开所在文件夹</source>
-        <translation>Click to show it in its folder</translation>
-    </message>
-    <message>
-        <source>截图没能保存</source>
-        <translation>Could not save the screenshot</translation>
-    </message>
-    <message>
-        <source>没能改 PrtScn 的设置，它还会打开截图工具。</source>
-        <translation>Could not change the PrtScn setting; it still opens the Snipping Tool.</translation>
-    </message>
-    <message>
-        <source>没能把 PrtScn 的设置改回去。</source>
-        <translation>Could not restore the PrtScn setting.</translation>
-    </message>
-    <message>
-        <source>开始截图</source>
-        <translation>Take a screenshot</translation>
-    </message>
-    <message>
-        <source>贴上最近一次截图</source>
-        <translation>Pin the last screenshot</translation>
-    </message>
-    <message>
-        <source>取消所有贴图的穿透（单个：按住 Ctrl 点它）</source>
-        <translation>Make all pins clickable again (one: hold Ctrl over it)</translation>
-    </message>
-    <message>
-        <source>关闭全部贴图</source>
-        <translation>Close all pins</translation>
-    </message>
-    <message>
         <source>编辑</source>
         <translation>Edit</translation>
     </message>
     <message>
-        <source>没能编辑这张图片</source>
-        <translation>Could not edit this picture</translation>
-    </message>
-    <message>
         <source>它已不在历史里，或读不出来。</source>
         <translation>It is no longer in the history, or cannot be read.</translation>
-    </message>
-    <message>
-        <source>读不出这张图。</source>
-        <translation>This picture cannot be read.</translation>
     </message>
     <message>
         <source>双击 Ctrl 打开搜索。Win顺 先索引你常用的文件夹（桌面、文档、下载等），可以在设置里增减。</source>
@@ -8073,36 +7343,40 @@
         <translation>Press Ctrl twice to search. There are no folders to index yet: click here to add some in the settings. Folders kept on a server go under Network shares.</translation>
     </message>
     <message>
-        <source>已复制识别的文字</source>
-        <translation>Copied the text that was read</translation>
-    </message>
-    <message>
-        <source>识别文字</source>
-        <translation>Read text</translation>
-    </message>
-    <message>
-        <source>图片里没有找到文字。</source>
-        <translation>No text was found in the picture.</translation>
-    </message>
-    <message>
-        <source>长截图</source>
-        <translation>Long screenshot</translation>
-    </message>
-    <message>
-        <source>没能打开编辑窗口。</source>
-        <translation>Couldn’t open the editing window.</translation>
-    </message>
-    <message>
         <source>快捷粘贴</source>
         <translation>Quick paste</translation>
+    </message>
+    <message>
+        <source>保存为文件</source>
+        <translation>Save as files</translation>
     </message>
     <message>
         <source>%1 已被其他快捷键占用，这几条无法直接粘贴；其余数字仍可用。可更换组合键，或调整冲突的快捷键。</source>
         <translation>%1 are already assigned to other shortcuts. These slots cannot paste directly; the remaining digits still work. Choose another modifier or change the conflicting shortcuts.</translation>
     </message>
     <message>
-        <source>还没有截图，请先截一张。</source>
-        <translation>Take a screenshot first.</translation>
+        <source>想搜索什么…</source>
+        <translation>Search…</translation>
+    </message>
+    <message>
+        <source>正在从插件库恢复 %1。原来的设置和数据会保留。</source>
+        <translation>Restoring %1 from the plugin library. Your settings and data will be kept.</translation>
+    </message>
+    <message>
+        <source>%1：%2</source>
+        <translation>%1: %2</translation>
+    </message>
+    <message>
+        <source>网络连接失败</source>
+        <translation>Could not connect to the network</translation>
+    </message>
+    <message>
+        <source>以下功能尚未恢复：%1。原来的设置和数据仍在，可以重试或从本地安装插件包。</source>
+        <translation>These features have not been restored: %1. Your settings and data are still here. Retry or install a local plugin package.</translation>
+    </message>
+    <message>
+        <source>部分功能尚未恢复</source>
+        <translation>Some features have not been restored</translation>
     </message>
 </context>
 <context>
@@ -8138,6 +7412,61 @@
     <message>
         <source>写不进 %1</source>
         <translation>Cannot write to %1</translation>
+    </message>
+</context>
+<context>
+    <name>ws::CliSetup</name>
+    <message>
+        <source>ws 报告</source>
+        <translation>ws report</translation>
+    </message>
+    <message>
+        <source>Win顺 现在是用另一个账户（管理员）运行的，PATH 是那个账户的，不是你登录的这个。请先退出 Win顺，再正常打开它，然后在这里启用。</source>
+        <translation>WinShun is running as another account (an administrator), and the PATH is that account&apos;s, not the one you are logged on as. Quit WinShun, open it normally, then enable it here.</translation>
+    </message>
+    <message>
+        <source>连接已打开，但没找到 ws.exe（应在 %1）。重新安装 Win顺 就有了。</source>
+        <translation>The connection is on, but ws.exe was not found (it should be in %1). Reinstalling WinShun brings it back.</translation>
+    </message>
+    <message>
+        <source>没找到 ws.exe（应在 %1）。重新安装 Win顺 就有了。</source>
+        <translation>ws.exe was not found (it should be in %1). Reinstalling WinShun brings it back.</translation>
+    </message>
+    <message>
+        <source>命令行已启用。在新打开的终端里输入 ws 试试。</source>
+        <translation>The command line is on. Type ws in a newly opened terminal to try it.</translation>
+    </message>
+    <message>
+        <source>命令行已启用：新打开的终端里就能用 ws 了。</source>
+        <translation>The command line is on: ws works in newly opened terminals.</translation>
+    </message>
+    <message>
+        <source>已从你的 PATH 里去掉。已经开着的终端要重开才生效。</source>
+        <translation>Removed from your PATH. Terminals that are already open must be restarted for this to take effect.</translation>
+    </message>
+    <message>
+        <source>这一项不是 Win顺 加的，没有动它。</source>
+        <translation>That entry was not added by WinShun, so it was left alone.</translation>
+    </message>
+    <message>
+        <source>你的 PATH 不是文本类型的值（注册表里的类型不对），为了不弄坏它，Win顺 没有动。可以用 ws 的完整路径，或自己修好它。</source>
+        <translation>Your PATH is not a text value (it has the wrong type in the registry), so WinShun left it alone rather than break it. Use ws by its full path, or fix it yourself.</translation>
+    </message>
+    <message>
+        <source>你的 PATH 刚被别的程序改着，没有写成；再点一次。</source>
+        <translation>Another program was changing your PATH just now and nothing was written; click again.</translation>
+    </message>
+    <message>
+        <source>没有权限改你的 PATH（错误 5）。</source>
+        <translation>No permission to change your PATH (error 5).</translation>
+    </message>
+    <message>
+        <source>没能写进你的 PATH（错误 %1）。</source>
+        <translation>Could not write your PATH (error %1).</translation>
+    </message>
+    <message>
+        <source>没能改你的 PATH（错误 %1）。</source>
+        <translation>Could not change your PATH (error %1).</translation>
     </message>
 </context>
 <context>
@@ -8232,6 +7561,51 @@
     <message>
         <source>无法拖出图片</source>
         <translation>Could not drag the image</translation>
+    </message>
+    <message>
+        <source>无法拖出这些内容</source>
+        <translation>Could not drag these out</translation>
+    </message>
+    <message>
+        <source>无法准备要拖出的文件</source>
+        <translation>Cannot prepare the files for dragging</translation>
+    </message>
+    <message numerus="yes">
+        <source>保存 %Ln 条为文件…</source>
+        <translation>
+            <numerusform>Save %Ln entry as a file…</numerusform>
+            <numerusform>Save %Ln entries as files…</numerusform>
+        </translation>
+    </message>
+    <message>
+        <source>保存为文件…</source>
+        <translation>Save as a file…</translation>
+    </message>
+    <message>
+        <source>合并保存为一个文件…</source>
+        <translation>Save all in one file…</translation>
+    </message>
+    <message>
+        <source>保存到哪个文件夹</source>
+        <translation>Save to which folder</translation>
+    </message>
+    <message>
+        <source>没能保存到“%1”，那里可能不允许写入</source>
+        <translation>Could not save to “%1”. Writing there may not be allowed.</translation>
+    </message>
+    <message numerus="yes">
+        <source>有 %Ln 个没能保存</source>
+        <translation>
+            <numerusform>%Ln could not be saved</numerusform>
+            <numerusform>%Ln could not be saved</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>%Ln 个文件已经不存在，没有保存</source>
+        <translation>
+            <numerusform>%Ln file no longer exists and was not saved</numerusform>
+            <numerusform>%Ln files no longer exist and were not saved</numerusform>
+        </translation>
     </message>
     <message>
         <source>已复制。那个窗口没有回到前面，请自己按 Ctrl+V 粘贴</source>
@@ -8359,6 +7733,22 @@
         <translation>Copied</translation>
     </message>
     <message>
+        <source>选中的内容已不存在，无法发送</source>
+        <translation>The selected content no longer exists and cannot be sent</translation>
+    </message>
+    <message>
+        <source>正在准备发送内容…</source>
+        <translation>Preparing content to send…</translation>
+    </message>
+    <message>
+        <source>选的文件太多了，最多一次 1000 项</source>
+        <translation>Too many files selected; choose at most 1,000 items</translation>
+    </message>
+    <message>
+        <source>无法准备发送内容，请重试</source>
+        <translation>Could not prepare the content to send. Try again.</translation>
+    </message>
+    <message>
         <source>Win顺</source>
         <translation>WinShun</translation>
     </message>
@@ -8474,6 +7864,18 @@
     <message>
         <source>打开图片</source>
         <translation>Open picture</translation>
+    </message>
+    <message>
+        <source>用局域网发送…</source>
+        <translation>Send over LAN…</translation>
+    </message>
+    <message>
+        <source>启用局域网传输…</source>
+        <translation>Enable LAN transfer…</translation>
+    </message>
+    <message>
+        <source>更新局域网传输…</source>
+        <translation>Update LAN transfer…</translation>
     </message>
     <message>
         <source>取消固定</source>
@@ -8608,10 +8010,6 @@
     <message>
         <source>无法准备要粘贴的图片文件</source>
         <translation>Could not prepare the image files to paste</translation>
-    </message>
-    <message>
-        <source>请只选择图片后再拖出</source>
-        <translation>Select only pictures to drag them out</translation>
     </message>
 </context>
 <context>
@@ -8765,6 +8163,14 @@
         <source>这类项目只能放进本机的文件夹</source>
         <translation>Items like these can only go into folders on this computer</translation>
     </message>
+    <message>
+        <source>收藏圆盘未打开</source>
+        <translation>Favorites pie could not open</translation>
+    </message>
+    <message>
+        <source>暂时无法接收文件拖放，请松开鼠标后重试。</source>
+        <translation>File drops are temporarily unavailable. Release the mouse button and try again.</translation>
+    </message>
 </context>
 <context>
     <name>ws::FavoritesSettings</name>
@@ -8908,13 +8314,6 @@
         <translation>
             <numerusform>%n added</numerusform>
             <numerusform>%n added</numerusform>
-        </translation>
-    </message>
-    <message numerus="yes">
-        <source>其中 %n 项补上了名称或关键词</source>
-        <translation>
-            <numerusform>%n of them given its name or keyword</numerusform>
-            <numerusform>%n of them given their names or keywords</numerusform>
         </translation>
     </message>
     <message numerus="yes">
@@ -9097,6 +8496,46 @@
     <message>
         <source>收藏这个文件夹</source>
         <translation>Add this folder to favorites</translation>
+    </message>
+    <message>
+        <source>在此打开命令提示符</source>
+        <translation>Open Command Prompt here</translation>
+    </message>
+    <message>
+        <source>在此打开 PowerShell</source>
+        <translation>Open PowerShell here</translation>
+    </message>
+    <message>
+        <source>Win顺 设置…</source>
+        <translation>WinShun settings…</translation>
+    </message>
+    <message>
+        <source>无法打开“%1”，请检查命令和工作目录</source>
+        <translation>Could not open “%1”. Check the command and working directory.</translation>
+    </message>
+    <message>
+        <source>这条命令已移除，请重新打开菜单</source>
+        <translation>This command was removed. Reopen the menu.</translation>
+    </message>
+    <message>
+        <source>收藏夹</source>
+        <translation>Favorites</translation>
+    </message>
+    <message>
+        <source>最近的文件夹</source>
+        <translation>Recent folders</translation>
+    </message>
+    <message>
+        <source>已打开的文件夹</source>
+        <translation>Open folders</translation>
+    </message>
+    <message>
+        <source>这一项已移除，请重新打开菜单</source>
+        <translation>This item was removed. Reopen the menu.</translation>
+    </message>
+    <message>
+        <source>这一项暂不可用，请稍后重试</source>
+        <translation>This item is unavailable. Try again later.</translation>
     </message>
 </context>
 <context>
@@ -9300,6 +8739,14 @@
         <translation>Searching only in %1</translation>
     </message>
     <message>
+        <source>正则模式：每个词都按正则表达式匹配名字</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>已关闭正则模式</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
         <source>也搜其他位置</source>
         <translation>Search elsewhere too</translation>
     </message>
@@ -9409,6 +8856,10 @@
             <numerusform>Building the index… %Ln item so far</numerusform>
             <numerusform>Building the index… %Ln items so far</numerusform>
         </translation>
+    </message>
+    <message>
+        <source>“%1”没有“启动程序”权限，没能打开 %2</source>
+        <translation>“%1” lacks the “Start programs” permission, so %2 was not opened</translation>
     </message>
     <message>
         <source>、</source>
@@ -9750,14 +9201,6 @@
         <source>这个文件夹不存在、被排除在索引之外，或在没有收录的磁盘上</source>
         <translation>This folder does not exist, is excluded from the index, or is on a drive that is not indexed</translation>
     </message>
-    <message>
-        <source>%1 在网络共享上</source>
-        <translation>%1 is on a network share</translation>
-    </message>
-    <message>
-        <source>网络共享上的文件不搜内容</source>
-        <translation>Contents of files on network shares are not searched</translation>
-    </message>
     <message numerus="yes">
         <source>名字含 %1 的 %Ln 个文件夹</source>
         <translation>
@@ -10004,9 +9447,55 @@
             <numerusform>%Ln files on network locations have no content index yet</numerusform>
         </translation>
     </message>
+    <message numerus="yes">
+        <source>还有 %Ln 个文件未搜索内容</source>
+        <translation>
+            <numerusform>Contents not searched: %Ln file</numerusform>
+            <numerusform>Contents not searched: %Ln files</numerusform>
+        </translation>
+    </message>
+    <message>
+        <source>搜索内容</source>
+        <translation>Search contents</translation>
+    </message>
     <message>
         <source>设置…</source>
         <translation>Settings…</translation>
+    </message>
+</context>
+<context>
+    <name>ws::PanelColumns</name>
+    <message>
+        <source>名称</source>
+        <translation>Name</translation>
+    </message>
+    <message>
+        <source>路径</source>
+        <translation>Path</translation>
+    </message>
+    <message>
+        <source>大小</source>
+        <translation>Size</translation>
+    </message>
+    <message>
+        <source>修改时间</source>
+        <translation>Modified</translation>
+    </message>
+    <message>
+        <source>类型</source>
+        <translation>Type</translation>
+    </message>
+    <message>
+        <source>创建时间</source>
+        <translation>Created</translation>
+    </message>
+    <message>
+        <source>所在文件夹</source>
+        <translation>Folder</translation>
+    </message>
+    <message>
+        <source>来源</source>
+        <translation>Source</translation>
     </message>
 </context>
 <context>
@@ -10077,20 +9566,8 @@
         <translation>GitHub returned an error (%1).</translation>
     </message>
     <message>
-        <source>网络不通，找不到 GitHub。检查一下网络。</source>
-        <translation>Can’t find GitHub: no network. Check your connection.</translation>
-    </message>
-    <message>
-        <source>连接 GitHub 超时。网络没问题的话，可能要开代理。</source>
-        <translation>GitHub took too long to answer. If your network is fine, you may need a proxy.</translation>
-    </message>
-    <message>
         <source>读不了这个文件（错误 %1）。</source>
         <translation>Couldn’t read the file (error %1).</translation>
-    </message>
-    <message>
-        <source>连不上 GitHub。网络没问题的话，可能要开代理。</source>
-        <translation>Couldn’t reach GitHub. If your network is fine, you may need a proxy.</translation>
     </message>
     <message>
         <source>翻译</source>
@@ -10292,8 +9769,8 @@
         <translation>Unusable: %1</translation>
     </message>
     <message>
-        <source>AI 助手页的“允许 AI 连接”关着</source>
-        <translation>“Allow AI assistants to connect” on the AI assistants page is off</translation>
+        <source>AI 助手页的“允许 AI 助手和命令行连接”关着</source>
+        <translation>“Allow AI assistants and the command line to connect” on the AI assistants page is off</translation>
     </message>
     <message>
         <source>AI 助手页的“AI 可以使用插件”关着，打开后才成为工具</source>
@@ -10435,6 +9912,10 @@
         <translation>Uninstalling %1: %2</translation>
     </message>
     <message>
+        <source>插件还没准备好，请稍后再试</source>
+        <translation>The plugin is not ready yet; please try again in a moment</translation>
+    </message>
+    <message>
         <source>没有这种模板</source>
         <translation>No such template</translation>
     </message>
@@ -10569,6 +10050,14 @@
     <message>
         <source>已复制开发提示；把它和创建好的模板交给 AI，再补上你想做的功能</source>
         <translation>Instructions copied. Give them and the new template to your AI assistant, then describe the feature you want.</translation>
+    </message>
+    <message>
+        <source>更改 Windows 系统设置（主题、无线电、音量、资源管理器、保持唤醒）</source>
+        <translation>Change Windows settings (theme, radios, volume, Explorer and keep-awake)</translation>
+    </message>
+    <message>
+        <source>以普通用户权限更改；Win顺 不能阻止它直接改系统设置</source>
+        <translation>Uses normal user rights; WinShun cannot stop it changing system settings directly</translation>
     </message>
 </context>
 <context>
@@ -10766,30 +10255,6 @@
         <source>自定义命令 · %1</source>
         <translation>Custom command · %1</translation>
     </message>
-    <message>
-        <source>内容</source>
-        <translation>Content</translation>
-    </message>
-    <message>
-        <source>网页</source>
-        <translation>Web</translation>
-    </message>
-    <message>
-        <source>系统</source>
-        <translation>System</translation>
-    </message>
-    <message>
-        <source>应用</source>
-        <translation>App</translation>
-    </message>
-    <message>
-        <source>文件</source>
-        <translation>File</translation>
-    </message>
-    <message>
-        <source>文件夹</source>
-        <translation>Folder</translation>
-    </message>
 </context>
 <context>
     <name>ws::Settings</name>
@@ -10949,10 +10414,6 @@
         <translation>The keyword “%1” already belongs to the web search “%2”</translation>
     </message>
     <message>
-        <source>关键词“%1”已经给了截图历史（截图卡片上可以改）</source>
-        <translation>The keyword “%1” belongs to the screenshot history (it can be changed on the Screenshot card)</translation>
-    </message>
-    <message>
         <source>图片（PNG、ICO、SVG）</source>
         <translation>Images (PNG, ICO, SVG)</translation>
     </message>
@@ -11041,6 +10502,10 @@
     <message>
         <source>，</source>
         <translation>, </translation>
+    </message>
+    <message>
+        <source>关键词“%1”已经给了截图历史（剪贴板页上可以改）</source>
+        <translation>The keyword “%1” belongs to the screenshot history (it can be changed on the Clipboard page)</translation>
     </message>
     <message>
         <source>导入剪贴板历史</source>
@@ -11206,6 +10671,14 @@
     <message>
         <source>需要登录：Windows 还没有 %1 的用户名和密码</source>
         <translation>Sign-in needed: Windows has no user name and password for %1 yet</translation>
+    </message>
+    <message>
+        <source>等待扫描时段，已读取的内容照常能搜到</source>
+        <translation>Waiting for scan hours; indexed content remains searchable</translation>
+    </message>
+    <message>
+        <source>等待扫描时段（每天 %1–%2）</source>
+        <translation>Waiting for scan hours (%1–%2 daily)</translation>
     </message>
     <message>
         <source>需要登录，但 Windows 默认只在 https 地址上发送密码，这个 http 地址多半登录不上：请改用 https 地址</source>
@@ -11383,6 +10856,10 @@
         <translation>Copied; paste it into that client&apos;s MCP configuration file</translation>
     </message>
     <message>
+        <source>正在装 Skill…</source>
+        <translation>Installing the Skill…</translation>
+    </message>
+    <message>
         <source>给类型起个名字</source>
         <translation>Give the type a name</translation>
     </message>
@@ -11446,10 +10923,6 @@
             <numerusform>%n hour</numerusform>
             <numerusform>%n hours</numerusform>
         </translation>
-    </message>
-    <message>
-        <source>这是网络位置，请在“网络共享”里添加</source>
-        <translation>This is a network location: add it under Network shares</translation>
     </message>
     <message>
         <source>不是完整的文件夹路径，不会索引</source>
@@ -11592,7 +11065,7 @@
     </message>
     <message>
         <source>还没填代理地址，例如 127.0.0.1:7890。填好之前先跟随系统</source>
-        <translation>No proxy address yet, such as 127.0.0.1:7890. The system's proxy is used until there is one</translation>
+        <translation>No proxy address yet, such as 127.0.0.1:7890. The system&apos;s proxy is used until there is one</translation>
     </message>
     <message>
         <source>地址后面要写端口，例如 127.0.0.1:7890</source>
@@ -11668,6 +11141,14 @@
     <message>
         <source>打开后，电脑空闲时读取文件内容；离线时也能搜到</source>
         <translation>When on, file contents are read while the PC is idle, and stay searchable offline</translation>
+    </message>
+    <message>
+        <source>这个快捷键用于输入或其他操作，请换一个</source>
+        <translation>This shortcut is reserved for typing or another action. Choose another.</translation>
+    </message>
+    <message>
+        <source>这个快捷键已用于全局操作，请换一个</source>
+        <translation>This shortcut is already used by a global action. Choose another.</translation>
     </message>
 </context>
 <context>
@@ -11982,315 +11463,6 @@
     </message>
 </context>
 <context>
-    <name>ws::capture::AnnotationModel</name>
-    <message>
-        <source>只能在选区里画</source>
-        <translation>Draw inside the selection</translation>
-    </message>
-    <message>
-        <source>%1 个对象</source>
-        <translation>%1 objects</translation>
-    </message>
-    <message>
-        <source>只能在图片里画</source>
-        <translation>Draw inside the picture</translation>
-    </message>
-    <message>
-        <source>复制</source>
-        <translation>Copy</translation>
-    </message>
-    <message>
-        <source>没找到要打码的内容</source>
-        <translation>Nothing to redact was found</translation>
-    </message>
-    <message>
-        <source>正在识别文字…</source>
-        <translation>Reading the text…</translation>
-    </message>
-    <message>
-        <source>已打码 %1 处 · Ctrl+Z 撤销</source>
-        <translation>Redacted %1 places · Ctrl+Z to undo</translation>
-    </message>
-    <message>
-        <source> · 自动找的可能有漏，发出去前再看一眼</source>
-        <translation> · What is found automatically can miss some: take a look before you send it</translation>
-    </message>
-    <message>
-        <source>撤回节点</source>
-        <translation>Remove point</translation>
-    </message>
-    <message>
-        <source>单击添加节点 · 点击起点闭合 · 双击/回车结束 · 退格撤回 · Esc 取消</source>
-        <translation>Click to add points · Click the start to close · Double-click/Enter to finish · Backspace to remove · Esc to cancel</translation>
-    </message>
-</context>
-<context>
-    <name>ws::capture::Capture</name>
-    <message>
-        <source>找不到“屏幕截图”文件夹</source>
-        <translation>The Screenshots folder was not found</translation>
-    </message>
-    <message>
-        <source>无法保存到 %1</source>
-        <translation>Could not save to %1</translation>
-    </message>
-    <message>
-        <source>截图已保存，但 HDR 图片没能保存到 %1</source>
-        <translation>The screenshot was saved, but the HDR picture could not be saved to %1</translation>
-    </message>
-</context>
-<context>
-    <name>ws::capture::CaptureEditor</name>
-    <message>
-        <source>%1%</source>
-        <translation>%1%</translation>
-    </message>
-    <message>
-        <source>%1 × %2</source>
-        <translation>%1 × %2</translation>
-    </message>
-    <message>
-        <source>完成</source>
-        <translation>Done</translation>
-    </message>
-    <message>
-        <source>复制</source>
-        <translation>Copy</translation>
-    </message>
-    <message>
-        <source>已放弃修改 · Ctrl+Z 恢复</source>
-        <translation>Changes given up · Ctrl+Z brings them back</translation>
-    </message>
-</context>
-<context>
-    <name>ws::capture::CaptureOcr</name>
-    <message>
-        <source>没有图片可以识别。</source>
-        <translation>There is no picture to read.</translation>
-    </message>
-    <message>
-        <source>没有安装文字识别模型（Win顺 文件夹里的 ocr 文件夹），无法识别文字。</source>
-        <translation>The text recognition models are not installed (the ocr folder in the WinShun folder): text cannot be read.</translation>
-    </message>
-    <message>
-        <source>识别失败：%1</source>
-        <translation>Reading failed: %1</translation>
-    </message>
-    <message>
-        <source>图片里没有找到文字。</source>
-        <translation>No text was found in the picture.</translation>
-    </message>
-</context>
-<context>
-    <name>ws::capture::CaptureSession</name>
-    <message>
-        <source>还没有上次的选区</source>
-        <translation>No last selection yet</translation>
-    </message>
-    <message>
-        <source>颜色格式：%1</source>
-        <translation>Colour format: %1</translation>
-    </message>
-    <message>
-        <source>已有标注：拖边框调整选区，Esc 放弃标注</source>
-        <translation>There are annotations: drag the edge to resize the selection, Esc to give them up</translation>
-    </message>
-    <message>
-        <source>已复制 %1</source>
-        <translation>Copied %1</translation>
-    </message>
-    <message>
-        <source>已放弃这次的标注 · Ctrl+Z 恢复</source>
-        <translation>Annotations given up · Ctrl+Z brings them back</translation>
-    </message>
-    <message>
-        <source>先完成或放弃标注</source>
-        <translation>Finish or give up the annotations first</translation>
-    </message>
-    <message>
-        <source>选区太小，不能长截图</source>
-        <translation>The selection is too small for a long screenshot</translation>
-    </message>
-    <message>
-        <source>选区太小，不能录屏</source>
-        <translation>The selection is too small for recording</translation>
-    </message>
-</context>
-<context>
-    <name>ws::capture::CountdownWindow</name>
-    <message>
-        <source>秒后截图
-点这里取消</source>
-        <translation>seconds to capture
-click here to cancel</translation>
-    </message>
-</context>
-<context>
-    <name>ws::capture::LongCapture</name>
-    <message>
-        <source>正在自动滚动。Enter 完成，Esc 取消</source>
-        <translation>Scrolling by itself. Enter finishes, Esc cancels</translation>
-    </message>
-    <message>
-        <source>在区域内向上或向下滚动，滚完按 Enter 或点“完成”</source>
-        <translation>Scroll up or down in the region. Enter or “Done” finishes</translation>
-    </message>
-    <message>
-        <source>把鼠标放到要滚动的区域上</source>
-        <translation>Put the mouse over the region to scroll</translation>
-    </message>
-    <message>
-        <source>这个程序以管理员身份运行，请手动滚动，滚完点“完成”</source>
-        <translation>This program runs as administrator: scroll it yourself, then click “Done”</translation>
-    </message>
-    <message>
-        <source>自动滚动不起作用，请自己滚动</source>
-        <translation>Auto-scroll doesn’t work here: please scroll yourself</translation>
-    </message>
-    <message>
-        <source>没接上：慢慢往回滚一点，接上后再继续</source>
-        <translation>Scroll back slowly to reconnect, then continue</translation>
-    </message>
-    <message>
-        <source>5 秒没有新画面</source>
-        <translation>No new frame for 5 seconds</translation>
-    </message>
-    <message>
-        <source>到上限了（3 万像素高）</source>
-        <translation>At the limit (30,000 px high)</translation>
-    </message>
-    <message>
-        <source>诊断信息已复制</source>
-        <translation>Diagnostics copied</translation>
-    </message>
-</context>
-<context>
-    <name>ws::capture::PinManager</name>
-    <message>
-        <source>关闭其他</source>
-        <translation>Close the others</translation>
-    </message>
-    <message>
-        <source>展开</source>
-        <translation>Expand</translation>
-    </message>
-    <message>
-        <source>选择文字</source>
-        <translation>Pick text</translation>
-    </message>
-    <message>
-        <source>全部置顶</source>
-        <translation>All on top</translation>
-    </message>
-    <message>
-        <source>隐藏全部贴图</source>
-        <translation>Hide all pins</translation>
-    </message>
-    <message>
-        <source>显示全部贴图</source>
-        <translation>Show all pins</translation>
-    </message>
-    <message>
-        <source>全部贴图</source>
-        <translation>All pins</translation>
-    </message>
-    <message>
-        <source>收到屏幕顶边</source>
-        <translation>To the top edge of the screen</translation>
-    </message>
-    <message>
-        <source>收成小块</source>
-        <translation>To a small tile</translation>
-    </message>
-    <message>
-        <source>收起</source>
-        <translation>Collapse</translation>
-    </message>
-    <message>
-        <source>上下翻转</source>
-        <translation>Flip vertically</translation>
-    </message>
-    <message>
-        <source>左右翻转</source>
-        <translation>Flip horizontally</translation>
-    </message>
-    <message>
-        <source>向左转 90°</source>
-        <translation>Rotate left 90°</translation>
-    </message>
-    <message>
-        <source>向右转 90°</source>
-        <translation>Rotate right 90°</translation>
-    </message>
-    <message>
-        <source>旋转与翻转</source>
-        <translation>Rotate and flip</translation>
-    </message>
-    <message>
-        <source>识别文字</source>
-        <translation>Read text</translation>
-    </message>
-    <message>
-        <source>识别文字（没有安装文字识别模型）</source>
-        <translation>Read text (the text recognition models are not installed)</translation>
-    </message>
-    <message>
-        <source>复制</source>
-        <translation>Copy</translation>
-    </message>
-    <message>
-        <source>保存到“屏幕截图”</source>
-        <translation>Save to Screenshots</translation>
-    </message>
-    <message>
-        <source>另存为…</source>
-        <translation>Save as…</translation>
-    </message>
-    <message>
-        <source>置顶</source>
-        <translation>Always on top</translation>
-    </message>
-    <message>
-        <source>鼠标穿透（按住 Ctrl 可操作）</source>
-        <translation>Click through (hold Ctrl to use it)</translation>
-    </message>
-    <message>
-        <source>关闭</source>
-        <translation>Close</translation>
-    </message>
-    <message>
-        <source>关闭全部贴图</source>
-        <translation>Close all pins</translation>
-    </message>
-    <message>
-        <source>另存为</source>
-        <translation>Save as</translation>
-    </message>
-    <message>
-        <source>PNG 图片</source>
-        <translation>PNG picture</translation>
-    </message>
-    <message>
-        <source>编辑</source>
-        <translation>Edit</translation>
-    </message>
-</context>
-<context>
-    <name>ws::capture::PinWindow</name>
-    <message>
-        <source>已复制文字 · Esc 退出</source>
-        <translation>Text copied · Esc to leave</translation>
-    </message>
-    <message>
-        <source>拖选文字 · Esc 退出</source>
-        <translation>Drag to pick text · Esc to leave</translation>
-    </message>
-    <message>
-        <source>识别文字中…</source>
-        <translation>Reading text…</translation>
-    </message>
-</context>
-<context>
     <name>ws::diagnostics</name>
     <message>
         <source>生成诊断包失败</source>
@@ -12302,549 +11474,771 @@ click here to cancel</translation>
     </message>
 </context>
 <context>
-    <name>FileTypesSection</name>
+    <name>ws::OcrPackage</name>
     <message>
-        <source>文件类型</source>
-        <translation>File types</translation>
+        <source>增强识别已安装，可以离线使用。</source>
+        <translation>Enhanced recognition is installed and works offline.</translation>
     </message>
     <message>
-        <source>类型;扩展名;后缀;筛选;前缀;快捷键;folder;filter;type;extension</source>
-        <translation>type;extension;suffix;filter;prefix;shortcut;folder</translation>
+        <source>增强识别包无效，请重新下载。</source>
+        <translation>Invalid recognition package. Download it again.</translation>
     </message>
     <message>
-        <source>输入“:folder 报告”只找文件夹；类型前缀可自定义，不区分大小写。留空可停用，Ctrl+Tab 仍可切换。</source>
-        <translation>Type “:folder report” to find folders. Prefixes are customizable and case-insensitive. Leave blank to disable; Ctrl+Tab still switches types.</translation>
+        <source>无法创建增强识别的安装目录。</source>
+        <translation>Could not create the recognition component folder.</translation>
     </message>
     <message>
-        <source>恢复默认</source>
-        <translation>Restore defaults</translation>
+        <source>另一个窗口正在安装增强识别，完成后会自动可用。</source>
+        <translation>Another window is installing enhanced recognition. It will be available when that finishes.</translation>
     </message>
     <message>
-        <source>名称</source>
-        <translation>Name</translation>
+        <source>增强识别包已损坏，请重新下载。</source>
+        <translation>The recognition package is damaged. Download it again.</translation>
     </message>
     <message>
-        <source>扩展名</source>
-        <translation>Extensions</translation>
+        <source>增强识别包包含不需要的文件。</source>
+        <translation>The recognition package contains unexpected files.</translation>
     </message>
     <message>
-        <source>搜索前缀（:）</source>
-        <translation>Prefix (:)</translation>
+        <source>已取消，稍后可以重新安装。</source>
+        <translation>Cancelled. You can install it again later.</translation>
     </message>
     <message>
-        <source>文件夹</source>
-        <translation>Folders</translation>
+        <source>增强识别包的文件大小不符，请重新下载。</source>
+        <translation>Recognition file sizes do not match. Download the package again.</translation>
     </message>
     <message>
-        <source>只搜索文件夹</source>
-        <translation>Search folders only</translation>
+        <source>增强识别包未通过校验，请重新下载。</source>
+        <translation>Recognition package verification failed. Download it again.</translation>
     </message>
     <message>
-        <source>文件夹搜索前缀</source>
-        <translation>Folder search prefix</translation>
+        <source>无法保存增强识别文件。</source>
+        <translation>Could not save the recognition files.</translation>
     </message>
     <message>
-        <source>类型名称</source>
-        <translation>Type name</translation>
+        <source>增强识别包缺少文件，请重新下载。</source>
+        <translation>Files are missing from the recognition package. Download it again.</translation>
     </message>
     <message>
-        <source>%1的扩展名</source>
-        <translation>Extensions for %1</translation>
+        <source>增强识别文件正在使用，请关闭识别窗口后重试。</source>
+        <translation>Recognition files are in use. Close the recognition window and try again.</translation>
     </message>
     <message>
-        <source>未设置</source>
-        <translation>Not set</translation>
+        <source>无法完成增强识别安装，原来的文件已保留。</source>
+        <translation>Installation could not finish. Your existing recognition files have been kept.</translation>
     </message>
     <message>
-        <source>%1的搜索前缀</source>
-        <translation>Search prefix for %1</translation>
+        <source>约 %1 MB</source>
+        <translation>about %1 MB</translation>
     </message>
     <message>
-        <source>上移</source>
-        <translation>Move up</translation>
+        <source>正在取消…</source>
+        <translation>Cancelling…</translation>
     </message>
     <message>
-        <source>下移</source>
-        <translation>Move down</translation>
+        <source>正在下载安装增强识别…</source>
+        <translation>Downloading and installing enhanced recognition…</translation>
     </message>
     <message>
-        <source>删除</source>
-        <translation>Remove</translation>
+        <source>下载没有完成，请检查网络后重试，或从本地安装增强识别包。</source>
+        <translation>Download did not finish. Check your connection and try again, or install a recognition package from a local file.</translation>
     </message>
     <message>
-        <source>新类型</source>
-        <translation>New type</translation>
+        <source>无法读取增强识别包。</source>
+        <translation>Could not read the recognition package.</translation>
     </message>
     <message>
-        <source>新类型名称</source>
-        <translation>New type name</translation>
+        <source>选择增强识别包</source>
+        <translation>Choose a recognition package</translation>
     </message>
     <message>
-        <source>扩展名，例如 dwg dxf</source>
-        <translation>Extensions, e.g. dwg dxf</translation>
-    </message>
-    <message>
-        <source>新类型扩展名</source>
-        <translation>New type extensions</translation>
-    </message>
-    <message>
-        <source>添加</source>
-        <translation>Add</translation>
+        <source>增强识别包</source>
+        <translation>Recognition package</translation>
     </message>
 </context>
 <context>
-    <name>Recording</name>
+    <name>OcrPackageRow</name>
     <message>
-        <source>录制屏幕已断开或关闭</source>
-        <translation>The recorded display was disconnected or closed</translation>
+        <source>增强文字识别</source>
+        <translation>Enhanced text recognition</translation>
     </message>
     <message>
-        <source>录屏路径已存在，或录制区域 / 帧率不可用</source>
-        <translation>The output file already exists, or the recording area / frame rate is unavailable</translation>
+        <source>识字;OCR;图片文字;模型;离线;增强;下载;recognition;offline</source>
+        <translation>OCR;image text;models;offline;enhanced;download;recognition</translation>
     </message>
     <message>
-        <source>无法写入录屏文件夹：%1</source>
-        <translation>Cannot write to the recording folder: %1</translation>
-    </message>
-    <message>
-        <source>系统声音不可用，请检查播放设备，或关闭“系统声音”</source>
-        <translation>System audio is unavailable. Check the playback device or turn off system audio</translation>
-    </message>
-    <message>
-        <source>麦克风不可用，请检查设备与 Windows 麦克风权限，或关闭“麦克风”</source>
-        <translation>The microphone is unavailable. Check the device and Windows microphone permissions, or turn off the microphone</translation>
-    </message>
-    <message>
-        <source>WinShun  区域录屏 — clear text 0123456789    C++20 / MP4</source>
-        <translation>WinShun  Screen recording — clear text 0123456789    C++20 / MP4</translation>
-    </message>
-    <message>
-        <source>录屏失败：%1（0x%2）</source>
-        <translation>Recording failed: %1 (0x%2)</translation>
-    </message>
-    <message>
-        <source>录屏失败：%1</source>
-        <translation>Recording failed: %1</translation>
-    </message>
-    <message>
-        <source>无法完成保存，录制文件保留在：%1</source>
-        <translation>Could not finish saving. The recording is preserved at: %1</translation>
-    </message>
-</context>
-<context>
-    <name>RecordingPanel</name>
-    <message>
-        <source>点击高亮：%1</source>
-        <translation>Click highlight: %1</translation>
-    </message>
-    <message>
-        <source>在视频中显示鼠标点击圈，暂停期间和控制条上的点击不显示。</source>
-        <translation>Shows click rings in the video. Clicks while paused or on the controls are excluded.</translation>
-    </message>
-    <message>
-        <source>区域录屏</source>
-        <translation>Screen recording</translation>
-    </message>
-    <message>
-        <source>系统声音：%1</source>
-        <translation>System audio: %1</translation>
-    </message>
-    <message>
-        <source>开</source>
-        <translation>On</translation>
-    </message>
-    <message>
-        <source>关</source>
-        <translation>Off</translation>
-    </message>
-    <message>
-        <source>麦克风：%1</source>
-        <translation>Microphone: %1</translation>
-    </message>
-    <message>
-        <source>标准画质</source>
-        <translation>Standard</translation>
-    </message>
-    <message>
-        <source>更清晰</source>
-        <translation>Clearer</translation>
-    </message>
-    <message>
-        <source>更改保存文件夹…</source>
-        <translation>Change save folder…</translation>
-    </message>
-    <message>
-        <source>%1 · %2</source>
-        <translation>%1 · %2</translation>
-    </message>
-    <message>
-        <source>系统声音：%1 · 麦克风：%2</source>
-        <translation>System audio: %1 · Microphone: %2</translation>
-    </message>
-    <message>
-        <source>播放</source>
-        <translation>Play</translation>
-    </message>
-    <message>
-        <source>复制文件</source>
-        <translation>Copy file</translation>
-    </message>
-    <message>
-        <source>打开文件夹</source>
-        <translation>Open folder</translation>
-    </message>
-    <message>
-        <source>重新设置</source>
-        <translation>Change settings</translation>
-    </message>
-    <message>
-        <source>关闭</source>
-        <translation>Close</translation>
+        <source>提升截图和中英文图片的识别效果。下载 %1，安装后可离线使用；未安装时，剪贴板使用 Windows 支持的识别语言。</source>
+        <translation>Improve recognition of screenshots and Chinese and English images. Download %1 for offline use. Until installed, clipboard recognition uses the languages supported by Windows.</translation>
     </message>
     <message>
         <source>取消</source>
         <translation>Cancel</translation>
     </message>
     <message>
-        <source>继续</source>
-        <translation>Resume</translation>
+        <source>下载并安装</source>
+        <translation>Download and install</translation>
     </message>
     <message>
-        <source>暂停</source>
-        <translation>Pause</translation>
-    </message>
-    <message>
-        <source>开始录制</source>
-        <translation>Start recording</translation>
-    </message>
-    <message>
-        <source>停止并保存</source>
-        <translation>Stop and save</translation>
-    </message>
-    <message>
-        <source>倒计时 3 秒后开始，停止后自动保存。</source>
-        <translation>Starts after a 3-second countdown. Saves automatically when stopped.</translation>
-    </message>
-    <message>
-        <source>文件已保留在本机。</source>
-        <translation>The file is saved on this computer.</translation>
-    </message>
-    <message>
-        <source>可重新设置声音和保存位置后再录。</source>
-        <translation>Adjust audio and the save folder, then try again.</translation>
-    </message>
-    <message>
-        <source>再次按截图快捷键也可停止；控制条不会录入视频。</source>
-        <translation>The screenshot shortcut also stops recording. The controls are excluded from the video.</translation>
-    </message>
-    <message>
-        <source>小体积</source>
-        <translation>Smaller file</translation>
-    </message>
-    <message>
-        <source>15 帧/秒，保留原始尺寸，适合文字和简单操作。</source>
-        <translation>15 fps at the original size, for text and simple actions.</translation>
-    </message>
-    <message>
-        <source>30 帧/秒，优先保留细节，文件可能更大。</source>
-        <translation>30 fps with more detail. Files may be larger.</translation>
-    </message>
-    <message>
-        <source>30 帧/秒，兼顾清晰度和文件大小。</source>
-        <translation>30 fps, balancing clarity and file size.</translation>
-    </message>
-    <message>
-        <source>鼠标指针：%1</source>
-        <translation>Cursor: %1</translation>
-    </message>
-    <message>
-        <source>3 秒倒计时：%1</source>
-        <translation>3-sec countdown: %1</translation>
-    </message>
-    <message>
-        <source>再录一段</source>
-        <translation>Record another</translation>
-    </message>
-    <message>
-        <source>立即开始</source>
-        <translation>Start now</translation>
-    </message>
-    <message>
-        <source>正在保存…</source>
-        <translation>Saving…</translation>
-    </message>
-    <message>
-        <source>停止后自动保存；再次按截图快捷键也可停止。</source>
-        <translation>Saves automatically when stopped. The screenshot shortcut also stops recording.</translation>
-    </message>
-    <message>
-        <source>MP4 视频</source>
-        <translation>MP4 video</translation>
-    </message>
-    <message>
-        <source>GIF 动图</source>
-        <translation>Animated GIF</translation>
-    </message>
-    <message>
-        <source>10 帧/秒，最长边 960 像素，适合简单操作。</source>
-        <translation>10 fps, up to 960 px on the longest edge. For simple actions.</translation>
-    </message>
-    <message>
-        <source>20 帧/秒，最长边 1920 像素，文件可能较大。</source>
-        <translation>20 fps, up to 1920 px on the longest edge. Files may be larger.</translation>
-    </message>
-    <message>
-        <source>15 帧/秒，最长边 1280 像素，兼顾清晰度和体积。</source>
-        <translation>15 fps, up to 1280 px on the longest edge. Balances clarity and size.</translation>
-    </message>
-    <message>
-        <source>GIF 动图 · 无音频</source>
-        <translation>Animated GIF · No audio</translation>
-    </message>
-    <message>
-        <source>GIF 自动循环播放，不含音频；停止后会显示生成进度。</source>
-        <translation>GIFs loop without audio. Export progress appears after recording stops.</translation>
-    </message>
-    <message>
-        <source>鼠标按键：%1</source>
-        <translation>Mouse buttons: %1</translation>
-    </message>
-    <message>
-        <source>在视频角落显示按下的是左键、右键、中键还是侧键。</source>
-        <translation>Shows in a corner of the video whether the left, right, middle or a side button was pressed.</translation>
-    </message>
-    <message>
-        <source>不显示按键</source>
-        <translation>No keys</translation>
-    </message>
-    <message>
-        <source>仅快捷键</source>
-        <translation>Shortcuts only</translation>
-    </message>
-    <message>
-        <source>全部按键</source>
-        <translation>All keys</translation>
-    </message>
-    <message>
-        <source>打的字也会录进视频，包括密码；输入密码前请先暂停。</source>
-        <translation>Typing is recorded too, passwords included. Pause before typing a password.</translation>
-    </message>
-    <message>
-        <source>在视频角落显示 Ctrl、Alt、Win 组合键和 Esc、Enter、F1 等功能键，打的字不显示。</source>
-        <translation>Shows Ctrl, Alt and Win combinations and keys like Esc, Enter and F1 in a corner of the video. Typing is not shown.</translation>
-    </message>
-    <message>
-        <source>可在视频角落显示按下的键；推荐“仅快捷键”，不会录下打的字。</source>
-        <translation>Can show the keys pressed in a corner of the video. &quot;Shortcuts only&quot; is recommended: it never records typing.</translation>
-    </message>
-    <message>
-        <source>正在显示全部按键：打的字会录进视频，输入密码前请先暂停。</source>
-        <translation>Showing all keys: typing is recorded. Pause before typing a password.</translation>
+        <source>从本地安装增强识别包…</source>
+        <translation>Install a local recognition package…</translation>
     </message>
 </context>
 <context>
-    <name>ws::capture::Recorder</name>
+    <name>ws::FolderSizes</name>
     <message>
-        <source>无法启用点击高亮，请关闭该选项后重试。</source>
-        <translation>Could not enable click highlights. Turn off this option and try again.</translation>
+        <source>计算中…</source>
+        <translation>Calculating…</translation>
     </message>
     <message>
-        <source>准备录屏</source>
-        <translation>Ready to record</translation>
+        <source>≈ %1</source>
+        <translation>≈ %1</translation>
     </message>
     <message>
-        <source>%1 秒后开始</source>
-        <translation>Starting in %1 seconds</translation>
-    </message>
-    <message>
-        <source>正在准备录制…</source>
-        <translation>Preparing to record…</translation>
-    </message>
-    <message>
-        <source>正在录制</source>
-        <translation>Recording</translation>
-    </message>
-    <message>
-        <source>已暂停</source>
-        <translation>Paused</translation>
-    </message>
-    <message>
-        <source>正在完成保存…</source>
-        <translation>Finishing the file…</translation>
-    </message>
-    <message>
-        <source>录屏已保存</source>
-        <translation>Recording saved</translation>
-    </message>
-    <message>
-        <source>录屏未完成</source>
-        <translation>Recording incomplete</translation>
-    </message>
-    <message>
-        <source>%1 × %2 · 30 帧/秒 · MP4</source>
-        <translation>%1 × %2 · 30 fps · MP4</translation>
-    </message>
-    <message>
-        <source>请选择完整的录屏保存文件夹路径。</source>
-        <translation>Choose an absolute path for the recording folder.</translation>
-    </message>
-    <message>
-        <source>无法写入 %1，请选择其他保存文件夹。</source>
-        <translation>Cannot write to %1. Choose another save folder.</translation>
-    </message>
-    <message>
-        <source>选择录屏保存文件夹</source>
-        <translation>Choose recording folder</translation>
-    </message>
-    <message>
-        <source>编码中</source>
-        <translation>Encoding</translation>
-    </message>
-    <message>
-        <source>%1 × %2 · %3 帧/秒 · MP4</source>
-        <translation>%1 × %2 · %3 fps · MP4</translation>
-    </message>
-    <message>
-        <source>正在生成 GIF…</source>
-        <translation>Creating GIF…</translation>
-    </message>
-    <message>
-        <source>正在生成 GIF… %1%</source>
-        <translation>Creating GIF… %1%</translation>
-    </message>
-    <message>
-        <source>%1 × %2 · %3 帧/秒 · GIF</source>
-        <translation>%1 × %2 · %3 fps · GIF</translation>
-    </message>
-    <message>
-        <source>%1
-已保留原始视频：%2</source>
-        <translation>%1
-Original video kept at: %2</translation>
-    </message>
-    <message>
-        <source>空格</source>
-        <translation>Space</translation>
-    </message>
-    <message>
-        <source>左键</source>
-        <translation>Left click</translation>
-    </message>
-    <message>
-        <source>右键</source>
-        <translation>Right click</translation>
-    </message>
-    <message>
-        <source>中键</source>
-        <translation>Middle click</translation>
-    </message>
-    <message>
-        <source>后退键</source>
-        <translation>Back button</translation>
-    </message>
-    <message>
-        <source>前进键</source>
-        <translation>Forward button</translation>
-    </message>
-    <message>
-        <source>无法显示按键，请选“不显示按键”后重试。</source>
-        <translation>Could not show the keys. Choose &quot;No keys&quot; and try again.</translation>
-    </message>
-    <message>
-        <source>无法显示鼠标按键，请关闭该选项后重试。</source>
-        <translation>Could not show the mouse buttons. Turn off this option and try again.</translation>
+        <source>未知</source>
+        <translation>Unknown</translation>
     </message>
 </context>
 <context>
-    <name>AppearancePreview</name>
+    <name>DropPieHelper</name>
     <message>
-        <source>界面大小效果预览</source>
-        <translation>Interface size preview</translation>
+        <source>收藏圆盘未启动</source>
+        <translation>Favorites pie could not start</translation>
     </message>
     <message>
-        <source>搜索文件、文件夹…</source>
-        <translation>Search files and folders…</translation>
+        <source>无法创建圆盘的临时配置，请检查临时文件夹。</source>
+        <translation>Could not create temporary settings for the favorites pie. Check your temporary folder.</translation>
     </message>
     <message>
-        <source>项目资料</source>
-        <translation>Project files</translation>
-    </message>
-    <message>
-        <source>文件夹 · 效果预览</source>
-        <translation>Folder · Preview</translation>
+        <source>无法启动普通权限的圆盘进程。请确认资源管理器正在运行，再关闭并重新开启收藏圆盘。</source>
+        <translation>Could not start the favorites pie with normal permissions. Make sure File Explorer is running, then turn the favorites pie off and on again.</translation>
     </message>
 </context>
 <context>
-    <name>ws::PanelColumns</name>
+    <name>ws::SwitchPlugin</name>
     <message>
-        <source>名称</source>
-        <translation>Name</translation>
+        <source>系统开关插件暂不可用，可打开 Windows 设置</source>
+        <translation>System switches plugin unavailable. Open Windows Settings instead.</translation>
+    </message>
+</context>
+<context>
+    <name>OnboardingWindow</name>
+    <message><source>文件名索引自动保存并更新，无需每次重新建立。</source><translation>Your filename index is saved and kept up to date automatically.</translation></message>
+    <message><source>选择需要的功能，确认后生效。</source><translation>Choose what you need. Changes apply when you finish.</translation></message>
+    <message><source>文件内容搜索</source><translation>File content search</translation></message>
+    <message><source>除了文件名，也能搜索文档里的文字。</source><translation>Search the text inside documents as well as filenames.</translation></message>
+    <message><source>首次在后台建立索引，会占用 CPU 和磁盘；索引仅保存在本机，之后更新变化的文件。</source><translation>The first background scan uses CPU and disk. The index stays on this PC; later scans update changed files.</translation></message>
+    <message><source>暂不开启也能使用文件名搜索，或在“内容”页手动搜索。</source><translation>When off, search filenames or search Contents manually.</translation></message>
+    <message><source>连续轻按两次同一侧的按键，即可呼出搜索框。</source><translation>Tap the same left or right modifier twice to open search.</translation></message>
+    <message><source>在本机保存复制过的文字、图片和文件，方便再次粘贴。</source><translation>Keep copied text, images and file references on this PC to paste again.</translation></message>
+    <message><source>默认最多保留 300 条、30 天，可随时清理。</source><translation>Keep up to 300 entries for 30 days by default. Clear them anytime.</translation></message>
+    <message><source>框选截图、标注和贴图。首次开启需下载组件，并确认权限。</source><translation>Select, annotate and pin screenshots. First use downloads a component and asks for permission.</translation></message>
+    <message><source>录制快捷键后即可使用；此处试用仅检测按键。</source><translation>Record a shortcut to use capture. This test only checks the keys.</translation></message>
+    <message><source>默认：文件名搜索 · 双击 Ctrl</source><translation>Defaults: filename search · double-tap Ctrl</translation></message>
+    <message><source>搜索与打开方式</source><translation>Search and activation</translation></message>
+    <message><source>剪贴板与截图</source><translation>Clipboard and screen capture</translation></message>
+    <message><source>第 %1 页，共 2 页</source><translation>Step %1 of 2</translation></message>
+    <message><source>先选择索引和打开方式，下一页设置剪贴板与截图。</source><translation>Choose indexing and activation first. Clipboard and capture are on the next page.</translation></message>
+    <message><source>按需开启；最后确认后，所选功能才会生效。之后随时可以在设置中调整。</source><translation>Turn these on if you need them. All choices take effect after final confirmation and can be changed anytime in Settings.</translation></message>
+    <message><source>上一步</source><translation>Back</translation></message>
+    <message><source>下一步</source><translation>Next</translation></message>
+    <message><source>设置已保存，之后可随时调整。</source><translation>Settings saved. You can change them anytime.</translation></message>
+    <message><source>欢迎使用 Win顺</source><translation>Welcome to WinShun</translation></message>
+    <message><source>Win顺 · 首次设置</source><translation>WinShun · First-time setup</translation></message>
+    <message><source>先选好，再开始</source><translation>A few choices before you start</translation></message>
+    <message><source>四项设置，一次说清。确认后生效，之后随时可以在设置中调整。</source><translation>Four choices, explained upfront. Apply them when ready; you can change them in Settings anytime.</translation></message>
+    <message><source>搜索与索引</source><translation>Search and indexing</translation></message>
+    <message><source>文件名索引会保存，下次启动继续使用，并跟踪文件变化。首次建立索引需要一点时间；搜索范围可在设置中调整。</source><translation>The filename index is saved, reused on the next launch, and kept up to date. Building it takes a little time initially. Adjust the search locations in Settings.</translation></message>
+    <message><source>同时建立文件内容索引</source><translation>Index file contents too</translation></message>
+    <message><source>确认后在后台读取所选范围内的受支持文件，首次会占用一些 CPU 和磁盘；索引保存在本机，以后主要更新变化的文件。</source><translation>After confirmation, supported files in your search locations are read in the background. The first pass uses some CPU and disk. The index stays on this PC; later work mainly updates changed files.</translation></message>
+    <message><source>当前只建立文件名索引；仍可切到“内容”手动搜索。稍后可在“设置 → 文件内容搜索”中开启。</source><translation>Only filenames are indexed for now. You can still search Contents manually, or enable indexing later in Settings → File content search.</translation></message>
+    <message><source>打开 Win顺</source><translation>Open WinShun</translation></message>
+    <message><source>双击 Ctrl</source><translation>Double-tap Ctrl</translation></message>
+    <message><source>双击 Alt</source><translation>Double-tap Alt</translation></message>
+    <message><source>双击 Shift</source><translation>Double-tap Shift</translation></message>
+    <message><source>自定义快捷键</source><translation>Custom shortcut</translation></message>
+    <message><source>试试按键</source><translation>Try the keys</translation></message>
+    <message><source>双击是连续轻按两次同一侧的按键。可先在此窗口试用，确认后再全局生效。</source><translation>Tap the same left or right modifier twice. Try it in this window first; it works globally after confirmation.</translation></message>
+    <message><source>剪贴板历史</source><translation>Clipboard history</translation></message>
+    <message><source>开启后，将复制的文字、图片和文件记录保存在本机。默认保留最近 300 条、30 天，可在设置中清理和调整。</source><translation>Save copied text, images, and file references on this PC. By default, keep up to 300 entries for 30 days. Clear or adjust the history in Settings.</translation></message>
+    <message><source>用 Win+V 打开，替代 Windows 剪贴板历史</source><translation>Open with Win+V, replacing Windows clipboard history</translation></message>
+    <message><source>用 Win+V 打开剪贴板历史</source><translation>Open clipboard history with Win+V</translation></message>
+    <message><source>截图</source><translation>Screen capture</translation></message>
+    <message><source>框选、标注、贴图。首次开启需要下载截图组件；确认后显示下载进度，并由你确认权限。</source><translation>Select an area, annotate, or pin an image. The capture component must be downloaded the first time. After confirmation, follow the progress and approve its permissions.</translation></message>
+    <message><source>试用截图快捷键</source><translation>Try the capture shortcut</translation></message>
+    <message><source>请录制截图快捷键。此处仅测试按键识别；组件启用后即可截图。</source><translation>Record a capture shortcut. This test checks the keys; capturing becomes available once the component is enabled.</translation></message>
+    <message><source>搜索已准备好，截图也可稍后安装。</source><translation>Search is ready. You can install capture later.</translation></message>
+    <message><source>稍后设置：先使用文件名搜索和双击 Ctrl。</source><translation>Set up later to start with filename search and double-tap Ctrl.</translation></message>
+    <message><source>重试</source><translation>Retry</translation></message>
+    <message><source>稍后安装</source><translation>Install later</translation></message>
+    <message><source>稍后设置</source><translation>Set up later</translation></message>
+    <message><source>开始使用</source><translation>Get started</translation></message>
+</context>
+<context>
+    <name>ws::Onboarding</name>
+    <message><source>截图组件暂时无法使用，请在“设置 → 插件”中检查或重新安装。</source><translation>The capture component is unavailable. Check or reinstall it in Settings → Plugins.</translation></message>
+    <message><source>请选择打开 Win顺 的方式。</source><translation>Choose how to open WinShun.</translation></message>
+    <message><source>打开 Win顺 的快捷键无效或已被占用，请换一个。</source><translation>The shortcut to open WinShun is invalid or already in use. Choose another.</translation></message>
+    <message><source>请为截图录制一个可用的快捷键。</source><translation>Record an available shortcut for capture.</translation></message>
+    <message><source>搜索和截图需要使用不同的快捷键。</source><translation>Use different shortcuts for search and capture.</translation></message>
+    <message><source>Win+V 已用于剪贴板历史，请换一个快捷键。</source><translation>Win+V is assigned to clipboard history. Choose another shortcut.</translation></message>
+    <message><source>无法保存设置，请检查配置目录是否可写后重试。你的选择仍保留在此页面。</source><translation>Could not save settings. Check that the configuration folder is writable, then try again. Your choices are still on this page.</translation></message>
+    <message><source>正在准备 Win顺…</source><translation>Preparing WinShun…</translation></message>
+    <message><source>请先录制快捷键。</source><translation>Record a shortcut first.</translation></message>
+    <message><source>现在按下选定的按键试试。Esc 取消；仅在此窗口内测试。</source><translation>Press your chosen keys now. Esc cancels. This test only works in this window.</translation></message>
+    <message><source>识别成功，开始使用后即可生效。</source><translation>Keys recognized. They will work after you get started.</translation></message>
+    <message><source>请确认截图组件所需的权限。</source><translation>Review the capture component's permissions.</translation></message>
+    <message><source>无法创建截图配置目录。可稍后在“设置 → 插件”中安装。</source><translation>Could not create the capture configuration folder. Install later in Settings → Plugins.</translation></message>
+    <message><source>无法保存截图快捷键。可稍后在“设置 → 插件”中重试。</source><translation>Could not save the capture shortcut. Try again later in Settings → Plugins.</translation></message>
+    <message><source>正在准备截图组件…</source><translation>Preparing screen capture…</translation></message>
+    <message><source>截图已启用，按 %1 即可框选、标注或贴图。</source><translation>Capture is enabled. Press %1 to select, annotate, or pin an image.</translation></message>
+    <message><source>正在启动截图组件…</source><translation>Starting screen capture…</translation></message>
+    <message><source>正在获取截图组件信息…</source><translation>Fetching capture component details…</translation></message>
+    <message><source>暂时找不到截图组件，请稍后重试。</source><translation>The capture component could not be found. Try again later.</translation></message>
+    <message><source>此截图组件需要 Win顺 %1 或更新版本。可稍后在插件库中安装。</source><translation>This capture component requires WinShun %1 or newer. Install it later from the plugin library.</translation></message>
+    <message><source>正在下载截图组件… %1%</source><translation>Downloading screen capture… %1%</translation></message>
+    <message><source>正在安装截图组件…</source><translation>Installing screen capture…</translation></message>
+    <message><source>截图尚未启用。可以重试，或稍后在“设置 → 插件”中开启。</source><translation>Capture is not enabled yet. Retry, or enable it later in Settings → Plugins.</translation></message>
+</context>
+<context>
+    <name>ContentLinesView</name>
+    <message>
+        <source>没有可显示的内容，请检查筛选条件或读取提示</source>
+        <translation>Nothing to display. Check the filter or reading status.</translation>
+    </message>
+    <message>
+        <source>选择左侧文件查看详情</source>
+        <translation>Select a file to view its details</translation>
+    </message>
+</context>
+<context>
+    <name>ContentMatchesView</name>
+    <message>
+        <source>在匹配中筛选</source>
+        <translation>Filter within hits</translation>
+    </message>
+    <message>
+        <source>区分大小写</source>
+        <translation>Match case</translation>
+    </message>
+    <message>
+        <source>词</source>
+        <translation>ab</translation>
+    </message>
+    <message>
+        <source>全词匹配</source>
+        <translation>Whole word</translation>
+    </message>
+    <message>
+        <source>正则表达式</source>
+        <translation>Regular expression</translation>
+    </message>
+    <message>
+        <source>全部工作表</source>
+        <translation>All sheets</translation>
+    </message>
+    <message>
+        <source>上下文 %1</source>
+        <translation>Context %1</translation>
+    </message>
+    <message>
+        <source>调整上下文行数，当前 %1 行</source>
+        <translation>Change context lines, currently %1</translation>
+    </message>
+    <message>
+        <source>上一处匹配，Shift+F3</source>
+        <translation>Previous match, Shift+F3</translation>
+    </message>
+    <message>
+        <source>下一处匹配，F3</source>
+        <translation>Next match, F3</translation>
+    </message>
+    <message>
+        <source>复制文本</source>
+        <translation>Copy text</translation>
+    </message>
+    <message>
+        <source>复制匹配</source>
+        <translation>Copy hits</translation>
+    </message>
+    <message>
+        <source>刷新</source>
+        <translation>Refresh</translation>
+    </message>
+</context>
+<context>
+    <name>ContentPaneView</name>
+    <message>
+        <source>本次内容搜索</source>
+        <translation>This content search</translation>
+    </message>
+    <message>
+        <source>内容详情</source>
+        <translation>Content details</translation>
+    </message>
+    <message>
+        <source>打开</source>
+        <translation>Open</translation>
+    </message>
+    <message>
+        <source>打开当前文件</source>
+        <translation>Open current file</translation>
+    </message>
+    <message>
+        <source>返回列表</source>
+        <translation>Back to list</translation>
+    </message>
+    <message>
+        <source>收起内容详情</source>
+        <translation>Hide content details</translation>
+    </message>
+    <message>
+        <source>摘要</source>
+        <translation>Summary</translation>
+    </message>
+    <message>
+        <source>匹配</source>
+        <translation>Hits</translation>
+    </message>
+    <message>
+        <source>文本</source>
+        <translation>Text</translation>
+    </message>
+    <message>
+        <source>预览</source>
+        <translation>Preview</translation>
+    </message>
+    <message>
+        <source>报告</source>
+        <translation>Report</translation>
+    </message>
+</context>
+<context>
+    <name>ContentPreviewView</name>
+    <message>
+        <source>选择文件查看原始外观</source>
+        <translation>Select a file to preview its appearance</translation>
+    </message>
+</context>
+<context>
+    <name>ContentReportView</name>
+    <message>
+        <source>按当前搜索生成报告快照，完成后可复制、打印或保存。完整搜索会继续读取其余候选文件。</source>
+        <translation>Create a report snapshot to copy, print or save. A full search also reads the remaining candidate files.</translation>
+    </message>
+    <message>
+        <source>当前结果</source>
+        <translation>Current results</translation>
+    </message>
+    <message>
+        <source>所选文件（未多选时为当前文件）</source>
+        <translation>Selected files (current file if none selected)</translation>
+    </message>
+    <message>
+        <source>完整搜索</source>
+        <translation>Full search</translation>
+    </message>
+    <message>
+        <source>报告范围</source>
+        <translation>Report scope</translation>
+    </message>
+    <message>
+        <source>文件列表</source>
+        <translation>File list</translation>
+    </message>
+    <message>
+        <source>每处匹配</source>
+        <translation>Every match</translation>
+    </message>
+    <message>
+        <source>包含上下文</source>
+        <translation>Include context</translation>
+    </message>
+    <message>
+        <source>取消</source>
+        <translation>Cancel</translation>
+    </message>
+    <message>
+        <source>生成报告</source>
+        <translation>Generate report</translation>
+    </message>
+    <message>
+        <source>文本 (.txt)</source>
+        <translation>Text (.txt)</translation>
+    </message>
+    <message>
+        <source>导出格式</source>
+        <translation>Export format</translation>
+    </message>
+    <message>
+        <source>复制</source>
+        <translation>Copy</translation>
+    </message>
+    <message>
+        <source>打印…</source>
+        <translation>Print…</translation>
+    </message>
+    <message>
+        <source>保存…</source>
+        <translation>Save…</translation>
+    </message>
+</context>
+<context>
+    <name>ContentSummaryView</name>
+    <message>
+        <source>停止统计</source>
+        <translation>Stop counting</translation>
+    </message>
+    <message>
+        <source>统计全部匹配</source>
+        <translation>Count all matches</translation>
+    </message>
+</context>
+<context>
+    <name>ws::ContentPane</name>
+    <message>
+        <source>未开启</source>
+        <translation>Off</translation>
+    </message>
+    <message>
+        <source>分布仅展示部分条目，完整数据见报告。</source>
+        <translation>Only some distribution entries are shown. See the report for the full data.</translation>
+    </message>
+    <message>
+        <source>文件已移动或删除</source>
+        <translation>The file has been moved or deleted</translation>
+    </message>
+    <message>
+        <source>请选择一个文件</source>
+        <translation>Select a file</translation>
+    </message>
+    <message>
+        <source>此文件没有可读取的文本</source>
+        <translation>This file has no readable text</translation>
+    </message>
+    <message>
+        <source>文件超过当前读取上限</source>
+        <translation>The file exceeds the current reading limit</translation>
+    </message>
+    <message>
+        <source>文件仅保存在云端，请先下载到本机</source>
+        <translation>This file is online only. Download it first.</translation>
+    </message>
+    <message>
+        <source>无法读取文件，可能被占用、没有权限或格式不受支持</source>
+        <translation>Cannot read the file. It may be locked, access may be denied, or its format may be unsupported.</translation>
+    </message>
+    <message>
+        <source>第 %1 页</source>
+        <translation>Page %1</translation>
+    </message>
+    <message>
+        <source>第 %1 张幻灯片</source>
+        <translation>Slide %1</translation>
+    </message>
+    <message>
+        <source>%1 · 第 %2 行</source>
+        <translation>%1 · Row %2</translation>
+    </message>
+    <message>
+        <source>第 %1 行</source>
+        <translation>Line %1</translation>
+    </message>
+    <message>
+        <source>无法读取文件属性</source>
+        <translation>Cannot read the file attributes</translation>
+    </message>
+    <message>
+        <source>文件在读取时发生变化，请刷新重试</source>
+        <translation>The file changed while being read. Refresh to try again.</translation>
+    </message>
+    <message>
+        <source>此文件的预览处理程序不可用，可查看文本或打开文件</source>
+        <translation>The preview handler is unavailable. View the text or open the file.</translation>
+    </message>
+    <message>
+        <source>当前命中文件：%1
+已处理候选：%2 / %3（含索引排除）
+状态：%4
+内容索引：%5</source>
+        <translation>Current matching files: %1
+Candidates processed: %2 / %3 (including index exclusions)
+Status: %4
+Content index: %5</translation>
+    </message>
+    <message>
+        <source>正在搜索</source>
+        <translation>Searching</translation>
+    </message>
+    <message>
+        <source>当前搜索已结束</source>
+        <translation>Current search finished</translation>
+    </message>
+    <message>
+        <source>当前结果尚不完整</source>
+        <translation>Current results are incomplete</translation>
+    </message>
+    <message>
+        <source>正在更新</source>
+        <translation>Updating</translation>
+    </message>
+    <message>
+        <source>以文件版本为准</source>
+        <translation>Checked against the file version</translation>
+    </message>
+    <message>
+        <source>超过大小上限：%1</source>
+        <translation>Over the size limit: %1</translation>
+    </message>
+    <message>
+        <source>尚未搜索内容：%1</source>
+        <translation>Contents not searched: %1</translation>
+    </message>
+    <message>
+        <source>尚未索引的远程文件：%1</source>
+        <translation>Remote files not indexed: %1</translation>
+    </message>
+    <message>
+        <source>读取失败：%1</source>
+        <translation>Read failures: %1</translation>
+    </message>
+    <message>
+        <source>仅有部分提取文本：%1</source>
+        <translation>Partially extracted documents: %1</translation>
+    </message>
+    <message>
+        <source>由内容索引排除：%1</source>
+        <translation>Ruled out by the content index: %1</translation>
+    </message>
+    <message>
+        <source>搜索耗时：%1 ms</source>
+        <translation>Search time: %1 ms</translation>
+    </message>
+    <message>
+        <source>全部匹配次数按需统计；结果受上限或读取限制时会标明。</source>
+        <translation>All-match counts are calculated on request. Search and reading limits are shown explicitly.</translation>
+    </message>
+    <message>
+        <source>无扩展名</source>
+        <translation>No extension</translation>
+    </message>
+    <message>
+        <source>类型 · 命中文件</source>
+        <translation>Type · Matching files</translation>
+    </message>
+    <message>
+        <source>文件夹 · 命中文件</source>
+        <translation>Folder · Matching files</translation>
+    </message>
+    <message>
+        <source>筛选表达式无效：%1</source>
+        <translation>Invalid filter expression: %1</translation>
+    </message>
+    <message>
+        <source>仅显示部分内容或匹配，计数不是全文总数</source>
+        <translation>Only some content or matches are shown. Counts are not whole-file totals.</translation>
+    </message>
+    <message>
+        <source>来自当前版本的内容索引</source>
+        <translation>From the content index for the current file version</translation>
+    </message>
+    <message>
+        <source>正在读取与匹配…</source>
+        <translation>Reading and matching…</translation>
+    </message>
+    <message>
+        <source>选择文件查看匹配和文本</source>
+        <translation>Select a file to view hits and text</translation>
+    </message>
+    <message>
+        <source>显示 %1 / %2 处匹配 · 当前 %3</source>
+        <translation>Showing %1 / %2 matches · Current %3</translation>
+    </message>
+    <message>
+        <source>完整搜索：已处理 %1 / %2 个候选</source>
+        <translation>Full search: %1 / %2 candidates processed</translation>
+    </message>
+    <message>
+        <source>正在完整搜索，可随时取消…</source>
+        <translation>Running a full search. You can cancel at any time…</translation>
+    </message>
+    <message>
+        <source>已取消，未生成报告</source>
+        <translation>Cancelled; no report generated</translation>
+    </message>
+    <message>
+        <source>正在统计全部匹配：0 / %1 个文件</source>
+        <translation>Counting all matches: 0 / %1 files</translation>
+    </message>
+    <message>
+        <source>Win顺 · 内容搜索报告</source>
+        <translation>WinShun · Content search report</translation>
+    </message>
+    <message>
+        <source>搜索：%1</source>
+        <translation>Search: %1</translation>
+    </message>
+    <message>
+        <source>范围：完整搜索（最多 20,000 个命中文件）</source>
+        <translation>Scope: full search (up to 20,000 matching files)</translation>
+    </message>
+    <message>
+        <source>范围：生成时的结果／所选文件快照</source>
+        <translation>Scope: snapshot of results or selected files at generation time</translation>
+    </message>
+    <message>
+        <source>生成时间：%1</source>
+        <translation>Generated: %1</translation>
+    </message>
+    <message>
+        <source>搜索跳过：大小上限 %1；无法读取 %2；远程未索引 %3；延后读取 %4</source>
+        <translation>Search skipped: size limit %1; unreadable %2; remote unindexed %3; deferred %4</translation>
+    </message>
+    <message>
+        <source>文件列表</source>
+        <translation>File list</translation>
+    </message>
+    <message>
+        <source>文件</source>
+        <translation>File</translation>
     </message>
     <message>
         <source>路径</source>
         <translation>Path</translation>
     </message>
     <message>
-        <source>大小</source>
-        <translation>Size</translation>
+        <source>匹配次数</source>
+        <translation>Matches</translation>
     </message>
     <message>
-        <source>修改时间</source>
-        <translation>Modified</translation>
+        <source>状态</source>
+        <translation>Status</translation>
     </message>
     <message>
-        <source>类型</source>
-        <translation>Type</translation>
+        <source>逐处匹配</source>
+        <translation>Individual matches</translation>
     </message>
     <message>
-        <source>创建时间</source>
-        <translation>Created</translation>
+        <source>位置</source>
+        <translation>Location</translation>
     </message>
     <message>
-        <source>所在文件夹</source>
-        <translation>Folder</translation>
+        <source>关键词</source>
+        <translation>Term</translation>
     </message>
     <message>
-        <source>来源</source>
-        <translation>Source</translation>
+        <source>文本</source>
+        <translation>Text</translation>
+    </message>
+    <message>
+        <source>上下文</source>
+        <translation>Context</translation>
+    </message>
+    <message>
+        <source>部分内容</source>
+        <translation>Partial content</translation>
+    </message>
+    <message>
+        <source>已读取</source>
+        <translation>Read</translation>
+    </message>
+    <message>
+        <source>正在统计全部匹配：%1 / %2 个文件</source>
+        <translation>Counting all matches: %1 / %2 files</translation>
+    </message>
+    <message>
+        <source>已读取／尝试：%1 个文件；匹配：%2 处；读取失败：%3；部分内容：%4</source>
+        <translation>Files read or attempted: %1; matches: %2; read failures: %3; partial content: %4</translation>
+    </message>
+    <message>
+        <source>此报告包含未完成或未读取的内容，数字不是完整全文总数。</source>
+        <translation>This report has incomplete or unread content. Counts are not complete full-text totals.</translation>
+    </message>
+    <message>
+        <source>本报告范围内的内容已读取完成。</source>
+        <translation>Reading is complete within this report’s scope.</translation>
+    </message>
+    <message>
+        <source>安全上限：100,000 条匹配、32 MiB 正文，每个字段 32,767 字符；超出部分未写入。</source>
+        <translation>Limits: 100,000 matches, 32 MiB of text and 32,767 characters per field. Content beyond these limits was omitted.</translation>
+    </message>
+    <message>
+        <source>搜索时无法读取</source>
+        <translation>Unreadable during search</translation>
+    </message>
+    <message>
+        <source>超过大小上限</source>
+        <translation>Over the size limit</translation>
+    </message>
+    <message>
+        <source>匹配分布</source>
+        <translation>Match distribution</translation>
+    </message>
+    <message>
+        <source>类型／文件夹</source>
+        <translation>Type / Folder</translation>
+    </message>
+    <message>
+        <source>报告已就绪</source>
+        <translation>Report ready</translation>
+    </message>
+    <message>
+        <source>完整搜索 · 匹配次数</source>
+        <translation>Full search · Matches</translation>
+    </message>
+    <message>
+        <source>报告范围 · 匹配次数</source>
+        <translation>Report scope · Matches</translation>
+    </message>
+    <message>
+        <source>保存搜索报告</source>
+        <translation>Save search report</translation>
+    </message>
+    <message>
+        <source>搜索报告</source>
+        <translation>Search report</translation>
+    </message>
+    <message>
+        <source>正在保存报告…</source>
+        <translation>Saving report…</translation>
+    </message>
+    <message>
+        <source>已保存：%1</source>
+        <translation>Saved: %1</translation>
+    </message>
+    <message>
+        <source>保存失败，原文件已保留</source>
+        <translation>Saving failed. The original file was preserved.</translation>
+    </message>
+    <message>
+        <source>请选择打印机…</source>
+        <translation>Choose a printer…</translation>
+    </message>
+    <message>
+        <source>报告已发送到打印机</source>
+        <translation>Report sent to the printer</translation>
+    </message>
+    <message>
+        <source>已取消打印</source>
+        <translation>Printing cancelled</translation>
+    </message>
+    <message>
+        <source>打印失败，请检查打印机后重试</source>
+        <translation>Printing failed. Check the printer and try again.</translation>
+    </message>
+    <message>
+        <source>正在加载文件预览…</source>
+        <translation>Loading file preview…</translation>
+    </message>
+    <message>
+        <source>此文件没有可用的预览处理程序，可查看文本或打开文件</source>
+        <translation>No preview handler is available. View the text or open the file.</translation>
     </message>
 </context>
 <context>
-    <name>GifExport</name>
+    <name>FolderMenuWindow</name>
     <message>
-        <source>文件已存在，请选择其他保存名称。</source>
-        <translation>The file already exists. Choose another name.</translation>
+        <source>返回</source>
+        <translation>Back</translation>
     </message>
-    <message>
-        <source>无法创建 GIF 文件，请检查保存位置和剩余空间。</source>
-        <translation>Could not create the GIF. Check the folder and available space.</translation>
-    </message>
-    <message>
-        <source>无法生成 GIF（错误 %1）。</source>
-        <translation>Could not create the GIF (error %1).</translation>
-    </message>
-    <message>
-        <source>无法保存 GIF，请检查文件是否已存在或磁盘是否已满。</source>
-        <translation>Could not save the GIF. Check whether the file exists or the disk is full.</translation>
-    </message>
-</context>
-<context>
-    <name>FileViewSwitch</name>
-    <message><source>缩略图大小</source><translation>Thumbnail size</translation></message>
-    <message><source>列表</source><translation>List</translation></message>
-    <message><source>大图</source><translation>Large icons</translation></message>
-    <message><source>Alt+滚轮</source><translation>Alt+wheel</translation></message>
-</context>
-<context>
-    <name>ResultTile</name>
-    <message><source>离线</source><translation>Offline</translation></message>
-    <message><source>已不存在</source><translation>Missing</translation></message>
-</context>
-<context>
-    <name>QObject</name>
-    <message><source>“|”两侧都需要搜索条件</source><translation>Enter a search condition on both sides of “|”</translation></message>
-    <message><source>搜索条件过多</source><translation>Too many search conditions</translation></message>
-    <message><source>正则表达式无效：%1</source><translation>Invalid regular expression: %1</translation></message>
-    <message><source>请输入表达式</source><translation>Enter an expression</translation></message>
 </context>
 </TS>

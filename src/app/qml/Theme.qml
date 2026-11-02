@@ -15,6 +15,9 @@ QtObject {
     // For fills under white words or marks (accentText): deep enough for
     // white to read, whatever the accent (SystemTheme.accentFill).
     readonly property color accentFill: SystemTheme.accentFill
+    // FreeType synthesizes a missing heavy face only from Bold (700).
+    // Keep the UI hierarchy when shipping the complete regular font alone.
+    readonly property int fontStrong: Font.Bold
 
     readonly property color background: dark ? "#202020" : "#F9F9F9"
     // The edge of our windows (WindowEdge.qml), rounded as DWM rounds them.
@@ -99,6 +102,7 @@ QtObject {
     readonly property color accentText: "#FFFFFF"
     readonly property color menuBackground: dark ? "#2C2C2C" : "#F9F9F9"
     readonly property color menuHover: dark ? "#3A3A3A" : "#ECECEC"
+    readonly property int menuItemHeight: 36
     readonly property color danger: dark ? "#FF99A4" : "#C42B1C" // words and glyphs
     readonly property color dangerFill: "#C42B1C" // under white words (an armed delete button)
     readonly property color success: dark ? "#6CCB5F" : "#0F7B0F" // Windows 11's status colours

@@ -3,7 +3,8 @@
     Package a release: build and deploy (build.ps1 -Deploy), then the
     installer dist\WinShun-<version>-x64-setup.exe (installer\WinShun.iss,
     Inno Setup 6.5 or later), the portable dist\WinShun-<version>-x64-portable.zip
-    (the same folder) and dist\SHA256SUMS.txt. With -Publish, also the GitHub
+    (the same folder), a complete offline setup, the shared enhanced OCR ZIP
+    and dist\SHA256SUMS.txt. With -Publish, also the GitHub
     release v<version> (gh must be logged in).
 
     The version comes from project(VERSION) in CMakeLists.txt; the release
@@ -15,17 +16,20 @@
     ./scripts/release.ps1             # setup.exe and SHA256SUMS.txt in dist\
     ./scripts/release.ps1 -Publish    # and the GitHub release
     ./scripts/release.ps1 -OutputDir F:\wsstage\release # leave other deployed copies running
+    ./scripts/release.ps1 -BuildDir F:\wsstage\build -OutputDir F:\wsstage\release
 #>
 param(
     [switch] $Publish,
     [string] $QtDir = $env:QTDIR,
     [string] $Iscc = $env:ISCC, # Inno Setup's compiler; found under the usual places otherwise
-    [string] $OutputDir # optional isolated deployment and package directory
+    [string] $OutputDir, # optional isolated deployment and package directory
+    [string] $BuildDir # optional isolated CMake binary directory
 )
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $dist = if ($OutputDir) { [IO.Path]::GetFullPath($OutputDir) } else { Join-Path $root 'dist' }
 $deployment = Join-Path $dist 'WinShun'
+$binary = if ($BuildDir) { [IO.Path]::GetFullPath($BuildDir) } else { Join-Path $root 'build\release' }
 
 $cmake = Get-Content (Join-Path $root 'CMakeLists.txt') -Raw
 if ($cmake -notmatch 'project\(WinShun\s+VERSION\s+(\d+\.\d+\.\d+)') { throw 'No project(VERSION) in CMakeLists.txt' }
@@ -53,6 +57,7 @@ if (-not $Iscc) {
 if (-not $Iscc -or -not (Test-Path $Iscc)) { throw 'Inno Setup 6.5 or later is needed (winget install JRSoftware.InnoSetup), or pass -Iscc' }
 
 $buildArgs = @{ DeployDir = $deployment }
+if ($BuildDir) { $buildArgs.BuildDir = $binary }
 if ($PSBoundParameters.ContainsKey('QtDir')) { $buildArgs.QtDir = $QtDir } # else build.ps1 looks at QTDIR itself
 & (Join-Path $PSScriptRoot 'build.ps1') @buildArgs
 
@@ -80,15 +85,55 @@ Compress-Archive -Path (Join-Path $stage 'WinShun') -DestinationPath $portable -
 Remove-Item $stage -Recurse -Force
 Write-Host "Packaged $portable"
 
+# The official plugins that are not in the setup (GitHub #138): one
+# <id>-<version>.wsplugin each from the build's library-plugins\<id> (the
+# package's files at the top of the zip, as install::inspect reads them),
+# for a release of the plugin library (LingCore/WinShun-plugins). Not part
+# of this release's assets: the library lists each on its own.
+$libraryOut = Join-Path $dist 'library-plugins'
+New-Item -ItemType Directory -Force $libraryOut | Out-Null
+foreach ($folder in Get-ChildItem (Join-Path $binary 'library-plugins') -Directory) {
+    $manifest = Get-Content (Join-Path $folder.FullName 'plugin.json') -Raw -Encoding utf8 | ConvertFrom-Json
+    if ($manifest.id -ne $folder.Name) { throw "library-plugins\$($folder.Name): its manifest says $($manifest.id)" }
+    $package = Join-Path $libraryOut "$($manifest.id)-$($manifest.version).wsplugin"
+    Remove-Item $package -ErrorAction SilentlyContinue
+    $zip = [IO.Path]::ChangeExtension($package, '.zip') # Compress-Archive will not write another extension
+    Compress-Archive -Path (Join-Path $folder.FullName '*') -DestinationPath $zip -CompressionLevel Optimal
+    Move-Item $zip $package
+    Write-Host "Packaged $package"
+}
+
+# The enhanced OCR component is shared by the clipboard and capture plugin.
+# It is an asset of the same release, with pinned per-file hashes in the app.
+$ocrManifest = Get-Content (Join-Path $root 'resources\ocr\package.json') -Raw | ConvertFrom-Json
+$ocrPackage = Join-Path $dist $ocrManifest.name
+& python -X utf8 (Join-Path $root 'tools\package_ocr.py') --build-dir $binary --output $ocrPackage
+if ($LASTEXITCODE) { throw 'Enhanced OCR packaging failed' }
+
+# A complete offline installer, using the same verified binaries. No second build.
+$offlineSetup = Join-Path $dist "WinShun-$version-x64-offline-setup.exe"
+$offlineStage = [IO.Path]::GetFullPath((Join-Path ([IO.Path]::GetTempPath()) ('WinShun-offline-'+[guid]::NewGuid().ToString('N'))))
+$tempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\') + '\'
+if (-not $offlineStage.StartsWith($tempRoot, [StringComparison]::OrdinalIgnoreCase)) { throw 'Invalid offline staging path' }
+try {
+    Copy-Item -LiteralPath $deployment -Destination $offlineStage -Recurse
+    & python -X utf8 (Join-Path $root 'tools\package_ocr.py') --build-dir $binary --output $ocrPackage --expand-to $offlineStage
+    if ($LASTEXITCODE) { throw 'Offline OCR deployment failed' }
+    & $Iscc /Q "/DAppVersion=$version" "/DSourceDir=$offlineStage" "/DOutputDir=$dist" '/DPackageSuffix=-offline' (Join-Path $root 'installer\WinShun.iss')
+    if ($LASTEXITCODE -or -not (Test-Path -LiteralPath $offlineSetup)) { throw 'Offline Inno Setup failed' }
+} finally {
+    if (Test-Path -LiteralPath $offlineStage) { Remove-Item -LiteralPath $offlineStage -Recurse -Force }
+}
+
 $sums = Join-Path $dist 'SHA256SUMS.txt'
-$lines = foreach ($file in $setup, $portable) {
+$lines = foreach ($file in $setup, $portable, $offlineSetup, $ocrPackage) {
     "$((Get-FileHash $file -Algorithm SHA256).Hash.ToLower())  $(Split-Path $file -Leaf)"
 }
 Set-Content $sums ($lines -join "`n") -Encoding ascii -NoNewline
 Get-Content $sums
 
 if ($Publish) {
-    gh release create $tag $setup $portable $sums --repo LingCore/WinShun --title "Win顺 $version" --notes-file $notes --target main
+    gh release create $tag $setup $portable $offlineSetup $ocrPackage $sums --repo LingCore/WinShun --title "Win顺 $version" --notes-file $notes --target main
     if ($LASTEXITCODE) { throw 'gh release create failed' }
     Write-Host "Published $tag"
 }

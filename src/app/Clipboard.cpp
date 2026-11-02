@@ -81,6 +81,10 @@ Clipboard::Clipboard(ClipStore* store, ClipboardWatcher* watcher, QObject* paren
         },
     });
     // The words in pictures: kept with them, found by the search.
+    connect(&m_recognizer, &TextRecognizer::idle, this, [this] {
+        if (m_refreshRecognition)
+            refreshRecognition();
+    });
     connect(&m_recognizer, &TextRecognizer::done, this, [this](qint64 id, const QString& words, bool ok) {
         if (!m_recording || m_paused || !m_store->isOpen() || !ok)
             return; // no recognizer, or it failed: read when the app starts again
@@ -254,6 +258,16 @@ void Clipboard::setListWidth(int width)
     m_listWidth = width;
     m_store->setValue(u"listWidth"_s, QString::number(width));
     emit listWidthChanged();
+}
+
+void Clipboard::setWindowHeight(int height)
+{
+    height = std::clamp(height, 0, 4320);
+    if (m_windowHeight == height)
+        return;
+    m_windowHeight = height;
+    m_store->setValue(u"windowHeight"_s, QString::number(height));
+    emit windowHeightChanged();
 }
 
 void Clipboard::setPinnedFirst(bool on)
@@ -532,6 +546,13 @@ void Clipboard::refresh()
     refreshStatus();
 }
 
+void Clipboard::refreshRecognition()
+{
+    m_refreshRecognition = !m_recognizer.refreshEngine();
+    if (!m_refreshRecognition)
+        m_backlogTimer.start(0);
+}
+
 void Clipboard::historyChanged()
 {
     refresh();
@@ -547,6 +568,7 @@ void Clipboard::loadHistoryState()
     m_previewWidth = std::max(0, m_store->value(u"previewWidth"_s).toInt());
     const int savedWidth = m_store->value(u"listWidth"_s).toInt();
     m_listWidth = savedWidth >= 360 && savedWidth <= 1600 ? savedWidth : 480;
+    m_windowHeight = std::clamp(m_store->value(u"windowHeight"_s).toInt(), 0, 4320);
     m_pinnedFirst = m_store->value(u"order"_s) == u"pinnedFirst"_s;
 }
 
@@ -557,6 +579,7 @@ void Clipboard::resumeHistory()
     emit previewOpenChanged();
     emit previewWidthChanged();
     emit listWidthChanged();
+    emit windowHeightChanged();
     emit pinnedFirstChanged();
     historyChanged();
     if (m_recording && !m_paused)
@@ -993,26 +1016,58 @@ void Clipboard::copy(int row)
 
 Clipboard::~Clipboard()
 {
+    m_sendWorker.reset();
+    m_saveWorker.reset();
     m_filePasteWorker.reset();
     QDir(m_dragFolder).removeRecursively();
 }
 
 void Clipboard::dragOut(int row)
 {
-    if (m_pasting || m_dragging || !m_window)
+    if (m_pasting || m_dragging || !m_window || !m_model.at(row))
         return;
-    const Clip* clip = m_model.at(row);
-    if (!clip || clip->kind != ClipKind::Image)
-        return;
-    const auto exported = clipfiles::images(*m_store, targets(row), m_dragFolder, tr("剪贴板图片"));
-    if (exported.error != clipfiles::Error::None) {
-        flash(exported.error == clipfiles::Error::NotImages ? tr("请只选择图片后再拖出") : tr("无法准备要拖出的图片"));
-        return;
+    const std::vector<const Clip*> clips = targets(row);
+    const bool onlyImages = std::ranges::all_of(clips, [](const Clip* c) { return c->kind == ClipKind::Image; });
+    QStringList paths;
+    bool exported = true;
+    if (onlyImages) {
+        const auto images = clipfiles::images(*m_store, clips, m_dragFolder, tr("剪贴板图片"));
+        if (images.error != clipfiles::Error::None) {
+            flash(tr("无法准备要拖出的图片"));
+            return;
+        }
+        paths = images.paths;
+    } else {
+        // Words and pictures written first, in a folder of their own under the
+        // names they make; files and folders go as they are.
+        clipfiles::Plan plan = clipfiles::plan(*m_store, clips, QLocale().language() == QLocale::English);
+        clipfiles::Plan written;
+        QStringList originals;
+        for (clipfiles::Planned& file : plan.files) {
+            if (!file.original)
+                written.files.push_back(std::move(file));
+            else if (!isLocal(file.source) || QFileInfo::exists(file.source)) // a network path: not asked (it can hang)
+                originals.append(QDir::toNativeSeparators(file.source));
+        }
+        if (!written.files.empty()) {
+            const clipfiles::Saved saved = clipfiles::save(written, m_dragFolder + u"/drag "_s + QString::number(++m_drags));
+            if (saved.failed) {
+                flash(tr("无法准备要拖出的文件"));
+                return;
+            }
+            paths = saved.paths;
+        }
+        exported = !paths.isEmpty();
+        paths += originals;
+        if (paths.isEmpty()) {
+            flash(tr("这些文件已经不存在了"));
+            return;
+        }
     }
     const auto hwnd = reinterpret_cast<HWND>(m_window->winId());
     m_dragging = true;
     emit focusNeeded(); // stop key routing so OLE receives Escape and Ctrl
-    const auto outcome = dragout::drag(exported.paths, hwnd, false);
+    const auto outcome = dragout::drag(paths, hwnd, !exported); // a shortcut to an export would break
     // OLE consumes the release; clear Qt's pressed state without pasting.
     POINT p {};
     ::GetCursorPos(&p);
@@ -1020,9 +1075,104 @@ void Clipboard::dragOut(int row)
     ::PostMessageW(hwnd, WM_LBUTTONUP, 0, MAKELPARAM(static_cast<short>(p.x), static_cast<short>(p.y)));
     m_dragging = false;
     if (outcome == dragout::Outcome::Failed)
-        flash(tr("无法拖出图片"));
+        flash(onlyImages ? tr("无法拖出图片") : tr("无法拖出这些内容"));
     else if (outcome == dragout::Outcome::Dropped)
         emit dismissRequested();
+}
+
+void Clipboard::saveAsFiles(int row, bool merged)
+{
+    if (m_saving)
+        return;
+    const std::vector<const Clip*> clips = targets(row);
+    if (clips.empty())
+        return;
+    clipfiles::Plan plan
+        = clipfiles::plan(*m_store, clips, QLocale().language() == QLocale::English, merged, separator());
+    if (plan.files.empty()) {
+        flash(tr("这些文件已经不存在了"));
+        return;
+    }
+    m_saving = true;
+    const HWND over = m_target;
+    // In front first, as for what opens (trigger): the dialog may then take
+    // the front. The window goes once the dialog has it, as when clicked away.
+    emit focusNeeded();
+    if (!m_saveWorker)
+        m_saveWorker = std::make_unique<ComWorker>();
+    m_saveWorker->post([this, over, plan] {
+        // The folder the file manager it was opened over shows (none for another program's window).
+        const QString shown = QString::fromStdWString(filemanager::frontFolder(over));
+        QMetaObject::invokeMethod(this, [this, shown, plan] {
+            const QString folder = shell::pickFolder(m_window ? reinterpret_cast<HWND>(m_window->winId()) : nullptr,
+                tr("保存到哪个文件夹"), shown.isEmpty() ? m_store->value(u"saveFolder"_s) : shown);
+            if (folder.isEmpty()) {
+                m_saving = false;
+                return;
+            }
+            m_store->setValue(u"saveFolder"_s, folder);
+            m_saveWorker->post([this, plan, folder] {
+                const clipfiles::Saved saved = clipfiles::save(plan, folder);
+                QMetaObject::invokeMethod(this, [this, saved, folder, gone = plan.missing + saved.missing] {
+                    m_saving = false;
+                    if (!saved.paths.isEmpty())
+                        shell::reveal(saved.paths);
+                    QStringList problems;
+                    if (saved.failed)
+                        problems.append(saved.paths.isEmpty()
+                                ? tr("没能保存到“%1”，那里可能不允许写入").arg(QDir::toNativeSeparators(folder))
+                                : tr("有 %Ln 个没能保存", nullptr, saved.failed));
+                    if (gone)
+                        problems.append(tr("%Ln 个文件已经不存在，没有保存", nullptr, gone));
+                    if (!problems.isEmpty())
+                        emit saveProblem(problems.join(u'\n'));
+                }, Qt::QueuedConnection);
+            });
+        }, Qt::QueuedConnection);
+    });
+}
+
+void Clipboard::sendLan(int row)
+{
+    if (!m_lanSendAvailable) {
+        emit lanSendSetupRequested(m_lanSendUpdate);
+        return;
+    }
+    if (m_sending)
+        return;
+    const auto clips = targets(row);
+    if (clips.empty())
+        return;
+    if (std::ranges::any_of(clips, [this](const Clip* c) { return c->kind == ClipKind::Image && m_store->imagePending(c->id); })) {
+        flash(tr("图片还在保存，请稍后再试"));
+        return;
+    }
+    const auto plan = clipfiles::planSend(*m_store, clips, QLocale().language() == QLocale::English, separator());
+    if (!plan.text.isEmpty()) {
+        emit lanSendRequested(plan.text, {});
+        return;
+    }
+    if (plan.attachments.files.empty() || plan.attachments.missing) {
+        flash(tr("选中的内容已不存在，无法发送"));
+        return;
+    }
+    m_sending = true;
+    flash(tr("正在准备发送内容…"));
+    const QString folder = m_dragFolder + u"/send "_s + QString::number(++m_drags);
+    if (!m_sendWorker)
+        m_sendWorker = std::make_unique<ComWorker>();
+    m_sendWorker->post([this, files = plan.attachments, folder] {
+        const auto ready = clipfiles::prepareSend(files, folder);
+        QMetaObject::invokeMethod(this, [this, ready] {
+            m_sending = false;
+            if (ready.error != clipfiles::Error::None || ready.paths.isEmpty()) {
+                flash(ready.error == clipfiles::Error::TooMany ? tr("选的文件太多了，最多一次 1000 项")
+                    : ready.error == clipfiles::Error::Missing ? tr("选中的内容已不存在，无法发送") : tr("无法准备发送内容，请重试"));
+                return;
+            }
+            emit lanSendRequested({}, ready.paths);
+        }, Qt::QueuedConnection);
+    });
 }
 
 void Clipboard::copyText(const QString& text, bool remember)
@@ -1047,9 +1197,9 @@ void Clipboard::copyText(const QString& text, bool remember)
     startPaste(std::move(write), Into::Clipboard, {}, tr("已复制 %1").arg(shown));
 }
 
-void Clipboard::copyImage(const QImage& image, bool remember, bool screenshot, QByteArray project)
+void Clipboard::copyImage(const QImage& image, bool remember, bool screenshot, QByteArray project, QString imageOrigin)
 {
-    encodeImage(image, remember, screenshot, std::move(project), true);
+    encodeImage(image, remember, screenshot, std::move(project), true, std::move(imageOrigin));
 }
 
 void Clipboard::recordImage(const QImage& image, QByteArray project)
@@ -1059,40 +1209,41 @@ void Clipboard::recordImage(const QImage& image, QByteArray project)
     encodeImage(image, true, true, std::move(project), false);
 }
 
-void Clipboard::encodeImage(const QImage& image, bool remember, bool screenshot, QByteArray project, bool toClipboard)
+void Clipboard::encodeImage(const QImage& image, bool remember, bool screenshot, QByteArray project, bool toClipboard, QString imageOrigin)
 {
     if (image.isNull())
         return;
     if (m_imageEncoder.joinable())
         m_imageEncoder.join(); // the one before, done by now
     // A whole screen takes a moment to encode: not on the GUI thread.
-    m_imageEncoder = std::jthread([this, image, remember, screenshot, project = std::move(project), toClipboard] {
+    m_imageEncoder = std::jthread([this, image, remember, screenshot, project = std::move(project), toClipboard, imageOrigin = std::move(imageOrigin)] {
         QByteArray png;
         QBuffer buffer(&png);
         buffer.open(QIODevice::WriteOnly);
         image.save(&buffer, "PNG");
         const QByteArray hash = imagePixelHash(image);
         QMetaObject::invokeMethod(this,
-            [this, png, hash, size = image.size(), remember, screenshot, project, toClipboard] {
-                storeImage(png, hash, size, remember, screenshot, project, toClipboard);
+            [this, png, hash, size = image.size(), remember, screenshot, project, toClipboard, imageOrigin] {
+                storeImage(png, hash, size, remember, screenshot, project, toClipboard, imageOrigin);
             },
             Qt::QueuedConnection);
     });
 }
 
 void Clipboard::storeImage(const QByteArray& png, const QByteArray& hash, QSize size, bool remember, bool screenshot,
-    const QByteArray& project, bool toClipboard)
+    const QByteArray& project, bool toClipboard, const QString& imageOrigin)
 {
     if (png.isEmpty())
         return;
     if (toClipboard && m_pasting) { // a paste from the window still under way: right after it
-        QTimer::singleShot(50ms, this, [this, png, hash, size, remember, screenshot, project] {
-            storeImage(png, hash, size, remember, screenshot, project, true);
+        QTimer::singleShot(50ms, this, [this, png, hash, size, remember, screenshot, project, imageOrigin] {
+            storeImage(png, hash, size, remember, screenshot, project, true, imageOrigin);
         });
         return;
     }
     ClipWrite write;
     write.imageData = png;
+    write.imageOrigin = imageOrigin;
     if (remember && m_recording && !m_paused) { // a copy like any other: in the history, on top
         ClipCapture capture;
         capture.kind = ClipKind::Image;
@@ -1447,13 +1598,21 @@ QVariantList Clipboard::menuItems(int row) const
             items.append(entry(OpenLink, tr("在浏览器中打开"), QString(), u""_s));
         else if (c.kind == ClipKind::Files || c.kind == ClipKind::Path)
             items.append(entry(Reveal, tr("打开所在位置"), QString(), u""_s));
-        else if (c.kind == ClipKind::Image)
+        else if (c.kind == ClipKind::Image && m_pictureVerbs.pin) // the screenshot plugin's
             items.append(entry(PinImage, c.animated ? tr("贴首帧到屏幕") : tr("贴到屏幕"), QString(), u"\uE718"_s));
-        if (c.kind == ClipKind::Image)
+        if (c.kind == ClipKind::Image && m_pictureVerbs.edit)
             items.append(entry(EditImage, c.animated ? tr("编辑首帧") : tr("编辑"), QString(), u"\uE70F"_s));
         if (c.kind == ClipKind::Image)
             items.append(entry(OpenImage, tr("打开图片"), QString(), u""_s));
     }
+    items.append(entry(SaveFiles, many ? tr("保存 %Ln 条为文件…", nullptr, n) : tr("保存为文件…"), QString(),
+        u"\uE74E"_s));
+    items.append(entry(SendLan, m_lanSendAvailable ? tr("用局域网发送…")
+        : m_lanSendUpdate ? tr("更新局域网传输…") : tr("启用局域网传输…"), QString(), u"\uE724"_s));
+    if (many && std::all_of(clips.begin(), clips.end(), [](const Clip* c) {
+            return c->kind == ClipKind::Text || c->kind == ClipKind::Link || c->kind == ClipKind::Path;
+        }))
+        items.append(entry(SaveMerged, tr("合并保存为一个文件…"), QString(), QString()));
     items.append(separator);
     const bool pinned = std::all_of(clips.begin(), clips.end(), [](const Clip* c) { return c->group == ClipStore::kPinned; });
     items.append(entry(Pin, pinned ? tr("取消固定") : tr("固定"), u"Ctrl+P"_s, pinned ? u""_s : u""_s));
@@ -1542,6 +1701,13 @@ void Clipboard::trigger(int row, int action)
     case RemoveAll:
         removeListed();
         break;
+    case SaveFiles:
+    case SaveMerged:
+        saveAsFiles(row, action == SaveMerged);
+        break;
+    case SendLan:
+        sendLan(row);
+        break;
     case PinImage: {
         const Clip* c = m_model.at(row);
         if (!c || c->kind != ClipKind::Image)
@@ -1550,7 +1716,7 @@ void Clipboard::trigger(int row, int action)
             flash(tr("图片还在保存，请稍后再试"));
             break;
         }
-        emit pinRequested(m_store->imagePath(c->id));
+        emit pinRequested(c->id);
         break;
     }
     case EditImage: {

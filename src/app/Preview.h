@@ -17,6 +17,10 @@
 //     cards; --english and --compact cover translation and minimum size.
 //     --backup-settings checks the real backup worker and success/failure
 //     feedback with automatic backups off; --compact uses 760x420.
+//     --plugin-recovery checks the recovery row's busy, offline and retry
+//     states; --english --compact also checks the minimum translated layout.
+//     --preview-hotkeys checks the real shortcut recorder, persistence,
+//     cancellation, clearing and conflicts; --compact covers minimum width.
 //     The whole settings window (the real SettingsWindow.qml over a real
 //     SettingsEditor, WindowFrame and Updater on a temporary profile): every
 //     page and every tab of it as <folder>\pNN-tT.png, the window as tall
@@ -33,30 +37,53 @@
 //     --file-metadata --file-gallery checks the real Main.qml gallery with
 //     generated temporary PNGs, real name searches and shell thumbnails,
 //     keyboard navigation, selection, mode switching, zoom and minimum width.
+//     --drop-pie-check checks the ordinary-user helper's real OLE registration,
+//     favorite refresh and shutdown on a temporary profile, with no file drag.
+//     It also exercises configurable preview keys through Main.qml and the
+//     real FilePreview window, including held Space and Shift+Space input.
+//     --preview-hotkeys runs this production key/preview check on its own.
+//     --search-navigation also checks the production result menus in the
+//     search box and panel: arrows, Ctrl+O, caret/selection, IME, and Enter.
+//     --search-workload checks automatic vs explicit content searches over
+//     real temporary OOXML/text files, records app/extractor CPU time, and
+//     checks the continuation in the box, panel and gallery without busy waits.
+//     --content-pane checks all five detail tabs with real text/spreadsheet
+//     fixtures, selection races, filtering, report scopes and native preview.
 //
 //   WinShun.exe --preview-ai-cards <folder> [--dark] [--scale 1.5]
 //     The screens for AI changing settings (SettingsConfirm.qml, SettingsNotice.qml)
 //     over made-up changes: confirm.png, confirm-always.png, notice.png, notice-undone.png.
 //
-//   WinShun.exe --preview-capture-tools <folder> [--scale 1.5] [--dark] [--renderer d3d11]
-//     The real annotation model, canvas, handles and style panel over a
-//     synthetic document. --preview-results also accepts --file-metadata.
+//   The screen capture's previews are the plugin's (WinShunCapture.exe,
+//   src/capture-plugin/CapturePreview.h).
 //
-//   WinShun.exe --preview-long-capture <folder> --renderer d3d11 [--scale 1.5]
-//     [--up|--both|--auto|--interactive] [--copy|--save|--pin|--cancel] [--edge] [--english] [--dark]
-//     Generated scrolling content through the real Capture/LongCapture WGC
-//     path. Checks complete output, fixed bars, immediate finish and cleanup.
-//     Interactive mode accepts real wheel input; Enter finishes, Esc cancels.
+//   WinShun.exe --probe-runtime <folder> [--with-clipboard]
+//     [--runtime-plugins <folder>] [--settle-ms 3000] [--renderer d3d11]
+//     A separate production startup probe: real App::start, temporary profile,
+//     process-local HKCU redirection, no global shortcuts/service/shell setup.
+//     Optional clipboard recording reads but never changes the clipboard;
+//     --onboarding-probe fresh|later|apply|legacy|capture|decline|offline|incompatible|retry
+//     checks first-run gating and choices in the real guide. Capture cases use
+//     WINSHUN_PLUGIN_INDEX local fixtures; approval still uses PluginDialog.
+//     runtime.json exports resource and lifecycle checks. Plugin fixtures are
+//     copied to the profile, enabled there, and stopped on exit. The reusable
+//     tools/verify-plugin-recovery.ps1 drives recovery and permission cases,
+//     including native hotkey readiness, with local packages and test data.
+//     --folder-typing opens a test-owned Explorer window over temporary files,
+//     exercises the real App/QML search, avoidance and focus-preserving selection,
+//     checks cancellation and nested results, and closes only that fixture.
+//     --file-dialog-window <HWND> --file-dialog-pid <PID>
+//     --file-dialog-sample <fixture.blend> --file-dialog-state <observer.json>
+//     Opt-in real dialog-bar search/selection test against an isolated Blender
+//     fixture. Saves dialog-with-search.png and requires independent UI state.
 //
-// Nothing of the user's is read or written (a temporary profile), and
+// In the static previews, nothing of the user's is read or written (a temporary profile), and
 // nothing that reaches the running Win顺 is started: no persistent hotkeys, hooks,
 // clipboard listener, taskbar box, pipe server or tray icon. The
 // environment the rendering needs (the scale factor, the software renderer)
 // is set before QGuiApplication by prepare(); run() does the rest once the
 // application exists. The exit code is the number of QML warnings, so that
 // a check script can tell.
-// Long-capture preview temporarily owns Enter/Esc and returns its failed
-// verification count. Its auto target is a separate generated fixture.
 
 #include <QStringList>
 
@@ -66,6 +93,5 @@ bool wanted(const QStringList& args); // one of the preview flags is among them
 void prepare(const QStringList& args); // before QGuiApplication
 void note(const QString& line); // a line into the log, from the start on
 int run(const QStringList& args); // after it; the exit code
-int runLongCapture(const QStringList& args); // generated scroll fixture through real WGC
 
 } // namespace ws::preview

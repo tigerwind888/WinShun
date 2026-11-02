@@ -1,13 +1,17 @@
 #include "App.h"
 #include "ContextMenuGuard.h"
 #include "Diagnostics.h"
+#include "FileIconProvider.h"
 #include "DisplayDiagnostics.h"
+#include "DropPieHelper.h"
 #include "Backup.h"
 #include "Migration.h"
 #include "Phosphor.h"
 #include "Preview.h"
 #include "RepeatFilter.h"
 #include "Settings.h"
+#include "WindowFrame.h"
+#include "SettingsCommand.h"
 #include "SystemCatalog.h"
 #include "platform/MessageWindow.h"
 #include "platform/Shell.h"
@@ -148,7 +152,7 @@ bool raiseStreamLimit()
     return _setmaxstdio(8192) == 8192;
 }
 
-// UI font: Alibaba PuHuiTi 3.0 (Regular + Bold) from fonts\ next to the
+// UI font: complete Alibaba PuHuiTi 3.0 Regular from fonts\ next to the
 // exe. It covers Latin and CJK, so no fallback is needed for normal text.
 // Without the files, the system UI font (Microsoft YaHei UI) is kept;
 // never "Segoe UI Variable", whose CJK fallback costs ~35 MB of memory.
@@ -168,7 +172,7 @@ QJsonObject applyUiFont()
     bool ascii = true;
     for (const QChar c : fontDir)
         ascii = ascii && c.unicode() < 128;
-    for (const QString& file : {u"AlibabaPuHuiTi-3-55-Regular.ttf"_s, u"AlibabaPuHuiTi-3-85-Bold.ttf"_s}) {
+    for (const QString& file : {u"AlibabaPuHuiTi-3-55-Regular.ttf"_s}) {
         int id = -1;
         if (ascii) {
             id = QFontDatabase::addApplicationFont(fontDir + file);
@@ -179,7 +183,7 @@ QJsonObject applyUiFont()
         }
         const QStringList families = QFontDatabase::applicationFontFamilies(id);
         if (uiFamily.isEmpty() && !families.isEmpty())
-            uiFamily = families.first(); // both files share one family, Bold is its bold style
+            uiFamily = families.first(); // Qt synthesizes heavier weights from the complete regular font
         files.append(QJsonObject {{u"file"_s, file}, {u"loaded"_s, id >= 0}});
     }
     QJsonObject loaded {{u"by"_s, ascii ? u"file"_s : u"data"_s}, {u"files"_s, files}};
@@ -194,6 +198,14 @@ QJsonObject applyUiFont()
     QGuiApplication::setFont(font);
     loaded[u"family"_s] = uiFamily;
     return loaded;
+}
+
+// The program's icon in the title bars (TitleBar.qml), from the file's own.
+// Native separators: the shell does not parse "F:/..." and the generic
+// program icon would come back.
+void setWindowIcon()
+{
+    ws::WindowFrame::setIcon(ws::FileIconProvider::iconUrl(QDir::toNativeSeparators(QCoreApplication::applicationFilePath()), false));
 }
 
 // The arguments as one command line (CreateProcess, ShellExecute): quoted
@@ -267,6 +279,7 @@ int main(int argc, char* argv[])
             ws::Settings::useProfile(folder);
     }
     const bool preview = ws::preview::wanted(wideArgs);
+    const bool pieHelper = wideArgs.contains(u"--drop-pie-helper"_s);
     if (preview)
         ws::preview::prepare(wideArgs);
     if (ws::Settings::profile().isEmpty())
@@ -283,7 +296,7 @@ int main(int argc, char* argv[])
     if (setPlatform)
         qputenv("QT_QPA_PLATFORM", ws::Settings::resolveRenderer(ws::Settings::storedRenderer()) == u"software"
                                        ? "windows:fontengine=gdi" : "windows:fontengine=freetype");
-    if (preview) {
+    if (preview || pieHelper) {
         // A picture of a settings page, and nothing else: before the single
         // instance below, which would hand the arguments to the running copy.
         ws::preview::note(u"making the application"_s);
@@ -295,6 +308,8 @@ int main(int argc, char* argv[])
         ws::preview::note(u"loading the font"_s);
         applyUiFont();
         ws::phosphor::loadFonts();
+        setWindowIcon();
+        if (pieHelper) return ws::runDropPieHelper(wideArgs);
         return ws::preview::run(wideArgs);
     }
 
@@ -388,7 +403,7 @@ int main(int argc, char* argv[])
         if (parser.isSet(quit))
             command = u"quit"_s;
         else if (parser.isSet(settings))
-            command = u"settings"_s;
+            command = ws::settingscommand::make(parser.value(settingsAt)); // --settings-at too: a running copy opens them there
         else if (parser.isSet(query))
             command = u"query:"_s + parser.value(query);
         else if (parser.isSet(toggle))
@@ -416,6 +431,7 @@ int main(int argc, char* argv[])
 
     QJsonObject uiFont = applyUiFont(); // the UI font (see above)
     ws::phosphor::loadFonts(); // the icons
+    setWindowIcon();
     uiFont[u"platform"_s] = platform;
     ws::diagnostics::setUiFont(uiFont);
     ws::diagnostics::watchDisplay();

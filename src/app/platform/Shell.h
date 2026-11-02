@@ -39,6 +39,22 @@ filemanager::Kind fileManager(); // the one set
 // `cwd`: its working folder; empty for ours. Invalid when Win顺 is elevated
 // and no shell runs to take them from.
 win32::UniqueHandle startUnelevated(const std::wstring& program, const std::wstring& args, const std::wstring& cwd = {});
+// Whether Win顺 runs as the account that is logged on at the desktop (the shell's). Not
+// when it was started as another one, an administrator's: its HKCU, environment and
+// profile are that account's, not the user's. True when that cannot be told.
+bool runsAsShellUser();
+// A console program run to its end, with the user's normal rights as above,
+// in no window, and what it wrote. For a worker thread: it waits. It gets the
+// user's environment as the registry has it now (setx made a minute ago counts),
+// over this process's own when that is the user's account.
+struct Captured {
+    bool started = false; // false: it did not start at all (no shell to take the user's rights from)
+    bool timedOut = false; // still running after the time given: ended
+    unsigned long exitCode = 0;
+    std::string output; // standard output and standard error together, the bytes as written
+};
+Captured runUnelevatedCaptured(const std::wstring& program, const std::wstring& args, unsigned long timeoutMs,
+    const std::wstring& cwd = {});
 // Starts `program` as administrator (UAC asks, unless Win顺 is elevated
 // already), without waiting: false when it did not start (the prompt
 // declined, say). `cwd` as above.
@@ -53,6 +69,8 @@ void openUrl(const QString& url); // https:, mailto: ...
 // in `folder`, with the user's normal rights. On a network share, pushd
 // gives it a drive letter: cmd cannot start in a UNC path.
 void openTerminal(const QString& folder, std::function<void(bool)> done = {});
+// PowerShell 7 when installed, otherwise Windows PowerShell, in this folder.
+void openPowerShell(const QString& folder, std::function<void(bool)> done = {});
 // A command or shell location ("%windir%\system32\control.exe /name X",
 // "ms-settings:display"): a place in Windows (see SystemCatalog).
 void run(const QString& command, std::function<void(bool)> done = {});
@@ -95,6 +113,8 @@ struct MenuItem {
     bool enabled = true;
     bool isDefault = false;
     std::vector<MenuItem> children; // a submenu: `text` opens it, `id` is not chosen
+    QString glyph; // optional Segoe code point, mapped through Phosphor by the tray menu
+    bool secondary = false; // informational status, below the action text hierarchy
 
     static MenuItem separator() { return {}; }
 };
@@ -108,8 +128,9 @@ int popupMenu(HWND owner, const std::vector<MenuItem>& items, POINT screenPos, s
 // nothing shows. Once per process; later calls return at once.
 void prepareMenuHooks();
 
-// The standard "select folder" dialog (modal). Returns an empty string when cancelled.
-QString pickFolder(HWND owner, const QString& title);
+// The standard "select folder" dialog (modal), in `start` when given (else
+// where it was last). Returns an empty string when cancelled.
+QString pickFolder(HWND owner, const QString& title, const QString& start = {});
 // The standard "open file" dialog (modal), for one file of the kinds in
 // `filters` ({"插件压缩包", "*.zip;*.wsplugin"} pairs). Empty when cancelled.
 QString pickFile(HWND owner, const QString& title, const std::vector<std::pair<QString, QString>>& filters);

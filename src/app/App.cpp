@@ -1,14 +1,12 @@
 #include "App.h"
-#include "RecordingPointer.h"
+#include "platform/OcrFiles.h"
+#include "platform/OcrPackage.h"
 
 #include "AiBridge.h"
 #include "AppCatalog.h"
 #include "Backup.h"
-#include "Capture.h"
-#include "CaptureEditor.h"
-#include "CaptureOcr.h"
-#include "Geometry.h" // capture::placeBeside
-#include "Grabber.h"
+#include "Grabber.h" // take_screenshot (MCP)
+#include "CliSetup.h"
 #include "ClipImportJob.h"
 #include "ClipStore.h"
 #include "Clipboard.h"
@@ -21,6 +19,7 @@
 #include "FilePreview.h"
 #include "ThumbnailProvider.h"
 #include "DropPie.h"
+#include "DropPieHelper.h"
 #include "FolderMenu.h"
 #include "History.h"
 #include "Host.h"
@@ -30,6 +29,8 @@
 #include "McpServer.h"
 #include "McpTools.h"
 #include "MissingFiles.h"
+#include "Onboarding.h"
+#include "MovedPlugins.h"
 #include "Pipe.h"
 #include "Placement.h"
 #include "PluginSettings.h"
@@ -39,12 +40,14 @@
 #include "Secrets.h"
 #include "ServiceVolumeAccess.h"
 #include "ShortcutAgain.h"
+#include "SettingsCommand.h"
 #include "SettingsEditor.h"
 #include "Switches.h"
 #include "SystemCatalog.h"
 #include "SystemTheme.h"
 #include "TextField.h"
 #include "Tools.h"
+#include "TrayMenu.h"
 #include "TriggerJournal.h"
 #include "Unc.h"
 #include "Updater.h"
@@ -73,7 +76,7 @@
 #include "platform/ShellContextMenu.h"
 #include "platform/ShellMenu.h"
 #include "platform/SiteIcons.h"
-#include "platform/SystemSwitches.h"
+#include "SwitchPlugin.h"
 #include "platform/TypeToSearch.h"
 #include "platform/FolderViewHit.h"
 #include "platform/TaskbarSearch.h"
@@ -81,10 +84,10 @@
 #include "platform/VolumeNotifier.h"
 #include "platform/WinV.h"
 #include "platform/WindowEffects.h"
-#include "PrintScreen.h"
+#include "PrintScreen.h" // restorePrintScreen
+#include "platform/HotkeyText.h"
 
 #include <QContextMenuEvent>
-#include <QClipboard>
 #include <QCursor>
 #include <QDateTime>
 #include <QDebug>
@@ -95,9 +98,10 @@
 #include <QImageReader>
 #include <QJsonArray>
 #include <QJsonObject>
-#include <QMimeData>
 #include <QOperatingSystemVersion>
 #include <QScopeGuard>
+#include <QScopedValueRollback>
+#include <QVersionNumber>
 #include <QGuiApplication>
 #include <QInputMethod>
 #include <QJsonDocument>
@@ -116,7 +120,6 @@
 #include <QWinEventNotifier>
 
 #include <windows.h>
-#include <objbase.h> // CoInitializeEx: pinPicture reads with WIC on a thread of its own
 
 #include <thread>
 
@@ -127,6 +130,12 @@ namespace ws {
 
 namespace {
 
+bool localSendNeedsUpdate(const plugin::Catalog& catalog)
+{
+    const auto* entry = catalog.find(u"winshun.localsend"_s);
+    return entry && entry->manifest && QVersionNumber::fromString(entry->manifest->version) < QVersionNumber(1, 0, 1);
+}
+
 constexpr int kHotkeyId = 1;
 constexpr int kDialogJumpHotkeyId = 2; // Ctrl+G, while a file dialog is in front
 constexpr int kWinVHotkeyId = 3; // Win+V: the clipboard history, once Explorer gave it up (winv::)
@@ -134,11 +143,6 @@ constexpr int kClipboardHotkeyId = 4; // another shortcut for the clipboard hist
 constexpr int kWinSHotkeyId = 5; // Win+S: the launcher over the taskbar, once Explorer gave it up (winv::)
 constexpr int kScreenClipHotkeyId = 6; // Win+Shift+S, which Explorer gives up with Win+S: the screen capture
 constexpr int kFolderMenuHotkeyId = 7; // the folder menu in the window in front (GitHub #25)
-constexpr int kCaptureHotkeyId = 8; // the screen capture's own hotkey (src/capture)
-constexpr int kPrintScreenHotkeyId = 9; // PrtScn, once taken over from the Snipping Tool (printscreen::)
-constexpr int kPinsHotkeyId = 10; // hide / show every pin (stage 7)
-constexpr int kPinsRestoreHotkeyId = 11; // click-through pins take the mouse again (stage 7)
-constexpr int kLastPinHotkeyId = 12; // pin the last screenshot (#83)
 constexpr int kQuickPasteHotkeyId = 20; // + 1…9: paste without opening the clipboard
 // For another program to tell where its text caret is: longer, and the
 // clipboard would open late; it opens by the mouse pointer then.
@@ -181,17 +185,8 @@ enum TrayCommand {
     QuitCommand,
     ClipboardCommand,
     PauseClipboardCommand,
-    CaptureCommand,
-    PinLastCommand, // 截图 › 贴上最近一次截图
-    ClickThroughCommand, // 截图 › 取消所有贴图的穿透
-    CloseAllPinsCommand, // 截图 › 关闭全部贴图
-    HideAllPinsCommand, // 截图 › 隐藏 / 显示全部贴图
-    AllPinsTopmostCommand, // 截图 › 全部置顶
-    DelayThreeCommand, // 截图 › 延时截图 › 3 秒
-    DelayFiveCommand,
-    DelayTenCommand,
-    RestoreDraftCommand, // 截图 › 找回刚放弃的标注
-    KeepAwakeCommand // 保持唤醒（到 16:42）: only while it is on; ends it
+    KeepAwakeCommand, // 保持唤醒（到 16:42）: only while it is on; ends it
+    PluginMenuCommand = 1000 // and up: the entries of the plugins' submenus (trayMenu)
 };
 
 // `folders`: only the chosen ones are indexed (App::foldersInEffect, GitHub #52).
@@ -357,11 +352,13 @@ QString statePath()
 
 // Rounded corners and the shadow, for our windows without a system title bar
 // (the launcher, the clipboard, the bar by file dialogs, the settings
-// window); each draws its edge itself (WindowEdge.qml).
+// window). Windows 11 draws their borders; WindowEdge.qml is the Windows 10 fallback.
 void styleWindow(QWindow* window, bool backdrop = false)
 {
     win::styleFramelessWindow(window, backdrop);
 }
+
+App* g_launcherApp = nullptr; // for foregroundChanged, a hook's callback
 
 } // namespace
 
@@ -397,6 +394,9 @@ App::App()
     });
     m_holdTimer.setInterval(std::chrono::milliseconds(hotkeysteps::kPollMs));
     connect(&m_holdTimer, &QTimer::timeout, this, &App::checkClipboardHold);
+    m_cliTallyTimer.setSingleShot(true);
+    m_cliTallyTimer.setInterval(500ms);
+    connect(&m_cliTallyTimer, &QTimer::timeout, this, &App::refreshCliTally);
     m_contentStatusTimer.setInterval(2s);
     connect(&m_contentStatusTimer, &QTimer::timeout, this, &App::refreshContentIndexStatus);
     connect(&m_contentStatusTimer, &QTimer::timeout, this, &App::refreshShareStatuses); // counts while reading
@@ -407,6 +407,20 @@ App::App()
 
 App::~App()
 {
+    delete m_onboardingWindow.data();
+    m_onboardingQml.reset();
+    m_onboarding.reset();
+    m_onboardingEditor.reset();
+    m_onboardingFrame.reset();
+    if (m_launcher)
+        m_launcher->setSwitches(nullptr, {});
+    m_switches.reset();
+    m_switchPlugin.reset();
+    cancelTypingSelection();
+    m_typingWorker.reset();
+    if (m_launcherFrontHook)
+        ::UnhookWinEvent(m_launcherFrontHook);
+    g_launcherApp = nullptr; // a change of the front queued already finds no one
     m_clipImport.reset(); // its thread joined before the history it fills goes
     siteicons::shutdown(); // an icon arriving now would be told to no one
     m_keyRouter.reset(); // no keys taken from here on
@@ -414,23 +428,12 @@ App::~App()
     m_holdWatch.reset();
     m_drainingWatch.reset();
     m_keyListenerMode = -1; // recorder teardown must not recreate input listeners
-    m_recordingClicks.reset();
     m_serviceKeyListener.reset();
     m_keyListener.reset(); // no double click told to the folder menu
     // DialogJump's worker may be asking m_serviceNav about an elevated dialog,
     // and its hooks reach the bar: it goes while both are here (joined), the
     // bar and then the navigator at the end, as applyDialogs does.
     m_dialogJump.reset();
-    m_capture.reset(); // its overlays, before the QML engine they were made with
-    m_pins.reset();
-    if (m_editWindow) {
-        // Its destruction hides it: the controller must not answer that.
-        if (m_editor)
-            QObject::disconnect(m_editWindow.data(), nullptr, m_editor.get(), nullptr);
-        delete m_editWindow.data(); // the editing window, before the QML engine and its controller
-    }
-    m_editor.reset();
-    m_editFrame.reset();
     if (m_screenshotAsk && m_screenshotAsk->window)
         delete m_screenshotAsk->window.data(); // before the QML engine, and before its frame
     m_screenshotAsk.reset();
@@ -443,9 +446,9 @@ App::~App()
     m_mcpServer.reset();
     m_mcpHost.reset();
     m_mcpEngine.reset();
+    m_mcpContentEngine.reset();
     delete m_noticeWindow.data();
     m_noticeFrame.reset();
-    closeCaptureOcr(true); // its window, before the QML engine too
     delete m_folderMenuWindow; // before its view-model and the QML engine
     m_folderMenu.reset();
     delete m_dropPieWindow; // likewise
@@ -459,12 +462,14 @@ App::~App()
 
 bool App::start(const StartOptions& options)
 {
+    ocr::setComponentsRoot(Settings::dataDir() + u"/components"_s);
     const bool firstRun = !Settings::exists();
     // Updated from a version without the clipboard history: tell about it once.
     const bool clipboardIsNew = !firstRun && !Settings::hasClipboardSettings();
     m_settings.load();
     applyAutostartLevel(); // may set the mode (an old elevated task): before the index is made
     applyAppearance(); // before any window: the first frame is already in the chosen theme and language
+    m_ocrPackage = std::make_unique<OcrPackage>();
     m_renderer = Settings::resolveRenderer(m_settings.renderer);
     if (m_renderer == u"software")
         QQuickWindow::setGraphicsApi(QSGRendererInterface::Software);
@@ -487,6 +492,98 @@ bool App::start(const StartOptions& options)
         QGuiApplication::setFont(font);
     }
 
+    if (!m_settings.onboardingComplete)
+        return showOnboarding(options);
+    return startRuntime(options, firstRun, clipboardIsNew);
+}
+
+bool App::showOnboarding(const StartOptions& options)
+{
+    m_onboarding = std::make_unique<Onboarding>(m_settings);
+    m_onboardingFrame = std::make_unique<WindowFrame>(true);
+    m_onboardingQml = std::make_unique<QQmlApplicationEngine>();
+    m_onboardingQml->addImageProvider(u"fileicon"_s, new FileIconProvider);
+    m_onboardingQml->setInitialProperties({
+        {u"setup"_s, QVariant::fromValue(m_onboarding.get())},
+        {u"frame"_s, QVariant::fromValue(m_onboardingFrame.get())},
+    });
+    m_onboardingQml->loadFromModule(u"WinShun"_s, u"OnboardingWindow"_s);
+    const auto roots = m_onboardingQml->rootObjects();
+    if (roots.isEmpty())
+        return false;
+    auto* window = qobject_cast<QQuickWindow*>(roots.constFirst());
+    if (!window)
+        return false;
+    m_onboardingWindow = window;
+    window->setObjectName(u"onboardingWindow"_s);
+    m_onboardingFrame->setWindow(window);
+    m_onboardingFrame->setResizable(true);
+    m_onboarding->setWindow(window);
+    styleWindow(window, SystemTheme::backdropAvailable());
+    win::setDarkFrame(window, isDarkMode());
+    const QRect area = QGuiApplication::primaryScreen()->availableGeometry();
+    window->resize(std::min(window->width(), area.width() - 32), std::min(window->height(), area.height() - 32));
+    window->setPosition(area.center() - QPoint(window->width() / 2, window->height() / 2));
+    connect(m_onboarding.get(), &Onboarding::accepted, this, [this, options] {
+        m_settings = m_onboarding->settings();
+        StartOptions quiet;
+        quiet.background = true;
+        if (!startRuntime(quiet, true, false, true)) {
+            QCoreApplication::exit(1);
+            return;
+        }
+        if (!m_settings.onboardingCapturePending) {
+            finishOnboarding(options);
+            return;
+        }
+        m_onboardingEditor = std::make_unique<SettingsEditor>(m_settings, m_renderer);
+        m_onboardingEditor->setWindow(m_onboardingWindow);
+        connect(m_onboardingEditor.get(), &SettingsEditor::edited, this, &App::settingsEdited);
+        auto* plugins = m_onboardingEditor->plugins();
+        plugins->setLocale(m_language);
+        plugins->setHost(m_pluginHost.get());
+        m_onboarding->attachPlugins(plugins, m_pluginHost.get());
+    });
+    connect(m_onboarding.get(), &Onboarding::captureActivated, this, [this] {
+        m_settings.onboardingCapturePending = false;
+        m_settings.save();
+        if (m_onboardingEditor)
+            m_onboardingEditor->setSettings(m_settings);
+    });
+    connect(m_onboarding.get(), &Onboarding::finished, this, [this, options] { finishOnboarding(options); });
+    window->show();
+    window->raise();
+    win::bringToFront(window);
+    window->requestActivate();
+    return true;
+}
+
+void App::finishOnboarding(const StartOptions& options)
+{
+    // apply()/finish() can be on the QML call stack. Destroy its window and
+    // model on the next turn, after all signals and permission callbacks.
+    QTimer::singleShot(0, this, [this, options] {
+        if (!m_onboarding)
+            return;
+        delete m_onboardingWindow.data();
+        m_onboardingQml.reset();
+        m_onboarding.reset();
+        m_onboardingEditor.reset();
+        m_onboardingFrame.reset();
+        if (options.settings) {
+            showSettings();
+            if (!options.settingsAt.isEmpty() && m_settingsWindow)
+                QMetaObject::invokeMethod(m_settingsWindow, "showPlace", Q_ARG(QVariant, QVariant(options.settingsAt)));
+        } else {
+            // Finishing a visible welcome screen is an explicit interaction,
+            // including an installer or login start that originally used --background.
+            showLauncher(options.query);
+        }
+    });
+}
+
+bool App::startRuntime(const StartOptions& options, bool firstRun, bool clipboardIsNew, bool fromOnboarding)
+{
     const QString dataDir = Settings::dataDir();
     QDir().mkpath(dataDir);
     m_history = std::make_unique<History>(dataDir + u"\\history.txt"_s);
@@ -532,9 +629,7 @@ bool App::start(const StartOptions& options)
         // A recording: its media thread and its keycaps' low-level hooks
         // touch their pages all the time. Emptied, the next hook call can
         // wait on hard faults past Windows' timeout, and the hook is taken
-        // out (GitHub #98). A delayed or long screenshot too.
-        if (m_capture && m_capture->busy())
-            return "capturing or recording";
+        // out (GitHub #98).
         if (!m_index || m_index->state() != IndexService::State::Ready)
             return "loading";
         if (m_index->isRefreshing())
@@ -555,16 +650,10 @@ bool App::start(const StartOptions& options)
     m_apps = std::make_unique<AppCatalog>();
     m_places = std::make_unique<SystemCatalog>();
     m_engine = std::make_unique<SearchEngine>(m_index.get(), m_apps.get(), m_places.get());
-    m_switches = std::make_unique<Switches>(systemSwitchBackends()); // read at once, on a thread of their own
     m_launcher
         = std::make_unique<Launcher>(m_index.get(), m_apps.get(), m_places.get(), m_engine.get(), m_history.get());
     m_launcher->setFavorites(m_favorites.get());
-    m_launcher->setSwitches(m_switches.get(), statePath());
-    // Keep awake is Win顺's own state, kept in view: on the tray icon too.
-    connect(m_switches.get(), &Switches::changed, this, [this](const QString& id) {
-        if (id == u"keep-awake" && m_messages)
-            m_messages->setTrayTooltip(trayTooltip());
-    });
+    m_launcher->setSwitches(nullptr, statePath());
     m_preview = std::make_unique<FilePreview>();
     m_preview->setWindowFactory([this] { return createPreviewWindow(); });
     m_launcher->setPreview(m_preview.get());
@@ -578,6 +667,7 @@ bool App::start(const StartOptions& options)
     // result opened, whose program is coming to the front instead. Esc hides
     // it, pinned or not (dismissRequested follows, for the rest).
     connect(m_launcher.get(), &Launcher::escaped, this, [this] {
+        cancelTypingSelection();
         const HWND back = std::exchange(m_typingOrigin, {}).root;
         if (back && ::IsWindow(back) && m_window && m_window->isActive())
             ::SetForegroundWindow(back);
@@ -587,8 +677,32 @@ bool App::start(const StartOptions& options)
     // front the same way (GitHub #39).
     m_launcher->setFolderOpener([this](const QString& folder) { return openInTypingTab(folder); });
     m_launcher->setRevealer([this](const QString& path) { return revealInTypingTab(path); });
+    m_typingSelectionTimer.setSingleShot(true);
+    m_typingSelectionTimer.setInterval(60);
+    connect(m_launcher.get(), &Launcher::currentRowChanged, this, &App::followTypingSelection);
+    connect(m_launcher->results(), &ResultModel::countChanged, this, &App::followTypingSelection);
+    connect(&m_typingSelectionTimer, &QTimer::timeout, this, [this] {
+        const auto* row = m_launcher->results()->at(m_launcher->currentRow());
+        if (!row || row->isApp() || row->elsewhere || !m_typingOrigin.tab || m_typingOrigin.opus || !launcherShown())
+            return;
+        const auto origin = m_typingOrigin;
+        const auto stop = m_typingSelection.get_token();
+        const HWND window = reinterpret_cast<HWND>(m_window->winId());
+        const auto current = [stop, window, origin] {
+            return !stop.stop_requested() && ::GetForegroundWindow() == window && ::IsWindowVisible(window)
+                && ::IsWindow(origin.tab) && ::GetAncestor(origin.tab, GA_ROOT) == origin.root;
+        };
+        if (!current())
+            return;
+        if (!m_typingWorker)
+            m_typingWorker = std::make_unique<ComWorker>();
+        m_typingWorker->post([origin, path = row->path.toStdWString(), current] {
+            filemanager::selectInExplorer(origin.tab, origin.folder.toStdWString(), path, current);
+        });
+    });
     connect(m_launcher.get(), &Launcher::pinnedChanged, this, &App::launcherPinnedChanged);
-    connect(m_launcher.get(), &Launcher::pinRequested, this, &App::pinPicture);
+    connect(m_launcher.get(), &Launcher::pinRequested, this,
+        [this](const QString& path, bool screenshot) { pictureAction(u"pin"_s, 0, path, screenshot); });
     connect(m_launcher.get(), &Launcher::settingsRequested, this, [this] { showSettings(); });
     // Only the chosen folders are indexed (GitHub #52): the notes under the results.
     connect(m_launcher.get(), &Launcher::folderSettingsRequested, this, [this] { showSettingsFor(u"Index/Folders"_s); });
@@ -643,6 +757,8 @@ bool App::start(const StartOptions& options)
         if (m_window && m_window->isVisible() && !m_window->isActive() && !m_launcher->pinned())
             hideLauncher();
     });
+    m_strandedWatch.setInterval(30ms); // a click is held longer than that
+    connect(&m_strandedWatch, &QTimer::timeout, this, &App::checkStrandedLauncher);
     // The footer's switches (the order, the start list): remembered.
     const auto remember = [this](QString Settings::* field, QString value) {
         if (m_settings.*field == value)
@@ -659,7 +775,16 @@ bool App::start(const StartOptions& options)
         static constexpr QStringView kLists[] {u"opened", u"modified", u"none"};
         remember(&Settings::startList, kLists[m_launcher->startList()].toString());
     });
+    connect(m_launcher.get(), &Launcher::regexModeChanged, this, [this] {
+        if (m_settings.regexMode == m_launcher->regexMode())
+            return;
+        m_settings.regexMode = m_launcher->regexMode();
+        m_settings.save();
+        if (m_settingsEditor)
+            m_settingsEditor->setSettings(m_settings);
+    });
     createPluginHost();
+    moveCapture();
 
     // Clipboard history (Win+V), in clipboard\ next to the index.
     m_clipStore = std::make_unique<ClipStore>(dataDir + u"\\clipboard"_s);
@@ -685,15 +810,43 @@ bool App::start(const StartOptions& options)
     };
     m_clipWatcher = std::make_unique<ClipboardWatcher>(clipboardOptions(), std::move(clipCallbacks));
     m_clipboard = std::make_unique<Clipboard>(m_clipStore.get(), m_clipWatcher.get());
+    connect(m_ocrPackage.get(), &OcrPackage::changed, m_clipboard.get(), [this] {
+        if (m_ocrPackage->available())
+            m_clipboard->refreshRecognition();
+    });
     connect(m_clipboard.get(), &Clipboard::quickPasteFailed, this,
         [this](const QString& message) { m_messages->showNotification(tr("快捷粘贴"), message); });
+    connect(m_clipboard.get(), &Clipboard::saveProblem, this,
+        [this](const QString& message) { m_messages->showNotification(tr("保存为文件"), message); });
     connect(m_clipboard.get(), &Clipboard::activeChanged, this, &App::applyQuickPasteHotkeys);
     connect(qApp, &QGuiApplication::focusWindowChanged, this, &App::applyQuickPasteHotkeys);
     // Pinned, it stays up through a paste or a file opened (hideClipboard);
     // Esc hands the focus back too.
     connect(m_clipboard.get(), &Clipboard::dismissRequested, this, [this] { hideClipboard(); });
-    connect(m_clipboard.get(), &Clipboard::pinRequested, this, [this](const QString& path) { pinPicture(path); });
-    connect(m_clipboard.get(), &Clipboard::editRequested, this, [this](qint64 id) { editHistory(id); });
+    connect(m_clipboard.get(), &Clipboard::pinRequested, this, [this](qint64 id) { pictureAction(u"pin"_s, id, {}, false); });
+    connect(m_clipboard.get(), &Clipboard::editRequested, this, [this](qint64 id) { pictureAction(u"edit"_s, id, {}, false); });
+    connect(m_clipboard.get(), &Clipboard::lanSendSetupRequested, this, [this](bool update) {
+        hideClipboard(false);
+        if (update) {
+            showSettings();
+            if (m_settingsWindow)
+                QMetaObject::invokeMethod(m_settingsWindow, "showPluginLibrary", Q_ARG(QVariant, QVariant(u"winshun.localsend"_s)));
+        } else {
+            showPluginSettings(u"winshun.localsend"_s);
+        }
+    });
+    connect(m_clipboard.get(), &Clipboard::lanSendRequested, this, [this](const QString& text, const QStringList& files) {
+        if (!m_pluginHost || !m_pluginHost->catalog().enabled(u"winshun.localsend"_s)
+            || localSendNeedsUpdate(m_pluginHost->catalog())) {
+            hideClipboard(false);
+            showPluginSettings(u"winshun.localsend"_s);
+            return;
+        }
+        if (m_launcher->panel())
+            setPanel(false);
+        showLauncher();
+        m_launcher->runPluginCommand(u"winshun.localsend"_s, u"send"_s, u"clipboard"_s, text, files);
+    });
     // The history changed (a screenshot taken, removed, put back): the
     // launcher's screenshot list too, while it shows it.
     connect(m_clipboard.get(), &Clipboard::categoriesChanged, m_launcher.get(), &Launcher::refreshScreenshots);
@@ -758,6 +911,7 @@ bool App::start(const StartOptions& options)
         toggleLauncher(false, pressedAt);
     };
     callbacks.trayMenuRequested = [this] { showTrayMenu(); };
+    callbacks.trayMenuSoon = [this] { prefetchTrayMenus(); };
     callbacks.hotkeyPressed = [this](int id, std::uint32_t time) {
         // When the keys were pressed, on the clock of a window's reveal (seenBy).
         const std::uint64_t pressedAt = tickTime(time, ::GetTickCount64());
@@ -771,30 +925,26 @@ bool App::start(const StartOptions& options)
         } else if (id == kWinVHotkeyId || id == kClipboardHotkeyId) {
             // Pressed again while held since it opened the window (#107): a
             // step, never a second press (no seenBy, not a trigger).
+            if (m_settings.clipboardPauseInFullScreen && fullScreenShortcutBlocked(foreground::facts(), true))
+                return;
             if (clipboardStepPress(id))
                 return;
             beginTrigger(id == kWinVHotkeyId ? TriggerSource::WinV : TriggerSource::ClipboardHotkey, pressedAt);
             armClipboardHold(id, pressedAt); // before the window: the keys from the opening press on
             toggleClipboard(pressedAt);
-            if (m_hold && !m_keyRouter) // its own window has the keyboard: the hook hears nothing (docs/pitfalls.md)
+            if (m_hold && !m_keyRouter) { // own keyboard: browse without a hook or a paste on release
                 endClipboardHold("not-routed");
+                m_browseHotkey = m_holdHotkey;
+                m_browseModifiers = m_holdModifiers;
+                m_browseVk = m_holdVk;
+                m_holdTimer.start();
+            }
         } else if (id == kWinSHotkeyId)
             toggleAtTaskbar(false);
         else if (id == kScreenClipHotkeyId)
             startScreenClip();
         else if (id == kFolderMenuHotkeyId)
             folderMenuHotkey();
-        else if (id == kCaptureHotkeyId || id == kPrintScreenHotkeyId)
-            triggerCapture();
-        else if (id == kLastPinHotkeyId)
-            pinLastCapture();
-        else if (id == kPinsHotkeyId) {
-            if (m_pins)
-                m_pins->setAllHidden(!m_pins->allHidden());
-        } else if (id == kPinsRestoreHotkeyId) {
-            if (m_pins)
-                m_pins->clearClickThrough();
-        }
         else if (id != kDialogJumpHotkeyId) {
             beginTrigger(TriggerSource::Hotkey, pressedAt);
             toggleLauncher(true, pressedAt);
@@ -878,12 +1028,14 @@ bool App::start(const StartOptions& options)
 
     // The button on the taskbar (WinShunSearch.exe) sets it: over the taskbar,
     // or away again. Set before Win顺 was up (it started Win顺), it opens now.
-    m_taskbarEvent = win32::UniqueHandle(taskbar::createEvent());
-    if (m_taskbarEvent.valid()) {
-        m_taskbarNotifier = std::make_unique<QWinEventNotifier>(m_taskbarEvent.get());
-        connect(m_taskbarNotifier.get(), &QWinEventNotifier::activated, this, [this] { toggleAtTaskbar(true); });
-    } else {
-        qWarning() << "No event for the taskbar button:" << ::GetLastError();
+    if (Settings::profile().isEmpty() || !Settings::portableFolder().isEmpty()) {
+        m_taskbarEvent = win32::UniqueHandle(taskbar::createEvent());
+        if (m_taskbarEvent.valid()) {
+            m_taskbarNotifier = std::make_unique<QWinEventNotifier>(m_taskbarEvent.get());
+            connect(m_taskbarNotifier.get(), &QWinEventNotifier::activated, this, [this] { toggleAtTaskbar(true); });
+        } else {
+            qWarning() << "No event for the taskbar button:" << ::GetLastError();
+        }
     }
 
     applySettings(true);
@@ -923,7 +1075,8 @@ bool App::start(const StartOptions& options)
     m_apps->refresh(true); // in the background; about half a second
     m_places->refresh(true); // likewise
 
-    autostart::adoptIfOrphaned();
+    if (Settings::profile().isEmpty() || !Settings::portableFolder().isEmpty())
+        autostart::adoptIfOrphaned();
     if (firstRun) {
         // Autostart is on by default; the settings switch turns it off for good
         // (the settings file exists from now on, so this runs once). The task
@@ -947,7 +1100,8 @@ bool App::start(const StartOptions& options)
         std::function<void()> onClick;
         if (noFolders)
             onClick = [this] { showSettingsFor(u"Index/Folders"_s); };
-        m_messages->showNotification(tr("Win顺已在后台运行"),
+        if (!fromOnboarding)
+            m_messages->showNotification(tr("Win顺已在后台运行"),
             noFolders ? tr("双击 Ctrl 打开搜索。还没有要索引的文件夹，点这里在设置里添加；放在服务器上的文件夹，请加到“网络共享”里。")
                 : m_foldersInEffect ? tr("双击 Ctrl 打开搜索。Win顺 先索引你常用的文件夹（桌面、文档、下载等），可以在设置里增减。")
                 : cannotInstall ? tr("双击 Ctrl 打开搜索。Win顺 按文件夹遍历建立索引，首次运行需要一点时间。")
@@ -959,6 +1113,9 @@ bool App::start(const StartOptions& options)
             m_settings.clipboard ? tr("复制过的文字、图片和文件都能找回来。点这里设置用 Win+V 打开它。")
                                  : tr("复制过的文字、图片和文件都能找回来。点这里打开它。"),
             [this] { showClipboardSettings(); });
+    } else if (m_settings.onboardingCapturePending && !fromOnboarding) {
+        m_messages->showNotification(tr("截图尚未启用"), tr("点这里在插件库中继续安装并确认权限。"),
+            [this] { showPluginSettings(u"winshun.capture"_s); });
     } else if (!m_indexFolderProblem.isEmpty()) {
         m_messages->showNotification(tr("索引位置"), m_indexFolderProblem);
     }
@@ -1035,62 +1192,8 @@ bool App::createWindow()
     if (m_searchField)
         m_searchField->installEventFilter(this); // the input method's questions, while it is in the box
     connect(m_window, &QWindow::activeChanged, this, [this] {
-        // Clicking elsewhere or switching apps dismisses the launcher, like a
-        // menu; the clipboard under its search box goes with it (see there).
-        // Not a press on Win顺's box on the taskbar: that brings it back. Nor
-        // the press that just brought it back: Qt may hear of the taskbar
-        // taking the focus for it only after that (it slid back up while on
-        // its way out). Those leave no window in front (or the taskbar, the
-        // pointer on the box), nor does the Start menu closing as it opens
-        // over it; another window in front (a click on it, on the desktop,
-        // on the rest of the taskbar) dismisses it at once, however soon
-        // after it opened.
-        if (m_window && !m_window->isActive() && m_window->isVisible() && !clipboardUnderLauncher()) {
-            // The preview (Alt+P) took the focus for a moment: a handler's
-            // window of ours (handed back at once), or QuickLook's or Seer's
-            // (which hand it back themselves). The launcher stays.
-            if (m_preview->ownsForeground()) {
-                if (m_preview->foregroundIsOurs())
-                    QMetaObject::invokeMethod(this, [this] {
-                        if (m_window && m_window->isVisible() && !m_window->isActive())
-                            win::bringToFront(m_window);
-                    }, Qt::QueuedConnection);
-                return;
-            }
-            // A command of the shell's menu that keeps the launcher (删除,
-            // say) runs, or just did: its dialogs, owned by a hidden window
-            // of ours, take the focus and hand it back (Launcher::
-            // runSystemMenu); another program's window ends that.
-            if (m_launcher->systemCommandRunning()) {
-                DWORD pid = 0;
-                ::GetWindowThreadProcessId(::GetForegroundWindow(), &pid);
-                if (pid == ::GetCurrentProcessId())
-                    return;
-                m_launcher->systemCommandDone();
-            }
-            if (m_launcher->pinned()) { // stays up, behind nothing (topmost), until Esc
-                m_typingOrigin = {}; // used elsewhere now: a folder opened later is not for that tab
-                m_boxPressGrace.stop();
-                // A press on Win顺's box took the focus: that press hides it
-                // (searchBoxPressed), as double Ctrl would.
-                if (m_searchBox && m_searchBox->underPointer())
-                    m_pinnedLostToBox.start();
-                else
-                    m_pinnedLostToBox.invalidate();
-                updateNumberKeys();
-                return;
-            }
-            const bool justShown = m_launcherShown.isValid() && m_launcherShown.elapsed() < 500;
-            const bool onBox = m_searchBox && m_searchBox->underPointer();
-            const HWND front = ::GetForegroundWindow();
-            const bool elsewhere = front && front != reinterpret_cast<HWND>(m_window->winId())
-                && !(onBox && taskbar::isTaskbar(front)) && !win::isShellFlyout(front);
-            if (m_searchBox && m_launcherOverBox && !elsewhere && (justShown || onBox))
-                m_boxPressGrace.start();
-            else {
-                logLauncherLostFront(front);
-                hideLauncher();
-            }
+        if (m_window && !m_window->isActive()) {
+            launcherLostFront();
         } else if (m_window && m_window->isActive()) {
             m_launcher->systemCommandDone();
             m_boxPressGrace.stop();
@@ -1098,6 +1201,16 @@ bool App::createWindow()
         }
         updateNumberKeys();
     });
+    // Windows refused to bring it to the front (bringToFront: the taskbar's
+    // box pressed again and again, say). The refused try made it the active
+    // window of this thread all the same, in the background; another
+    // program's window coming to the front then tells it nothing, and a
+    // click elsewhere left it up. The front changing to another program's
+    // window, Qt still holding it active, is that click. Out of context:
+    // told through this (the GUI) thread's message loop.
+    g_launcherApp = this;
+    m_launcherFrontHook = ::SetWinEventHook(
+        EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND, nullptr, &App::foregroundChanged, 0, 0, WINEVENT_OUTOFCONTEXT);
     // Fresh rows coming in while it slides in beat a launcher that comes
     // late: keep the existing 60 ms fallback even if no frame arrives.
     m_launcherReveal.setWindow(m_window, 60ms, [this] { revealLauncher(); });
@@ -1153,7 +1266,9 @@ bool App::createClipWindow()
     win::setDarkFrame(window, isDarkMode());
     m_clipboard->setWindow(window);
     m_clipPlacement->setWindow(window);
+    m_clipPlacement->enableWindowSizing();
     m_clipFrame->setWindow(window);
+    m_clipFrame->setResizable(true);
     m_clipLogo = new WindowLogo(window);
     connect(window, &QWindow::activeChanged, this, [this] {
         // Clicking elsewhere or switching apps hides it, like a menu. Not at
@@ -1199,162 +1314,6 @@ QQuickWindow* App::createPreviewWindow()
     return window;
 }
 
-capture::CaptureOcr& App::captureOcr()
-{
-    if (!m_captureOcr) {
-        m_captureOcr = std::make_unique<capture::CaptureOcr>();
-        connect(m_captureOcr.get(), &capture::CaptureOcr::copyRequested, this, [this](const QString& text) {
-            if (!text.isEmpty())
-                m_clipboard->copyText(text, m_settings.clipboard && !m_clipboardPaused);
-        });
-        connect(m_captureOcr.get(), &capture::CaptureOcr::searchRequested, this, [this](const QString& query) {
-            showLauncher(query);
-        });
-        connect(m_captureOcr.get(), &capture::CaptureOcr::webSearchRequested, this,
-            [this](const QString& query) { openWebSearch(query); });
-        connect(m_captureOcr.get(), &capture::CaptureOcr::closeRequested, this, [this] { closeCaptureOcr(); });
-        connect(m_captureOcr.get(), &capture::CaptureOcr::openLinkRequested, this, [](const QString& url) {
-            QDesktopServices::openUrl(QUrl(url, QUrl::StrictMode)); // only ever from a click on 打开链接
-        });
-    }
-    return *m_captureOcr;
-}
-
-// 智能打码 (SmartRedact.h): the scans go to the OCR window's reader; the rules
-// are read from the settings at the moment they are used, plus the names of this
-// computer and its user, which are never written anywhere.
-capture::SmartHooks App::smartHooks()
-{
-    capture::SmartHooks hooks;
-    hooks.scan = [this](const QImage& image, const QRect& region, double dpr, std::function<void(capture::RedactScan)> done) {
-        captureOcr().scan(image, region, dpr, std::move(done));
-    };
-    hooks.cancel = [this] {
-        if (m_captureOcr)
-            m_captureOcr->cancelScan();
-    };
-    hooks.rules = [this] {
-        capture::RedactRules rules;
-        rules.ipMac = m_settings.captureSmartIpMac;
-        rules.allText = m_settings.captureSmartAllText;
-        rules.words = Settings::normalizedSmartWords(m_settings.captureSmartWords);
-        for (const QString& name : {qEnvironmentVariable("USERNAME"), qEnvironmentVariable("COMPUTERNAME"), QDir::home().dirName()}) {
-            if (!name.trimmed().isEmpty() && !rules.names.contains(name, Qt::CaseInsensitive))
-                rules.names.append(name.trimmed());
-        }
-        return rules;
-    };
-    hooks.prescan = [this] { return m_settings.captureSmartPrescan && capture::CaptureOcr::available(); };
-    return hooks;
-}
-
-// 识别文字 (CaptureOcr, OcrPanel.qml): one window, made the first time,
-// styled as the preview but taking the focus (the text can be edited).
-void App::showCaptureOcr(const QImage& image, double dpr, const QRect& where, const QStringList* texts)
-{
-    if (!m_ocrWindow) {
-        captureOcr();
-        m_ocrFrame = std::make_unique<WindowFrame>(false);
-        QQmlComponent component(m_qml.get(), u"WinShun"_s, u"OcrPanel"_s);
-        QObject* object = component.createWithInitialProperties({
-            {u"ocr"_s, QVariant::fromValue(m_captureOcr.get())},
-            {u"frame"_s, QVariant::fromValue(m_ocrFrame.get())},
-        });
-        auto* window = qobject_cast<QQuickWindow*>(object);
-        if (!window) {
-            qWarning().noquote() << "Screen capture: no OCR window:" << component.errorString();
-            delete object;
-            return;
-        }
-        prepareBackdrop(window);
-        window->create();
-        styleWindow(window, SystemTheme::backdropAvailable());
-        win::setDarkFrame(window, isDarkMode());
-        m_ocrFrame->setWindow(window);
-        window->installEventFilter(this);
-        m_ocrWindow = window;
-    }
-    // Beside the picture, on its monitor (physical pixels there, logical for Qt).
-    const RECT anchor {where.left(), where.top(), where.left() + where.width(), where.top() + where.height()};
-    const HMONITOR monitor = ::MonitorFromRect(&anchor, MONITOR_DEFAULTTONEAREST);
-    MONITORINFO info {sizeof info};
-    QScreen* screen = nullptr;
-    for (QScreen* s : QGuiApplication::screens()) {
-        const auto* native = s->nativeInterface<QNativeInterface::QWindowsScreen>();
-        if (native && native->handle() == monitor)
-            screen = s;
-    }
-    if (screen && ::GetMonitorInfoW(monitor, &info)) {
-        const qreal ratio = screen->devicePixelRatio();
-        const QRect work(info.rcWork.left, info.rcWork.top, info.rcWork.right - info.rcWork.left, info.rcWork.bottom - info.rcWork.top);
-        const QSize box(qRound(m_ocrWindow->width() * ratio), qRound(m_ocrWindow->height() * ratio));
-        const QPoint at = capture::placeBeside(where, box, work, qRound(8 * ratio));
-        const QPoint monitorOrigin(info.rcMonitor.left, info.rcMonitor.top);
-        m_ocrWindow->setScreen(screen);
-        m_ocrWindow->setPosition(screen->geometry().topLeft() + (at - monitorOrigin) / ratio);
-    }
-    if (texts)
-        captureOcr().showTexts(*texts, tr("二维码"), tr("选区里没有找到二维码。"));
-    else
-        captureOcr().read(image, dpr);
-    m_ocrWindow->show();
-    m_ocrWindow->raise();
-    win::bringToFront(m_ocrWindow);
-    m_ocrWindow->requestActivate();
-}
-
-// 二维码 (Q, the toolbar): the codes read in the selection in the OCR window,
-// which offers 打开链接 for a web address and never opens one by itself.
-void App::showQrResult(const QStringList& codes, const QRect& where)
-{
-    showCaptureOcr(QImage(), 1.0, where, &codes);
-}
-
-// The mouse buttons' 识别文字并复制 / 搜索 / 网页搜索: the words read on a
-// reader of its own, so the OCR window (and what it shows) is left alone,
-// then copied, put in the search box or searched on the web. Without the
-// models the window opens instead, which says so.
-void App::captureOcrThen(const QImage& image, double dpr, const QRect& where, OcrThen then)
-{
-    if (!capture::CaptureOcr::available()) {
-        showCaptureOcr(image, dpr, where);
-        return;
-    }
-    if (!m_quickOcr) {
-        m_quickOcr = std::make_unique<capture::CaptureOcr>();
-        connect(m_quickOcr.get(), &capture::CaptureOcr::changed, this, [this] { quickOcrDone(); });
-    }
-    m_quickOcrThen = then;
-    m_quickOcr->read(image, dpr);
-}
-
-void App::quickOcrDone()
-{
-    if (!m_quickOcr || m_quickOcr->busy())
-        return;
-    const QString text = m_quickOcr->text();
-    const QString message = m_quickOcr->message();
-    const OcrThen then = m_quickOcrThen;
-    m_quickOcr.release()->deleteLater(); // its thread and reader go with it
-    m_idleTrim->poke();
-    if (text.trimmed().isEmpty()) {
-        m_messages->showNotification(tr("识别文字"), message.isEmpty() ? tr("图片里没有找到文字。") : message);
-        return;
-    }
-    switch (then) {
-    case OcrThen::Copy:
-        m_clipboard->copyText(text, m_settings.clipboard && !m_clipboardPaused);
-        m_messages->showNotification(tr("识别文字"), tr("已复制识别的文字")); // not the words: a toast stays in the Action Center
-        break;
-    case OcrThen::Search:
-        showLauncher(capture::CaptureOcr::oneLine(text));
-        break;
-    case OcrThen::Web:
-        openWebSearch(capture::CaptureOcr::oneLine(text));
-        break;
-    }
-}
-
 // The first search of the web shortcuts is the default (defaultWebSearchUrl).
 // WINSHUN_WEB_DRYRUN (tests): said in the log (WINSHUN_LOG_INFO), not opened.
 void App::openWebSearch(const QString& query)
@@ -1366,21 +1325,6 @@ void App::openWebSearch(const QString& query)
     qInfo().noquote() << (dryRun ? u"Web: would open %1 (the words read from a picture)"_s : u"Web: open %1 (the words read from a picture)"_s).arg(url);
     if (!dryRun)
         shell::openUrl(url);
-}
-
-void App::closeCaptureOcr(bool destroy)
-{
-    if (m_ocrWindow) {
-        if (destroy)
-            delete m_ocrWindow.data(); // before its view-model
-        else
-            m_ocrWindow->hide();
-    }
-    if (destroy) {
-        m_ocrFrame.reset();
-        m_quickOcr.reset();
-        m_captureOcr.reset(); // its thread, and the reader if still loaded
-    }
 }
 
 bool App::eventFilter(QObject* watched, QEvent* event)
@@ -1395,17 +1339,29 @@ bool App::eventFilter(QObject* watched, QEvent* event)
     // mouse picks the row now, letting go pastes nothing.
     if (m_hold && watched == m_clipWindow && event->type() == QEvent::MouseButtonPress)
         endClipboardHold("click");
-    if (event->type() == QEvent::Close && (watched == m_window || watched == m_clipWindow || watched == m_ocrWindow)) {
+    if (m_browseHotkey && watched == m_clipWindow) {
+        bool done = event->type() == QEvent::MouseButtonPress;
+        if (event->type() == QEvent::KeyPress || event->type() == QEvent::KeyRelease) {
+            const auto* key = static_cast<QKeyEvent*>(event);
+            const unsigned vk = key->nativeVirtualKey();
+            const unsigned modifier = hotkeysteps::modifierOf(vk);
+            done = event->type() == QEvent::KeyRelease
+                ? (modifier & m_browseModifiers) != 0
+                : vk != m_browseVk && modifier == 0;
+        }
+        if (done)
+            m_browseHotkey = 0;
+    }
+    if (event->type() == QEvent::Close && (watched == m_window || watched == m_clipWindow)) {
         // These windows are kept between openings. QWindow::close would
         // destroy the HWND and detach Placement, WindowFrame and WindowLogo.
         event->ignore();
         if (watched == m_window)
             hideLauncher();
-        else if (watched == m_clipWindow) {
+        else {
             m_clipboard->setPinned(false); // a system close also closes a pinned clipboard
             hideClipboard();
-        } else
-            closeCaptureOcr();
+        }
         return true;
     }
     // The launcher's field, drawn in the box on the taskbar: the input
@@ -1476,7 +1432,7 @@ void App::applyTheme()
     const bool dark = isDarkMode();
     win::setMenuTheme(dark);
     if (m_pluginHost)
-        m_pluginHost->setAppearance(m_language, dark ? u"dark"_s : u"light"_s);
+        m_pluginHost->setAppearance(m_language, dark ? u"dark"_s : u"light"_s, pluginLook());
     if (m_window)
         styleWindow(m_window, SystemTheme::backdropAvailable());
     if (m_clipWindow)
@@ -1534,8 +1490,11 @@ void App::applyAppearance()
                                                                                : Qt::ColorScheme::Unknown);
 
     const QString language = Settings::resolveLanguage(m_settings.language);
-    if (language == m_language)
+    if (language == m_language) {
+        if (m_pluginHost) // the plugins' windows look the same (corners, size, transparency, theme)
+            m_pluginHost->setAppearance(m_language, isDarkMode() ? u"dark"_s : u"light"_s, pluginLook());
         return;
+    }
     m_language = language;
     QCoreApplication::removeTranslator(&m_translator);
     if (language == u"en") {
@@ -1552,7 +1511,7 @@ void App::applyAppearance()
         m_updater->setChinese(language == u"zh");
 
     if (m_pluginHost)
-        m_pluginHost->setAppearance(language, isDarkMode() ? u"dark"_s : u"light"_s);
+        m_pluginHost->setAppearance(language, isDarkMode() ? u"dark"_s : u"light"_s, pluginLook());
 
     if (!m_qml)
         return; // starting up: nothing shown yet
@@ -1568,7 +1527,6 @@ void App::applyAppearance()
     m_messages->setTrayTooltip(trayTooltip());
     applyHotkey(); // its error message
     applyFolderMenuHotkey();
-    applyCaptureHotkeys();
     refreshContentIndexStatus();
 }
 
@@ -1600,7 +1558,8 @@ void App::applyKeyListener(bool force)
     // so itself. Not when the menu is there for its hotkey alone.
     const bool doubleClicks = m_folderMenu && m_settings.folderMenu != u"off"
         && (m_settings.folderMenuExplorer || m_settings.folderMenuDesktop);
-    const int listenTo = (m_settings.doubleCtrl ? 1 : 0) | (doubleClicks ? 2 : 0) | (m_dropPie ? 4 : 0) | (m_recordingClicks ? 8 : 0);
+    const bool middleClicks = doubleClicks && m_settings.folderMenuMiddle;
+    const int listenTo = (m_settings.doubleCtrl ? 1 : 0) | (doubleClicks ? 2 : 0) | (m_dropPie ? 4 : 0) | (middleClicks ? 8 : 0);
     if (force || listenTo != m_keyListenerMode) {
         m_serviceKeyListener.reset();
         m_keyListener.reset(); // the process's one mouse registration goes with it first
@@ -1633,14 +1592,12 @@ void App::applyKeyListener(bool force)
                 };
             if (FolderMenu* menu = doubleClicks ? m_folderMenu.get() : nullptr)
                 callbacks.doubleClick = [menu](HWND window, POINT pt) { menu->doubleClicked(window, pt); };
+            if (FolderMenu* menu = middleClicks ? m_folderMenu.get() : nullptr)
+                callbacks.middleClick = [menu](HWND window, POINT pt) { menu->doubleClicked(window, pt); };
             if (DropPie* pie = m_dropPie.get()) {
                 callbacks.dragMenu = [pie](POINT pt, HWND capture, DWORD pid) { pie->summoned(pt, capture, pid); };
                 callbacks.leftButtonUp = [pie] { pie->buttonReleased(); };
             }
-            if (m_recordingClicks)
-                callbacks.mousePress = [input = m_recordingClicks](POINT point, bool secondary, std::uint32_t time) {
-                    input->pushInput(QPoint(point.x, point.y), secondary, time);
-                };
             callbacks.log = [](const std::string& line) { qWarning().noquote() << QString::fromStdString(line); };
             m_keyListener = std::make_unique<KeyListener>(std::move(callbacks));
             if (m_settings.doubleCtrl && m_keyListener->isActive())
@@ -1706,6 +1663,8 @@ void App::applySettings(bool initial)
         m_settings.showModified, m_settings.showFileSize, m_settings.thumbnails, m_settings.numberKeys);
     m_launcher->setDoubleClickToOpen(m_settings.doubleClickToOpen);
     m_launcher->setTabEntersFavoriteFolder(m_settings.tabEntersFavoriteFolder);
+    m_launcher->setSearchKinds(m_settings.searchApps, m_settings.searchSystem);
+    m_launcher->setRegexMode(m_settings.regexMode);
     m_launcher->setFolderTypingOnly(m_settings.folderTyping == u"only");
     m_launcher->results()->setShowModifiedTime(m_settings.showModifiedTime);
     m_launcher->setPreferredTypes(m_settings.preferredTypes);
@@ -1715,7 +1674,9 @@ void App::applySettings(bool initial)
     m_launcher->setStartList(m_settings.startList == u"modified" ? Launcher::RecentlyModified
             : m_settings.startList == u"none"                     ? Launcher::NoStartList
                                                                  : Launcher::RecentlyOpened);
+    m_launcher->setStartOptions(m_settings.recentItems, m_settings.favoritesOnStart);
     m_preview->setBuiltInOnly(m_settings.previewWith == u"builtin");
+    m_launcher->setPreviewHotkey(m_settings.previewHotkey);
     m_preview->setTextExtensions(m_settings.contentExtensions);
     m_clipboard->setNumberKeys(m_settings.clipboardNumberKeys);
     m_launcher->setNumberHints(m_settings.numberHints);
@@ -1724,12 +1685,13 @@ void App::applySettings(bool initial)
     m_clipboard->setRowOptions(m_settings.clipboardClickToPaste, m_settings.clipboardLargePictures);
     m_clipboard->setLayoutOptions(m_settings.clipboardFlipAbove, m_settings.clipboardSearchBoxSide == u"far");
     m_clipboard->setHoldToStep(m_settings.clipboardHoldToStep);
-    if (!m_settings.clipboardHoldToStep && m_hold)
+    if (!m_settings.clipboardHoldToStep && (m_hold || m_browseHotkey))
         endClipboardHold("setting-off");
     updateNumberKeys();
     applyHotkey();
     applyFolderMenuHotkey(); // after applyFolderMenu: the menu it brings up
-    applyCapture();
+    applyScreenshots();
+    restorePrintScreen();
     m_launcher->setContentOptions(m_settings.contentSearch, m_settings.contentExtensions,
         m_settings.contentSizeLimits(), m_settings.contentInLowPriority, m_settings.contentDocuments);
     m_launcher->setContentIndex(m_settings.contentIndex);
@@ -1813,243 +1775,12 @@ void App::applyFolderMenuHotkey()
         m_messages->showNotification(tr("快捷键不可用"), hotkeyError);
 }
 
-// ---- 截图: the screen capture (src/capture) ----------------------------------
-
-void App::applyCapture()
-{
-    if (!m_qml)
-        return;
-    // Off: no window, no hotkey, no graphics device: all of it goes.
-    if (m_settings.captureEnabled && !m_capture) {
-        capture::Capture::Callbacks callbacks;
-        callbacks.copy = [this](const QImage& image, const QByteArray& project) {
-            m_clipboard->copyImage(image, m_settings.clipboard && m_settings.clipboardImages && !m_clipboardPaused, true, project);
-        };
-        // Ctrl+S and F3: in the screenshot history too, the clipboard left alone.
-        callbacks.record = [this](const QImage& image, const QByteArray& project) {
-            if (m_settings.clipboard && m_settings.clipboardImages && !m_clipboardPaused)
-                m_clipboard->recordImage(image, project);
-        };
-        callbacks.annotateStyles = [this] { return m_settings.captureAnnotateStyles; };
-        callbacks.annotateStylesChanged = [this](const QString& json) {
-            if (json == m_settings.captureAnnotateStyles)
-                return;
-            m_settings.captureAnnotateStyles = json;
-            m_settings.save();
-            if (m_settingsEditor) // its copy must not bring the old styles back with its next change
-                m_settingsEditor->setSettings(m_settings);
-        };
-        callbacks.copyColor = [this](const QString& hex) {
-            m_clipboard->copyText(hex, m_settings.clipboard && !m_clipboardPaused);
-        };
-        callbacks.saveFolder = [this] { return m_settings.captureSaveFolder; };
-        callbacks.saved = [this](const QString& path, const QString& error) {
-            notifyCaptureSaved(path, error);
-        };
-        // The pictures and textures are let go of: the pages go back to Windows.
-        callbacks.ended = [this] { m_idleTrim->poke(); };
-        callbacks.ocr = [this](const QImage& image, double dpr, const QRect& where) { showCaptureOcr(image, dpr, where); };
-        callbacks.ocrThen = [this](const QImage& image, double dpr, const QRect& where, capture::CaptureSession::Action then) {
-            using Action = capture::CaptureSession::Action;
-            captureOcrThen(image, dpr, where,
-                then == Action::OcrCopy ? OcrThen::Copy : then == Action::OcrSearch ? OcrThen::Search : OcrThen::Web);
-        };
-        callbacks.pins = [this] { return &pins(); };
-        callbacks.smart = smartHooks();
-        // 长截图: straight into the editing window (Enter copies, Ctrl+S saves, F3 pins).
-        callbacks.longCapture = [this](const QImage& picture) {
-            capture::CaptureEditor* editor = this->editor();
-            if (!editor || !editor->openImage(picture))
-                m_messages->showNotification(tr("长截图"), tr("没能打开编辑窗口。"));
-        };
-        callbacks.copyText = [this](const QString& text) {
-            m_clipboard->copyText(text, m_settings.clipboard && !m_clipboardPaused);
-        };
-        // A toast of ours ("截图已保存" of the one before) would be in its frames.
-        callbacks.longStarting = [this] { m_messages->hideNotification(); };
-        callbacks.qr = [this](const QStringList& codes, const QRect& where) { showQrResult(codes, where); };
-        callbacks.colorFormatChanged = [this](const QString& name) {
-            if (name == m_settings.captureColorFormat)
-                return;
-            m_settings.captureColorFormat = name;
-            m_settings.save();
-            if (m_settingsEditor) // its copy must not bring the old format back with its next change
-                m_settingsEditor->setSettings(m_settings);
-        };
-        callbacks.recording.preferences = [this] {
-            return capture::Recorder::Preferences {m_settings.captureRecordingFolder, m_settings.captureRecordingSystemAudio,
-                m_settings.captureRecordingMicrophone, static_cast<capture::Recorder::Quality>(m_settings.captureRecordingQuality),
-                m_settings.captureRecordingCursor, m_settings.captureRecordingCountdown, m_settings.captureRecordingClicks,
-                static_cast<capture::Recorder::Format>(m_settings.captureRecordingFormat),
-                static_cast<capture::Recorder::KeyDisplay>(capture::keycaps::modeFromName(m_settings.captureRecordingKeys)),
-                m_settings.captureRecordingMouseButtons};
-        };
-        callbacks.recording.remember = [this](const capture::Recorder::Preferences& prefs) {
-            m_settings.captureRecordingFolder = prefs.folder;
-            m_settings.captureRecordingSystemAudio = prefs.systemAudio;
-            m_settings.captureRecordingMicrophone = prefs.microphone;
-            m_settings.captureRecordingQuality = prefs.quality;
-            m_settings.captureRecordingCursor = prefs.cursor;
-            m_settings.captureRecordingCountdown = prefs.countdown;
-            m_settings.captureRecordingClicks = prefs.clickHighlights;
-            m_settings.captureRecordingFormat = prefs.format;
-            m_settings.captureRecordingKeys = capture::keycaps::modeName(static_cast<capture::keycaps::Mode>(prefs.keys));
-            m_settings.captureRecordingMouseButtons = prefs.mouseButtons;
-            m_settings.save();
-            if (m_settingsEditor) m_settingsEditor->setSettings(m_settings);
-        };
-        callbacks.recording.starting = [this] { m_messages->hideNotification(); };
-        callbacks.recording.finished = [this] { m_idleTrim->poke(); };
-        callbacks.recording.clicks = [this](std::shared_ptr<capture::recording::ClickStream> input) {
-            m_recordingClicks = std::move(input);
-            applyKeyListener(true);
-            return !m_recordingClicks || (m_keyListener && m_keyListener->isActive());
-        };
-        // The screenshot's hotkey and PrtScn (taken over) end a recording
-        // (Capture::trigger): their keys are not shown in it (GitHub #98).
-        callbacks.recording.ownKeys = [this] {
-            std::vector<capture::keycaps::Hotkey> keys;
-            UINT modifiers = 0;
-            UINT vk = 0;
-            if (MessageWindow::parseHotkey(m_settings.captureHotkey.trimmed(), &modifiers, &vk))
-                keys.push_back(capture::keycaps::fromRegistered(modifiers, vk));
-            if (m_settings.capturePrintScreen)
-                keys.push_back({0, VK_SNAPSHOT});
-            return keys;
-        };
-        callbacks.accent = [] { return SystemTheme::accentColor(); };
-        callbacks.windowCreated = [](QQuickWindow* window, const QString& name) { diagnostics::watchWindow(window, name); };
-        m_capture = std::make_unique<capture::Capture>(m_qml.get(), std::move(callbacks));
-    } else if (!m_settings.captureEnabled && m_capture) {
-        m_capture.reset();
-        // The pins close with it (stage 2's rule), those pinned from a file or
-        // the clipboard too; 贴到屏幕 still pins them with the capture off.
-        if (m_pins)
-            m_pins->closeAll();
-        closeCaptureOcr(true);
-        m_idleTrim->poke();
-    }
-    if (m_capture) {
-        m_capture->setCopyOnSelect(m_settings.captureCopyOnSelect);
-        m_capture->setMagnifier(m_settings.captureMagnifier);
-        m_capture->setPinOnCopy(m_settings.capturePinOnCopy);
-        m_capture->setMouseActions({m_settings.captureMouseDoubleLeft, m_settings.captureMouseRight,
-            m_settings.captureMouseMiddle, m_settings.captureMouseBack, m_settings.captureMouseForward});
-        m_capture->setHiddenButtons(m_settings.captureToolbarHidden.split(u',', Qt::SkipEmptyParts));
-        m_capture->setIncludeCursor(m_settings.captureCursor);
-        m_capture->setHdrFile(m_settings.captureHdrFile);
-        m_capture->setControlDetection(m_settings.captureControlsUia);
-        m_capture->setDelay(m_settings.captureDelay);
-        m_capture->setColorFormat(capture::colorFormatFromName(m_settings.captureColorFormat));
-    }
-    if (m_pins)
-        m_pins->setDoubleClick(capture::pinDoubleClickFromName(m_settings.capturePinDoubleClick));
-    applyScreenshots();
-
-    // PrtScn: taken from the Snipping Tool while it is wanted, the value
-    // found then kept in [Capture] PrintScreenBefore and put back after.
-    const bool takeOver = m_settings.captureEnabled && m_settings.capturePrintScreen;
-    QString before = m_settings.capturePrintScreenBefore;
-    QString note;
-    if (takeOver && before.isEmpty()) {
-        const std::optional<DWORD> now = printscreen::read();
-        if (printscreen::write(DWORD {0}))
-            before = printscreen::encode(now);
-        else
-            note = tr("没能改 PrtScn 的设置，它还会打开截图工具。");
-    } else if (!takeOver && !before.isEmpty()) {
-        std::optional<DWORD> value;
-        if (!printscreen::decode(before, &value))
-            before.clear(); // unreadable: nothing to put back
-        else if (printscreen::write(value))
-            before.clear();
-        else
-            note = tr("没能把 PrtScn 的设置改回去。");
-    }
-    if (before != m_settings.capturePrintScreenBefore) {
-        m_settings.capturePrintScreenBefore = before;
-        m_settings.save();
-        if (m_settingsEditor) // its copy must not bring the old value back with its next change
-            m_settingsEditor->setSettings(m_settings);
-    }
-    noteApplyProblem(u"Capture/PrintScreen"_s, note);
-    if (m_settingsEditor)
-        m_settingsEditor->setCaptureNote(note);
-    else if (!note.isEmpty() && !m_aiApplying)
-        m_messages->showNotification(tr("截图"), note);
-    applyCaptureHotkeys();
-}
-
-void App::applyCaptureHotkeys()
-{
-    m_messages->unregisterHotkey(kCaptureHotkeyId);
-    m_messages->unregisterHotkey(kPrintScreenHotkeyId);
-    m_messages->unregisterHotkey(kPinsHotkeyId);
-    m_messages->unregisterHotkey(kPinsRestoreHotkeyId);
-    m_messages->unregisterHotkey(kLastPinHotkeyId);
-    if (!m_capture)
-        return;
-    if (m_settingsEditor && m_settingsEditor->recordingHotkey())
-        return; // the keys being pressed must reach the settings window
-    if (m_settings.capturePrintScreen)
-        m_messages->registerHotkey(kPrintScreenHotkeyId, u"PrintScreen"_s);
-    const QString hotkey = m_settings.captureHotkey.trimmed();
-    QString hotkeyError;
-    if (!hotkey.isEmpty() && !m_messages->registerHotkey(kCaptureHotkeyId, hotkey)) {
-        UINT modifiers = 0;
-        UINT vk = 0;
-        hotkeyError = MessageWindow::parseHotkey(hotkey, &modifiers, &vk)
-            ? tr("“%1” 已被其他程序或系统占用，请换一个。").arg(hotkey)
-            : tr("无法识别“%1”，请重新设置。").arg(hotkey);
-    }
-    noteApplyProblem(u"Capture/Hotkey"_s, hotkeyError);
-    if (m_settingsEditor)
-        m_settingsEditor->setCaptureHotkeyError(hotkeyError); // shown next to the shortcut
-    else if (!hotkeyError.isEmpty() && !m_aiApplying)
-        m_messages->showNotification(tr("快捷键不可用"), hotkeyError);
-    // The pins' two, recorded by the user as well: none unless set.
-    const auto pinsHotkey = [this](int id, const QString& value, const QString& key, bool restore) {
-        const QString hotkey = value.trimmed();
-        QString error;
-        if (!hotkey.isEmpty() && !m_messages->registerHotkey(id, hotkey)) {
-            UINT modifiers = 0;
-            UINT vk = 0;
-            error = MessageWindow::parseHotkey(hotkey, &modifiers, &vk)
-                ? tr("“%1” 已被其他程序或系统占用，请换一个。").arg(hotkey)
-                : tr("无法识别“%1”，请重新设置。").arg(hotkey);
-        }
-        noteApplyProblem(key, error);
-        if (m_settingsEditor) {
-            if (restore)
-                m_settingsEditor->setCapturePinsRestoreHotkeyError(error);
-            else
-                m_settingsEditor->setCapturePinsHotkeyError(error);
-        } else if (!error.isEmpty() && !m_aiApplying) {
-            m_messages->showNotification(tr("快捷键不可用"), error);
-        }
-    };
-    pinsHotkey(kPinsHotkeyId, m_settings.capturePinsHotkey, u"Capture/PinsHotkey"_s, false);
-    pinsHotkey(kPinsRestoreHotkeyId, m_settings.capturePinsRestoreHotkey, u"Capture/PinsRestoreHotkey"_s, true);
-    QString lastError;
-    if (!m_settings.captureLastPinHotkey.isEmpty() && !m_messages->registerHotkey(kLastPinHotkeyId, m_settings.captureLastPinHotkey))
-        lastError = tr("“%1” 已被其他程序或系统占用，请换一个。").arg(m_settings.captureLastPinHotkey);
-    noteApplyProblem(u"Capture/LastPinHotkey"_s, lastError);
-    if (m_settingsEditor)
-        m_settingsEditor->setCaptureLastPinHotkeyError(lastError);
-    else if (!lastError.isEmpty() && !m_aiApplying)
-        m_messages->showNotification(tr("快捷键不可用"), lastError);
-}
-
-void App::triggerCapture()
-{
-    if (m_capture)
-        m_capture->trigger();
-}
+// ---- 截图历史 (jt): screenshots in the clipboard history, while the screenshot plugin is on ----
 
 QString App::screenshotKeyword() const
 {
     const QString word = m_settings.captureKeyword.trimmed();
-    if (!m_settings.captureEnabled || word.isEmpty() || !isValidWebKeyword(word))
+    if (!screenshotPluginOn() || word.isEmpty() || !isValidWebKeyword(word))
         return {};
     // They keep theirs (the settings refuse the word; WinShun.ini may be
     // edited by hand).
@@ -2108,7 +1839,7 @@ void App::applyScreenshots()
             m_clipboard->pasteEntry(id, target);
         };
         hooks.copy = [this](qint64 id) { m_clipboard->pasteEntry(id, nullptr); };
-        hooks.edit = [this](qint64 id) { editHistory(id); };
+        hooks.edit = [this](qint64 id) { pictureAction(u"edit"_s, id, {}, true); };
         hooks.remove = [this](qint64 id) { m_clipboard->removeEntries({id}); };
         hooks.undo = [this] {
             if (!m_clipboard->canUndo())
@@ -2120,278 +1851,264 @@ void App::applyScreenshots()
     m_launcher->setScreenshots(keyword, std::move(hooks));
 }
 
-capture::PinManager& App::pins()
-{
-    if (!m_pins) {
-        capture::PinManager::Callbacks callbacks;
-        callbacks.copy = [this](const QImage& image, bool screenshot) {
-            m_clipboard->copyImage(image, m_settings.clipboard && m_settings.clipboardImages && !m_clipboardPaused, screenshot);
-        };
-        callbacks.save = [this](const QImage& image, const QString& path) {
-            capture::saveImage(m_pinSaver, this, image, path,
-                [this](const QString& saved, const QString& error) { notifyCaptureSaved(saved, error); },
-                m_settings.captureSaveFolder);
-        };
-        callbacks.ocr = [this](const QImage& image, double dpr, const QRect& where) { showCaptureOcr(image, dpr, where); };
-        callbacks.edit = [this](capture::PinWindow* pin) { editPin(pin); };
-        callbacks.closed = [this] { m_idleTrim->poke(); }; // its pixels can go back to Windows
-        callbacks.dark = [] { return isDarkMode(); };
-        callbacks.accent = [] { return SystemTheme::accentColor(); };
-        callbacks.copyText = [this](const QString& text) {
-            if (!text.isEmpty())
-                m_clipboard->copyText(text, m_settings.clipboard && !m_clipboardPaused);
-        };
-        callbacks.ocrAvailable = capture::CaptureOcr::available();
-        if (callbacks.ocrAvailable) {
-            callbacks.readLines = [this](const QImage& image, double dpr, std::function<void(QList<capture::RedactLine>)> done) {
-                captureOcr().scan(image, dpr, std::move(done));
-            };
-        }
-        m_pins = std::make_unique<capture::PinManager>(std::move(callbacks));
-        m_pins->setDoubleClick(capture::pinDoubleClickFromName(m_settings.capturePinDoubleClick));
-    }
-    return *m_pins;
-}
+// ---- plugins with windows of their own: the screenshot (GitHub #138) ---------------
 
 namespace {
 
-// The window's client area on the screen, physical: where the editing
-// window's canvas is measured from (its title bar is its own, the whole
-// window is client area).
-QRect clientRectOf(QQuickWindow* window)
+constexpr QStringView kScreenshotPlugin = u"winshun.capture";
+
+// A picture the screenshot plugin hands over (clipboard_add_image): its
+// pixels behind a small header (the plugin's writePicture), so neither side
+// encodes a PNG for the other. Null if it is not one.
+QImage readHandedPicture(const QString& path)
 {
-    const auto hwnd = reinterpret_cast<HWND>(window->winId());
-    RECT client {};
-    POINT origin {0, 0};
-    if (!::GetClientRect(hwnd, &client) || !::ClientToScreen(hwnd, &origin))
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly))
         return {};
-    return QRect(origin.x, origin.y, client.right, client.bottom);
+    qint32 header[6] {};
+    if (file.read(reinterpret_cast<char*>(header), sizeof header) != qint64(sizeof header))
+        return {};
+    const auto [magic, version, width, height, stride, format] = header;
+    // At most 2 GB of pixels: a long screenshot is tall, not that tall.
+    if (magic != 0x474D4957 || version != 1 || format != QImage::Format_ARGB32_Premultiplied || width <= 0 || height <= 0
+        || width > 65535 || stride < width * 4 || qint64(stride) * height > (qint64(1) << 31)
+        || file.size() != qint64(sizeof header) + qint64(stride) * height)
+        return {};
+    QImage image(width, height, QImage::Format_ARGB32_Premultiplied);
+    if (image.isNull())
+        return {};
+    const qint64 row = qint64(width) * 4;
+    for (int y = 0; y < height; ++y) {
+        if (file.read(reinterpret_cast<char*>(image.scanLine(y)), row) != row || (stride > row && !file.skip(stride - row)))
+            return {};
+    }
+    return image;
 }
 
-// The window moved so that its client area's top left is `topLeft`.
-void moveClientTo(QQuickWindow* window, QPoint topLeft)
+// `path` is a file inside `folder` (a plugin's data folder).
+bool insideFolder(const QString& path, const QString& folder)
 {
-    const auto hwnd = reinterpret_cast<HWND>(window->winId());
-    RECT outer {};
-    const QRect client = clientRectOf(window);
-    if (client.isEmpty() || !::GetWindowRect(hwnd, &outer))
-        return;
-    const QPoint shift = client.topLeft() - QPoint(outer.left, outer.top);
-    ::SetWindowPos(hwnd, nullptr, topLeft.x() - shift.x(), topLeft.y() - shift.y(), 0, 0,
-        SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+    if (path.isEmpty() || !QFileInfo(path).isAbsolute())
+        return false;
+    const QString clean = QDir::cleanPath(QDir::fromNativeSeparators(path));
+    const QString base = QDir::cleanPath(QDir::fromNativeSeparators(folder)) + u'/';
+    return clean.startsWith(base, Qt::CaseInsensitive) && !clean.contains(u"/../"_s);
 }
 
-// A history picture: a long capture is far above Qt's default limit of 256 MB.
-QImage readPicture(const QString& path)
+mcp::ToolResult toolError(const QString& text)
 {
-    QImageReader reader(path);
-    reader.setAutoTransform(true);
-    reader.setAllocationLimit(2048);
-    return reader.read();
+    return {{}, true, text};
 }
 
 } // namespace
 
-capture::CaptureEditor* App::editor()
+bool App::screenshotPluginOn() const
 {
-    if (m_editor)
-        return m_editor.get();
-    if (!m_qml)
-        return nullptr;
-    auto editor = std::make_unique<capture::CaptureEditor>();
-    capture::CaptureEditor::Hooks hooks;
-    hooks.project = [this](qint64 id) { return m_clipStore ? m_clipStore->project(id) : QByteArray(); };
-    hooks.picture = [this](qint64 id) { return m_clipStore ? readPicture(m_clipStore->imagePath(id)) : QImage(); };
-    hooks.exists = [this](qint64 id) { return m_clipStore && m_clipStore->clip(id) != nullptr; };
-    // Changed: a new entry and the clipboard, the original left as it is.
-    hooks.copy = [this](const QImage& image, const QByteArray& project) {
-        m_clipboard->copyImage(image, m_settings.clipboard && m_settings.clipboardImages && !m_clipboardPaused, true, project);
-    };
-    // Not changed: the original again, which moves it to the top.
-    hooks.copyOriginal = [this](qint64 id) { m_clipboard->pasteEntry(id, nullptr); };
-    hooks.record = [this](const QImage& image, const QByteArray& project) {
-        if (m_settings.clipboard && m_settings.clipboardImages && !m_clipboardPaused)
-            m_clipboard->recordImage(image, project);
-    };
-    hooks.save = [this](const QImage& image, const QString& path) {
-        capture::saveImage(m_pinSaver, this, image, path,
-            [this](const QString& saved, const QString& error) { notifyCaptureSaved(saved, error); },
-            m_settings.captureSaveFolder);
-    };
-    hooks.pin = [this](const QImage& image, const QByteArray& project, QPoint origin) {
-        pins().pin(image, origin, true, project);
-    };
-    hooks.ocr = [this](const QImage& image, double dpr, const QRect& where) { showCaptureOcr(image, dpr, where); };
-    hooks.smart = smartHooks();
-    hooks.styles = [this] { return m_settings.captureAnnotateStyles; };
-    hooks.stylesChanged = [this](const QString& json) {
-        if (json == m_settings.captureAnnotateStyles)
+    return m_pluginHost && m_pluginHost->catalog().enabled(kScreenshotPlugin);
+}
+
+QString App::picturePlugin(const QString& verb) const
+{
+    if (!m_pluginHost)
+        return {};
+    for (const plugin::Entry& e : m_pluginHost->catalog().entries()) {
+        if (e.manifest && e.manifest->pictures.contains(verb) && m_pluginHost->catalog().enabled(e.id))
+            return e.id;
+    }
+    return {};
+}
+
+void App::pluginPicturesChanged()
+{
+    const bool pin = !picturePlugin(u"pin"_s).isEmpty();
+    const bool edit = !picturePlugin(u"edit"_s).isEmpty();
+    if (m_launcher)
+        m_launcher->setPictureVerbs(pin, edit);
+    if (m_clipboard)
+        m_clipboard->setPictureVerbs(pin, edit);
+    if (m_settingsEditor) // the screenshot history's keyword (剪贴板 page)
+        m_settingsEditor->setScreenshotHistory(screenshotPluginOn());
+}
+
+// 贴到屏幕 and 编辑 go to the plugin that does them (`picture`), with the
+// picture's file, and its project when the entry has one; the plugin reads
+// both from where they are.
+void App::pictureAction(const QString& verb, qint64 clipId, const QString& path, bool screenshot)
+{
+    const QString plugin = picturePlugin(verb);
+    if (plugin.isEmpty())
+        return;
+    QJsonObject params {{u"action"_s, verb}, {u"screenshot"_s, screenshot}};
+    if (clipId > 0) {
+        if (!m_clipStore || !m_clipStore->isOpen())
             return;
-        m_settings.captureAnnotateStyles = json;
-        m_settings.save();
-        if (m_settingsEditor) // its copy must not bring the old styles back with its next change
-            m_settingsEditor->setSettings(m_settings);
-    };
-    // The picture, the document and the tiles are let go of: the pages go back to Windows.
-    hooks.closed = [this] { m_idleTrim->poke(); };
-    hooks.window.show = [](QQuickWindow* window) {
-        window->showNormal();
-        window->raise();
-        win::bringToFront(window);
-        window->requestActivate();
-    };
-    hooks.window.cloak = [](QQuickWindow* window, bool cloaked) { win::setCloaked(window, cloaked); };
-    hooks.window.nativeRect = [](QQuickWindow* window) { return clientRectOf(window); };
-    hooks.window.moveTo = [](QQuickWindow* window, QPoint topLeft) { moveClientTo(window, topLeft); };
-    editor->setHooks(std::move(hooks));
-    editor->setOcrAvailable(capture::CaptureOcr::available());
-
-    m_editFrame = std::make_unique<WindowFrame>(true); // its own title bar
-    QQmlComponent component(m_qml.get(), u"WinShun"_s, u"EditWindow"_s);
-    QObject* object = component.createWithInitialProperties({
-        {u"editor"_s, QVariant::fromValue(editor.get())},
-        {u"frame"_s, QVariant::fromValue(m_editFrame.get())},
-    });
-    auto* window = qobject_cast<QQuickWindow*>(object);
-    if (!window) {
-        qWarning().noquote() << "Screen capture: no editing window:" << component.errorString();
-        delete object;
-        m_editFrame.reset();
-        return nullptr;
+        if (m_clipStore->imagePending(clipId)) { // taken a moment ago: said where the user looks
+            m_messages->showNotification(verb == u"edit" ? tr("编辑") : tr("贴到屏幕"), tr("图片还在保存，请稍后再试"));
+            return;
+        }
+        const QString file = m_clipStore->imagePath(clipId);
+        if (file.isEmpty() || !QFileInfo::exists(file)) {
+            m_messages->showNotification(tr("没能打开这张图片"), tr("它已不在历史里，或读不出来。"));
+            return;
+        }
+        params.insert(u"clipId"_s, clipId);
+        params.insert(u"file"_s, QDir::toNativeSeparators(file));
+        if (const QString project = m_clipStore->projectPath(clipId); !project.isEmpty() && QFileInfo::exists(project))
+            params.insert(u"project"_s, QDir::toNativeSeparators(project));
+        if (const Clip* clip = m_clipStore->clip(clipId))
+            params.insert(u"screenshot"_s, clip->screenshot);
+    } else {
+        params.insert(u"file"_s, QDir::toNativeSeparators(path));
     }
-    window->create();
-    styleWindow(window, false);
-    win::setDarkFrame(window, isDarkMode());
-    m_editFrame->setWindow(window);
-    editor->attach(window);
-    m_editWindow = window;
-    m_editor = std::move(editor);
-    return m_editor.get();
+    if (!m_pluginHost->request(plugin, u"picture"_s, params, {}, true))
+        m_messages->showNotification(tr("截图插件还没准备好"), tr("请稍后再试。"));
 }
 
-void App::editHistory(qint64 clipId)
+// The tray icon is pressed: each plugin's submenu is asked for, and is here
+// (a millisecond or two) before the button comes up and the menu is shown.
+void App::prefetchTrayMenus()
 {
-    if (!m_clipStore || !m_clipStore->isOpen())
+    if (!m_pluginHost)
         return;
-    if (m_clipStore->imagePending(clipId)) { // taken a moment ago: said where the user looks
-        m_messages->showNotification(tr("编辑"), tr("图片还在保存，请稍后再试"));
-        return;
+    for (const plugin::Entry& e : m_pluginHost->catalog().entries()) {
+        if (!e.manifest || e.manifest->trayMenu.isEmpty())
+            continue;
+        if (!m_pluginHost->catalog().enabled(e.id)) {
+            m_trayMenus.erase(e.id);
+            continue;
+        }
+        m_pluginHost->request(e.id, u"trayMenu"_s, {}, [this, id = e.id](bool ok, const QJsonValue& result) {
+            if (ok)
+                m_trayMenus[id] = result.toObject().value(u"items"_s).toArray();
+        });
     }
-    capture::CaptureEditor* editor = this->editor();
-    if (editor && !editor->openHistory(clipId))
-        m_messages->showNotification(tr("没能编辑这张图片"), tr("它已不在历史里，或读不出来。"));
 }
 
-void App::editPin(capture::PinWindow* pin)
+QJsonObject App::pluginLook() const
 {
-    if (!pin || !m_pins || !m_pins->contains(pin))
-        return;
-    capture::CaptureEditor* editor = this->editor();
-    if (!editor)
-        return;
-    // The pin is lent for as long as the window is open; it may be closed meanwhile.
-    capture::CaptureEditor::PinTarget target;
-    target.image = pin->image();
-    target.project = pin->project();
-    target.picture = pin->pictureRect();
-    target.zoom = pin->zoom();
-    const auto alive = [this, pin] { return m_pins && m_pins->contains(pin); };
-    target.alive = alive;
-    target.setShown = [alive, pin](bool shown) {
-        if (alive())
-            pin->setShown(shown);
-    };
-    target.replace = [alive, pin](const QImage& image, const QByteArray& project) {
-        if (alive())
-            pin->setPicture(image, project);
-    };
-    if (!editor->openPin(std::move(target)))
-        m_messages->showNotification(tr("没能编辑这张图片"), tr("读不出这张图。"));
+    return {{u"locale"_s, m_language}, {u"themeSetting"_s, m_settings.theme}, {u"corners"_s, m_settings.corners},
+        {u"uiSize"_s, m_settings.uiSize}, {u"transparency"_s, m_settings.transparency}, {u"renderer"_s, m_settings.renderer}};
 }
 
-// 贴到屏幕 on a picture file's row (the launcher) or a picture in the
-// clipboard history: read by Windows Imaging Component on a thread of its
-// own (a GIF's first frame; WebP with Windows' codec), then pinned round the
-// pointer, within the work area of its monitor. A picture larger than 90 %
-// of that area is scaled down to fit (at 1:1 it would cover the screen).
-void App::pinPicture(const QString& path, bool screenshot)
+void App::setUpAppTools()
 {
-    if (path.isEmpty())
-        return;
-    QPointer<App> self(this);
-    std::thread([self, path, screenshot] {
-        const HRESULT com = ::CoInitializeEx(nullptr, COINIT_MULTITHREADED | COINIT_DISABLE_OLE1DDE);
-        QImage image = decodePictureFile(path, 0);
-        if (SUCCEEDED(com))
-            ::CoUninitialize();
-        QMetaObject::invokeMethod(qApp, [self, path, image, screenshot] {
-            if (!self)
-                return;
-            if (image.isNull()) {
-                self->m_messages->showNotification(tr("没能贴到屏幕"), tr("读不出这张图片：%1").arg(QDir::toNativeSeparators(path)));
+    std::vector<plugin::Host::AppTool> tools;
+    // A picture into the clipboard history: the plugin's file in its own
+    // data folder (and the annotations beside it), read off the GUI thread
+    // and deleted. `copy`: onto the clipboard too (else recorded only, as
+    // Ctrl+S and F3 do); `screenshot`: for 截图历史. Nothing kept while the
+    // history or its pictures are off, or paused, as the clipboard's own.
+    tools.push_back({u"clipboard_add_image"_s, plugin::Permission::ClipboardWrite,
+        [this](const QString&, const QString& dataDir, const QJsonObject& arguments, std::function<void(mcp::ToolResult)> done) {
+            const QString file = arguments.value(u"file"_s).toString();
+            const QString project = arguments.value(u"project"_s).toString();
+            if (!insideFolder(file, dataDir) || (!project.isEmpty() && !insideFolder(project, dataDir))) {
+                done(toolError(u"file and project must be files in the plugin's data folder"_s));
                 return;
             }
-            self->pinImage(image, screenshot);
-        }, Qt::QueuedConnection);
-    }).detach();
+            const bool copy = arguments.value(u"copy"_s).toBool(true);
+            const bool screenshot = arguments.value(u"screenshot"_s).toBool();
+            const QString imageOrigin = arguments.value(u"origin"_s).toString();
+            if (imageOrigin.toUtf8().size() > 96 || imageOrigin.contains(QChar::Null)) {
+                done(toolError(u"origin must be at most 96 UTF-8 bytes without NUL"_s));
+                return;
+            }
+            QPointer<App> self(this);
+            std::thread([self, file, project, copy, screenshot, imageOrigin, done = std::move(done)]() mutable {
+                QImage image = readHandedPicture(file);
+                QByteArray bytes;
+                if (!project.isEmpty()) {
+                    QFile in(project);
+                    if (in.open(QIODevice::ReadOnly))
+                        bytes = in.readAll();
+                }
+                QFile::remove(file);
+                if (!project.isEmpty())
+                    QFile::remove(project);
+                QMetaObject::invokeMethod(qApp, [self, image = std::move(image), bytes = std::move(bytes), copy, screenshot, imageOrigin,
+                                                    done = std::move(done)]() mutable {
+                    if (!self)
+                        return;
+                    if (image.isNull()) {
+                        done(toolError(u"Not a picture Win顺 can read"_s));
+                        return;
+                    }
+                    const bool remember = self->m_settings.clipboard && self->m_settings.clipboardImages && !self->m_clipboardPaused;
+                    if (copy)
+                        self->m_clipboard->copyImage(image, remember, screenshot, std::move(bytes), imageOrigin);
+                    else if (remember)
+                        self->m_clipboard->recordImage(image, std::move(bytes));
+                    done({{{u"kept"_s, remember}}});
+                }, Qt::QueuedConnection);
+            }).detach();
+        }});
+    // Text onto the clipboard (a colour, the words read in a picture), into
+    // the history as the clipboard's own copies.
+    tools.push_back({u"clipboard_copy"_s, plugin::Permission::ClipboardWrite,
+        [this](const QString&, const QString&, const QJsonObject& arguments, std::function<void(mcp::ToolResult)> done) {
+            const QString text = arguments.value(u"text"_s).toString();
+            if (text.isEmpty() || text.size() > 1'000'000) {
+                done(toolError(u"text must be 1 to 1,000,000 characters"_s));
+                return;
+            }
+            m_clipboard->copyText(text, m_settings.clipboard && !m_clipboardPaused);
+            done({});
+        }});
+    // An entry of the history onto the clipboard again (编辑's copy of a
+    // picture left as it was), which moves it to the top.
+    tools.push_back({u"clipboard_copy_entry"_s, plugin::Permission::ClipboardWrite,
+        [this](const QString&, const QString&, const QJsonObject& arguments, std::function<void(mcp::ToolResult)> done) {
+            if (!m_clipboard->pasteEntry(arguments.value(u"id"_s).toInteger(), nullptr))
+                done(toolError(u"No such entry"_s));
+            else
+                done({});
+        }});
+    // 识别文字并搜索: the launcher with the words.
+    tools.push_back({u"show_launcher"_s, plugin::Permission::Ui,
+        [this](const QString&, const QString&, const QJsonObject& arguments, std::function<void(mcp::ToolResult)> done) {
+            showLauncher(arguments.value(u"text"_s).toString().left(1000));
+            done({});
+        }});
+    // 识别文字并网页搜索: Win顺's default web search.
+    tools.push_back({u"web_search"_s, plugin::Permission::WinshunOpen,
+        [this](const QString&, const QString&, const QJsonObject& arguments, std::function<void(mcp::ToolResult)> done) {
+            const QString text = arguments.value(u"text"_s).toString().simplified().left(1000);
+            if (text.isEmpty()) {
+                done(toolError(u"text is empty"_s));
+                return;
+            }
+            openWebSearch(text);
+            done({});
+        }});
+    tools.push_back({u"show_ocr_setup"_s, plugin::Permission::Ui,
+        [this](const QString&, const QString&, const QJsonObject&, std::function<void(mcp::ToolResult)> done) {
+            showSettings();
+            if (m_settingsWindow)
+                QMetaObject::invokeMethod(m_settingsWindow, "showSetting",
+                    Q_ARG(QVariant, m_settingsWindow->property("clipboardPage")), Q_ARG(QVariant, QVariant(0)),
+                    Q_ARG(QVariant, QVariant(QCoreApplication::translate("OcrPackageRow", "增强文字识别"))));
+            done({});
+        }});
+    m_pluginHost->setAppTools(std::move(tools));
 }
 
-void App::pinImage(QImage image, bool screenshot)
+// PrtScn taken over by a Win顺 before 0.17, whose value then is kept in
+// [Capture] PrintScreenBefore: the screenshot plugin keeps it once the
+// settings moved to it (MovedPlugins); until then, and without the plugin,
+// it goes back to the Snipping Tool, so the key is not dead.
+void App::restorePrintScreen()
 {
-    POINT cursor {};
-    ::GetCursorPos(&cursor);
-    MONITORINFO info {sizeof info};
-    if (!::GetMonitorInfoW(::MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST), &info))
+    if (m_settings.capturePrintScreenBefore.isEmpty() || screenshotPluginOn())
         return;
-    const QRect work(info.rcWork.left, info.rcWork.top, info.rcWork.right - info.rcWork.left,
-        info.rcWork.bottom - info.rcWork.top);
-    const QSize room = work.size() * 0.9;
-    if (image.width() > room.width() || image.height() > room.height())
-        image = image.scaled(room, Qt::KeepAspectRatio, Qt::SmoothTransformation);
-    if (image.isNull())
-        return;
-    image = image.convertToFormat(QImage::Format_ARGB32_Premultiplied);
-    const QPoint at(cursor.x, cursor.y);
-    QPoint origin = at - QPoint(image.width() / 2, image.height() / 2);
-    origin.setX(std::clamp(origin.x(), work.left(), std::max(work.left(), work.right() + 1 - image.width())));
-    origin.setY(std::clamp(origin.y(), work.top(), std::max(work.top(), work.bottom() + 1 - image.height())));
-    pins().pin(image, origin, screenshot);
-}
-
-bool App::pinClipboardImage()
-{
-    if (!m_capture || ::GetClipboardSequenceNumber() == m_capture->lastClipboardSeq())
-        return false; // nothing copied since that capture: it is the picture to pin
-    const QClipboard* board = QGuiApplication::clipboard();
-    const QMimeData* data = board->mimeData();
-    if (data->hasImage()) {
-        const QImage image = board->image();
-        if (!image.isNull()) {
-            pinImage(image, true);
-            return true;
-        }
+    std::optional<DWORD> value;
+    if (printscreen::decode(m_settings.capturePrintScreenBefore, &value) && !printscreen::write(value)) {
+        qWarning() << "PrtScn: could not give it back to the Snipping Tool";
+        return; // tried again at the next start
     }
-    // Explorer and most viewers copy a picture as a file, not as pixels.
-    for (const QUrl& url : data->urls()) {
-        if (!url.isLocalFile())
-            continue;
-        const QString path = url.toLocalFile();
-        if (!QImageReader(path).canRead())
-            continue;
-        pinPicture(path, true);
-        return true;
-    }
-    return false;
-}
-
-void App::pinLastCapture()
-{
-    if (pinClipboardImage())
-        return;
-    if (m_capture && m_capture->hasLast())
-        m_capture->pinLast();
-    else
-        m_messages->showNotification(tr("贴上最近一次截图"), tr("还没有截图，请先截一张。"));
+    m_settings.capturePrintScreenBefore.clear();
+    m_settings.save();
+    if (m_settingsEditor) // its copy must not bring the old value back with its next change
+        m_settingsEditor->setSettings(m_settings);
 }
 
 ClipboardWatcher::Options App::clipboardOptions() const
@@ -2517,8 +2234,8 @@ void App::applyQuickPasteHotkeys()
         const QString modifier = keys == u"ctrl" ? u"Ctrl"_s : u"Alt"_s;
         const bool suspended = QGuiApplication::focusWindow() || m_clipboard->active();
         QStringList reserved {m_settings.hotkey, m_settings.clipboardHotkey, m_settings.folderMenuHotkey};
-        if (m_settings.captureEnabled)
-            reserved << m_settings.captureHotkey << m_settings.capturePinsHotkey << m_settings.capturePinsRestoreHotkey;
+        for (const auto& [plugin, keys] : m_pluginHotkeys) // the screenshot's, say
+            reserved << keys;
         for (int n = 1; n <= 9; ++n) {
             const QString chord = modifier + u'+' + QString::number(n);
             UINT modifiers = 0, vk = 0;
@@ -2705,9 +2422,9 @@ void App::updateSearchBoxLook()
     const QColor accent = SystemTheme::accentColor();
     taskbar::SearchBox::Look look;
     look.name = tr("Win顺 搜索").toStdWString();
-    // Typing there: what the launcher searches (its tabs say which).
-    const bool typing = m_launcher->inTaskbarBox() && !m_launcherClosing;
-    look.placeholder = (typing ? m_launcher->placeholder() : tr("搜索应用和文件")).toStdWString();
+    // One short line, typing there or not: the launcher's tabs say what it
+    // searches (the scope's words here changed with it, a fade each time).
+    look.placeholder = tr("想搜索什么…").toStdWString();
     look.label = tr("搜索").toStdWString();
     look.accent = RGB(accent.red(), accent.green(), accent.blue());
     look.monoIcon = m_settings.taskbarIcon == u"mono";
@@ -2747,7 +2464,8 @@ void App::searchBoxPressed(const taskbar::SearchBox::Press& press)
     // Open over it already: the press took the keyboard (see m_boxPressGrace).
     // Back to the launcher, the caret where the box was pressed.
     m_boxPressGrace.stop();
-    win::bringToFront(m_window);
+    if (win::bringToFront(m_window) == win::Front::Refused)
+        watchStrandedLauncher();
     m_window->requestActivate();
     if (press.at)
         emit m_launcher->caretRequested(*press.at, press.word);
@@ -2835,6 +2553,7 @@ void App::deliverTyping()
         .active = m_window->isActive(),
         .fieldFocused = focus && (focus == m_searchField || focus->objectName() == u"panelSearchField"),
         .revealed = m_window->isVisible() && !m_launcherReveal.pending() && !m_prewarming.load() && !isCloaked(window),
+        .preparing = m_launcherOpening,
     };
     const auto note = [now](Clock::time_point& at, bool came) {
         if (came && at == Clock::time_point {})
@@ -2968,14 +2687,34 @@ void App::typingFolderKnown(HWND root, HWND tab, bool opus, std::uint64_t reques
     // here", GitHub #20); on the monitor of that window, which need not be
     // the mouse's. The keys follow once the launcher is ready for them.
     beginHandoff(opus ? u"opus"_s : u"explorer"_s);
+    showFolderSearch(root, tab, opus, folder);
+    deliverTyping(); // pinned and up already: it may be now
+}
+
+void App::showFolderSearch(HWND root, HWND tab, bool opus, const QString& folder)
+{
     const QString prefix = folder.endsWith(u'\\') ? folder + u' ' : folder + u"\\ "_s;
-    showLauncher(prefix, {}, false, screenOf(::MonitorFromWindow(root, MONITOR_DEFAULTTONEAREST)));
-    m_typingOrigin = {root, tab, opus}; // after showLauncher, which clears it
+    showLauncher(prefix, {}, false, screenOf(::MonitorFromWindow(root, MONITOR_DEFAULTTONEAREST)), root);
+    m_typingOrigin = {root, tab, opus, folder}; // after showLauncher, which clears it
     // What is found in that folder first, then elsewhere (or there alone, as
     // set: Launcher::setFolderTypingOnly), as Listary lists it (GitHub #110).
     // After showLauncher too, which forgets the folder typed in before.
     m_launcher->setTypingFolder(prefix);
-    deliverTyping(); // pinned and up already: it may be now
+    followTypingSelection();
+}
+
+void App::cancelTypingSelection()
+{
+    m_typingSelectionTimer.stop();
+    m_typingSelection.request_stop();
+    m_typingSelection = std::stop_source {};
+}
+
+void App::followTypingSelection()
+{
+    cancelTypingSelection();
+    if (m_typingOrigin.tab && !m_typingOrigin.opus)
+        m_typingSelectionTimer.start();
 }
 
 bool App::revealInTypingTab(const QString& path)
@@ -2990,6 +2729,7 @@ bool App::revealInTypingTab(const QString& path)
 
 bool App::openInTypingTab(const QString& folder, const QString& select)
 {
+    cancelTypingSelection();
     const TypingOrigin from = std::exchange(m_typingOrigin, {});
     if (!from.tab)
         return false;
@@ -3056,12 +2796,12 @@ void App::applyTaskbarHotkeys()
     // from here while Win+S is ours. Not while it goes back (releasing):
     // held as the new Explorer starts, it would be gone for good, Explorer
     // registers its keys once.
-    // The user's own capture shortcut, if it is that very chord, wins.
-    UINT clipModifiers = 0, clipVk = 0, captureModifiers = 0, captureVk = 0;
-    MessageWindow::parseHotkey(u"Win+Shift+S"_s, &clipModifiers, &clipVk);
-    const bool ownCapture = m_settings.captureEnabled && MessageWindow::parseHotkey(m_settings.captureHotkey.trimmed(), &captureModifiers, &captureVk)
-        && captureModifiers == clipModifiers && captureVk == clipVk;
-    if (winS && !ownCapture)
+    // A plugin's shortcut (the screenshot's), if it is that very chord, wins.
+    const QString screenClip = hotkeys::normalized(u"Win+Shift+S"_s);
+    const bool pluginHas = std::ranges::any_of(m_pluginHotkeys, [&](const auto& entry) {
+        return std::ranges::any_of(entry.second, [&](const QString& key) { return hotkeys::normalized(key) == screenClip; });
+    });
+    if (winS && !pluginHas)
         m_messages->registerHotkey(kScreenClipHotkeyId, u"Win+Shift+S"_s);
     m_winSState = state;
     if (m_settingsEditor)
@@ -3131,10 +2871,6 @@ void App::releaseWinChordsForExplorer()
         {kHotkeyId, m_settings.hotkey},
         {kFolderMenuHotkeyId, m_settings.folderMenuHotkey},
         {kClipboardHotkeyId, m_settings.clipboardHotkey},
-        {kCaptureHotkeyId, m_settings.captureHotkey},
-        {kPinsHotkeyId, m_settings.capturePinsHotkey},
-        {kPinsRestoreHotkeyId, m_settings.capturePinsRestoreHotkey},
-        {kLastPinHotkeyId, m_settings.captureLastPinHotkey},
         {kWinVHotkeyId, u"Win+V"_s},
         {kWinSHotkeyId, u"Win+S"_s},
         {kScreenClipHotkeyId, u"Win+Shift+S"_s},
@@ -3171,7 +2907,6 @@ void App::applyWinKeyedHotkeys()
 {
     applyHotkey();
     applyFolderMenuHotkey();
-    applyCaptureHotkeys();
 }
 
 void App::explorerRestarted(bool back)
@@ -3212,6 +2947,8 @@ void App::reloadSettings()
     applySettings(false);
     if (m_settingsEditor)
         m_settingsEditor->setSettings(m_settings);
+    if (m_onboardingEditor)
+        m_onboardingEditor->setSettings(m_settings);
     if (accessChanged)
         applyIndexAccess();
 }
@@ -3221,6 +2958,8 @@ void App::settingsEdited(const Settings& settings)
     const bool accessChanged = settings.indexAccess != m_settings.indexAccess;
     m_settings = settings;
     applySettings(false);
+    if (m_onboardingEditor)
+        m_onboardingEditor->setSettings(m_settings);
     m_backup->soon();
     if (accessChanged)
         applyIndexAccess();
@@ -3230,6 +2969,7 @@ void App::showSettings()
 {
     if (!m_settingsWindow) {
         auto* editor = new SettingsEditor(m_settings, m_renderer);
+        editor->useOcrPackage(m_ocrPackage.get());
         auto* frame = new WindowFrame(true, editor); // its own title bar; goes with the editor
         QQmlComponent component(m_qml.get(), u"WinShun"_s, u"SettingsWindow"_s);
         QObject* object = component.createWithInitialProperties({
@@ -3253,7 +2993,6 @@ void App::showSettings()
         connect(editor, &SettingsEditor::recordingHotkeyChanged, this, &App::applyClipboardHotkeys);
         connect(editor, &SettingsEditor::recordingHotkeyChanged, this, &App::applyTaskbarHotkeys);
         connect(editor, &SettingsEditor::recordingHotkeyChanged, this, &App::applyFolderMenuHotkey);
-        connect(editor, &SettingsEditor::recordingHotkeyChanged, this, &App::applyCaptureHotkeys);
         connect(editor, &SettingsEditor::explorerRestartRequested, this, &App::restartExplorer);
         connect(editor, &SettingsEditor::giveBackRequested, this, &App::giveBackWinKey);
         connect(editor, &SettingsEditor::autostartRequested, this, &App::setAutostart);
@@ -3334,6 +3073,18 @@ void App::showSettings()
             QJsonObject context {{u"content_search_enabled"_s, m_settings.contentSearch}, {u"content_index_enabled"_s, m_settings.contentIndex},
                 {u"documents_enabled"_s, m_settings.contentDocuments},
                 {u"include_system_folders"_s, m_settings.contentInLowPriority}};
+            const KeyboardRawInput pieKeyboard = keyboardRawInput();
+            context[u"drop_pie"_s] = QJsonObject {
+                {u"enabled"_s, m_settings.dropPie},
+                {u"runtime"_s, m_dropPie ? u"local"_s : m_dropPieHelper ? u"helper"_s : u"off"_s},
+                {u"local_drop_target_ready"_s, m_dropPie && m_dropPie->dropReady()},
+                {u"local_listener_active"_s, m_dropPie && m_keyListener && m_keyListener->isActive()},
+                {u"local_keyboard_input"_s, !m_dropPie || !m_keyListener ? u"off"_s
+                    : pieKeyboard.error ? u"unknown"_s : !pieKeyboard.registration ? u"none"_s
+                    : pieKeyboard.registration->hwndTarget == m_keyListener->window() ? u"ok"_s : u"other"_s},
+            };
+            if (m_dropPieHelper)
+                context[u"drop_pie_helper"_s] = m_dropPieHelper->state();
             if (const auto service = std::dynamic_pointer_cast<ntfs::ServiceVolumeAccess>(m_index->volumeAccess()))
                 context[u"index_service_version"_s] = QString::fromStdWString(service->serviceVersion());
             context[u"index_service_state"_s] = QString::fromLatin1(ntfs::ServiceVolumeAccess::stateName(ntfs::ServiceVolumeAccess::state()));
@@ -3402,20 +3153,23 @@ void App::showSettings()
         });
         editor->plugins()->setLocale(m_language);
         editor->plugins()->setHost(m_pluginHost.get());
+        editor->plugins()->setRecoveryState(m_pluginRecoveryMessage, m_pluginRecoveryBusy);
+        connect(editor->plugins(), &PluginSettings::recoveryRequested, this, &App::installMovedPlugins);
         editor->favorites()->setCatalogs(m_apps.get(), m_places.get());
         editor->favorites()->setStore(m_favorites.get());
         m_settingsWindow = window;
         m_settingsEditor = editor;
+        editor->setScreenshotHistory(screenshotPluginOn());
         applyHotkey(); // shows whether the current hotkey works
         applyClipboardHotkeys(); // ... and where Win+V stands
         applyTaskbarHotkeys(); // ... and Win+S
         applyFolderMenuHotkey(); // ... and the folder menu's
-        applyCaptureHotkeys(); // ... and the screen capture's
         editor->refreshTaskbarState();
         editor->setSearchBoxShown(searchBoxHiddenName(m_searchBoxHidden));
         editor->setClassicTaskbar(m_classicTaskbar);
         editor->refreshFileManagers();
         editor->refreshMcpClients();
+        editor->cli()->refresh();
         refreshMcpStatus();
         refreshIndexAccess();
         if (m_serviceWanted && m_index->volumeAccessKind() == ntfs::VolumeAccess::Kind::None)
@@ -3461,27 +3215,6 @@ void App::showClipboardSettings()
     showSettings();
     if (m_settingsWindow)
         QMetaObject::invokeMethod(m_settingsWindow, "showClipboardPage");
-}
-
-void App::notifyCaptureSaved(const QString& path, const QString& error)
-{
-    if (!error.isEmpty()) {
-        m_messages->showNotification(tr("截图没能保存"), error);
-        return;
-    }
-    // The toast shows about four lines of text and a balloon holds 255
-    // characters: a long path must not push the hint off its end.
-    QString shown = QDir::toNativeSeparators(path);
-    constexpr qsizetype kMostPathChars = 80;
-    if (shown.size() > kMostPathChars)
-        shown = shown.left(kMostPathChars / 2 - 1) + u'…' + shown.right(kMostPathChars / 2);
-    m_messages->showNotification(tr("截图已保存"), shown + u'\n' + tr("点击打开所在文件夹"), [path] {
-        const saved::Target target = saved::target(path);
-        if (target.show == saved::Show::File)
-            shell::reveal(target.path); // in the file manager chosen, the file selected
-        else if (target.show == saved::Show::Folder)
-            shell::open(target.path); // the file is gone: its folder, if that is still there
-    });
 }
 
 void App::showWebSettings()
@@ -3816,9 +3549,11 @@ void App::handleCommand(const QString& command)
         // Explicit exit must bypass the retained windows' Close vetoes.
         // App's destructor saves the index and disposes of those windows.
         QCoreApplication::exit(0);
-    else if (command == u"settings")
+    else if (QString place; settingscommand::parse(command, &place)) {
         showSettings();
-    else if (command.startsWith(u"query:"))
+        if (m_settingsWindow && !place.isEmpty())
+            QMetaObject::invokeMethod(m_settingsWindow, "showPlace", Q_ARG(QVariant, QVariant(place)));
+    } else if (command.startsWith(u"query:"))
         showLauncher(command.mid(6));
     else if (command.startsWith(u"dump:"))
         dumpLauncher(command.mid(5));
@@ -3856,6 +3591,7 @@ void App::dumpLauncher(const QString& file) const
         }
     }
     state[u"query"_s] = m_launcher->query();
+    state[u"regexMode"_s] = m_launcher->regexMode();
     state[u"scope"_s] = static_cast<int>(m_launcher->scope());
     state[u"fileType"_s] = m_launcher->fileType();
     state[u"dateChoice"_s] = m_launcher->dateChoice();
@@ -3928,6 +3664,7 @@ void App::applyFolderMenu()
         m_folderMenu.reset();
     } else if (on && !m_folderMenu) {
         auto menu = std::make_unique<FolderMenu>(m_history.get(), m_favorites.get());
+        menu->setCatalogs(m_apps.get(), m_places.get());
         QQmlComponent component(m_qml.get(), u"WinShun"_s, u"FolderMenuWindow"_s);
         QObject* object = component.createWithInitialProperties({{u"folderMenu"_s, QVariant::fromValue(menu.get())}});
         auto* window = qobject_cast<QQuickWindow*>(object);
@@ -3956,6 +3693,10 @@ void App::applyFolderMenu()
         connect(menu.get(), &FolderMenu::searchRequested, this, [this](const QString& folder) {
             showLauncher(folder.endsWith(u'\\') ? folder + u' ' : folder + u"\\ "_s);
         });
+        connect(menu.get(), &FolderMenu::settingsRequested, this, [this] { showSettings(); });
+        connect(menu.get(), &FolderMenu::notice, this, [this](const QString& text) {
+            m_messages->showNotification(tr("文件夹菜单"), text);
+        });
         m_folderMenuWindow = window;
         m_folderMenu = std::move(menu);
     }
@@ -3970,6 +3711,17 @@ void App::applyFolderMenu()
 // administrator, where drops from the user's programs cannot reach it (UIPI).
 void App::applyDropPie()
 {
+    if (m_settings.dropPie && integrity::processElevated()) {
+        if (!m_dropPieHelper) {
+            auto notify = [this](const QString& title, const QString& text) {
+                if (m_messages) m_messages->showNotification(title, text);
+            };
+            m_dropPieHelper = std::make_unique<DropPieHelper>(m_favorites.get(), std::move(notify));
+        }
+        m_dropPieHelper->update(m_settings);
+    } else {
+        m_dropPieHelper.reset();
+    }
     const bool on = m_settings.dropPie && !integrity::processElevated();
     if (!on && m_dropPie && m_dropPie->inDrop()) {
         // Switched off from inside its drop (a dialog's loop): once it returns.
@@ -4400,7 +4152,49 @@ win::Front App::toFront(QWindow* window)
     const win::Front front = win::bringToFront(window);
     if (m_triggers && m_triggers->open())
         m_triggers->front(front, static_cast<double>(timer.nsecsElapsed()) / 1e6);
+    if (window == m_window && front == win::Front::Refused)
+        watchStrandedLauncher();
     return front;
+}
+
+void App::watchStrandedLauncher()
+{
+    // A button held now (the press on the box that asked for it) is not a
+    // press elsewhere: only one that comes after.
+    m_strandedPress = (::GetAsyncKeyState(VK_LBUTTON) | ::GetAsyncKeyState(VK_RBUTTON) | ::GetAsyncKeyState(VK_MBUTTON)) & 0x8000;
+    m_strandedWatch.start();
+}
+
+void App::checkStrandedLauncher()
+{
+    // A refused activation may leave Qt active only in this thread, or may
+    // never activate it at all (#140). Both need dismissal on an outside
+    // click: a window that was never active gets no activeChanged(false).
+    const HWND hwnd = m_window ? reinterpret_cast<HWND>(m_window->winId()) : nullptr;
+    if (!hwnd || !m_window->isVisible() || m_launcherClosing || ::GetForegroundWindow() == hwnd) {
+        m_strandedWatch.stop();
+        return;
+    }
+    const bool down = (::GetAsyncKeyState(VK_LBUTTON) | ::GetAsyncKeyState(VK_RBUTTON) | ::GetAsyncKeyState(VK_MBUTTON)) & 0x8000;
+    if (!down || m_strandedPress) {
+        m_strandedPress = down;
+        return;
+    }
+    m_strandedPress = true;
+    // A press on a window of ours (the launcher, Win顺's box on the taskbar,
+    // a menu of ours) is for that window; anywhere else (the rest of the
+    // taskbar, which is in front already: no change of the front to hear
+    // of) is a click elsewhere.
+    POINT at {};
+    ::GetCursorPos(&at);
+    DWORD pid = 0;
+    ::GetWindowThreadProcessId(::WindowFromPoint(at), &pid);
+    if (pid == ::GetCurrentProcessId())
+        return;
+    m_strandedWatch.stop();
+    qWarning().noquote() << "Launcher: not in front (Windows refused), a press elsewhere: as if it lost the focus";
+    launcherLostFront();
+    updateNumberKeys();
 }
 
 // Double tap works only while the keyboard's Raw Input comes to the
@@ -4419,10 +4213,16 @@ const char* App::rawInputState() const
     return raw.registration->hwndTarget == m_keyListener->window() ? "ok" : "other";
 }
 
-void App::showLauncher(const QString& query, const std::optional<taskbar::Spot>& spot, bool inBox, QScreen* on)
+void App::showLauncher(const QString& query, const std::optional<taskbar::Spot>& spot, bool inBox, QScreen* on, HWND avoid)
 {
     if (!m_window)
         return;
+    // show()/activation and forceActiveFocus() emit signals synchronously.
+    // They may call deliverTyping before handleShown selects the old words
+    // or caretRequested places the caret; replay then loses the first key.
+    // The typing callers deliver again after this preparation has finished.
+    QScopedValueRollback opening(m_launcherOpening, true);
+    cancelTypingSelection();
     m_typingOrigin = {}; // opened anew: set again by typingFolderKnown when that is why
     if (!query.isEmpty())
         m_launcher->setTypingFolder({}); // a path given ("search here") is searched alone, as typed (GitHub #110)
@@ -4485,7 +4285,12 @@ void App::showLauncher(const QString& query, const std::optional<taskbar::Spot>&
         // On the monitor asked for, else the one under the mouse; where the
         // user last put it (see Placement).
         QScreen* screen = on ? on : QGuiApplication::screenAt(QCursor::pos());
-        m_placement->placeOn(screen ? screen : QGuiApplication::primaryScreen());
+        screen = screen ? screen : QGuiApplication::primaryScreen();
+        RECT bounds {};
+        if (avoid && ::GetWindowRect(avoid, &bounds))
+            m_placement->avoidNative(QRect(bounds.left, bounds.top, bounds.right - bounds.left, bounds.bottom - bounds.top), screen);
+        else
+            m_placement->placeOn(screen);
     }
     if (!query.isEmpty())
         m_launcher->setQuery(query);
@@ -4547,7 +4352,7 @@ void App::showClipboard()
         m_clipboard->setPinned(false); // as it opens, whatever closed it last (a close of Qt's own)
         m_clipboard->setActive(true); // under the launcher's search box, it folds its rows away (Main.qml)
         m_clipboard->handleShown(); // the list alone again: its width as it opens
-        if (field) {
+        if (field && !m_settings.clipboardAtPointer) {
             // Dropping down under the field's box (the launcher's search bar,
             // the bar by a file dialog, a box in the settings window).
             const QQuickItem* box = field->parentItem() ? field->parentItem() : field;
@@ -4557,7 +4362,8 @@ void App::showClipboard()
             // own clipboard opens; else by the mouse pointer, its top left
             // corner at the pointer's tip, as a menu.
             const HWND target = paste::usableTarget(foreground);
-            const std::optional<QRect> caret = target ? m_textCaret->find(target, kCaretWait) : std::nullopt;
+            const std::optional<QRect> caret = target && !m_settings.clipboardAtPointer
+                ? m_textCaret->find(target, kCaretWait) : std::nullopt;
             if (caret)
                 m_clipPlacement->attachNative(*caret);
             else
@@ -4650,7 +4456,7 @@ void App::stopKeyRouting()
 {
     // Its own window in front (activated), hidden, given up: the hook would
     // hear nothing more (docs/pitfalls.md), or nothing would be pasted into.
-    if (m_hold)
+    if (m_hold || m_browseHotkey)
         endClipboardHold("unrouted");
     if (m_keyRouter) {
         // No key is taken any more; the releases of those it took still are
@@ -4742,6 +4548,7 @@ QString holdKeysOf(const QString& shortcut)
 
 void App::armClipboardHold(int hotkey, std::uint64_t pressedAt)
 {
+    m_browseHotkey = 0;
     if (m_hold || m_holdWatch)
         endClipboardHold("again");
     if (!m_settings.clipboardHoldToStep || (m_clipWindow && m_clipWindow->isVisible() && !m_clipPrewarming.load()))
@@ -4755,13 +4562,18 @@ void App::armClipboardHold(int hotkey, std::uint64_t pressedAt)
     // keys: else the window takes the keyboard, and the hook hears nothing.
     const HWND foreground = ::GetForegroundWindow();
     const HWND target = paste::usableTarget(foreground);
-    if (!target || win::isShellFlyout(foreground) || integrity::higherThanOurs(target))
-        return;
     // Whether the keys stayed down since the press: only so soon after it.
     const std::uint64_t now = ::GetTickCount64();
     const std::uint64_t late = now > pressedAt ? now - pressedAt : 0;
     if (late > hotkeysteps::kArmWithinMs) {
         diagnostics::record(u"clipboard-hold-skipped"_s, {{u"reason"_s, u"late"_s}, {u"ms"_s, static_cast<qint64>(late)}});
+        return;
+    }
+    if (!target || win::isShellFlyout(foreground) || integrity::higherThanOurs(target)) {
+        m_browseHotkey = hotkey;
+        m_browseModifiers = modifiers & hotkeysteps::kModifiers;
+        m_browseVk = vk;
+        m_holdTimer.start();
         return;
     }
     const std::uint64_t run = ++m_holdRun;
@@ -4795,6 +4607,13 @@ void App::armClipboardHold(int hotkey, std::uint64_t pressedAt)
 
 bool App::clipboardStepPress(int hotkey)
 {
+    if (m_browseHotkey) {
+        if (hotkey == m_browseHotkey && clipboardInCharge()) {
+            emit m_clipboard->browseStepRequested();
+            return true;
+        }
+        m_browseHotkey = 0;
+    }
     if (!m_hold || hotkey != m_holdHotkey)
         return false;
     if (m_hold->press() == hotkeysteps::Hold::Press::Normal) {
@@ -4835,7 +4654,7 @@ void App::clipboardHoldNote(hotkeysteps::Note note, std::uint64_t at)
 
 void App::checkClipboardHold()
 {
-    if (!m_hold) {
+    if (!m_hold && !m_browseHotkey) {
         m_holdTimer.stop();
         return;
     }
@@ -4851,6 +4670,13 @@ void App::checkClipboardHold()
         held |= hotkeysteps::kWin;
     const bool keyDown = down(static_cast<int>(m_holdVk));
     const unsigned modifiers = held & m_holdModifiers;
+    if (m_browseHotkey) {
+        if ((held & m_browseModifiers) != m_browseModifiers || !clipboardInCharge()) {
+            m_browseHotkey = 0;
+            m_holdTimer.stop();
+        }
+        return;
+    }
     using Held = hotkeysteps::Hold::Held;
     using Poll = hotkeysteps::Hold::Poll;
     switch (m_hold->poll(keyDown && modifiers == m_holdModifiers ? Held::Whole
@@ -4870,6 +4696,7 @@ void App::checkClipboardHold()
 
 void App::endClipboardHold(const char* why)
 {
+    m_browseHotkey = 0;
     m_holdTimer.stop();
     if (m_hold) {
         diagnostics::record(u"clipboard-hold-end"_s,
@@ -5147,6 +4974,90 @@ void App::finishPrewarm()
 // empty SendInput, which counts as input too). Before, it just went, with
 // no word anywhere, and a double Ctrl seemed to do nothing (GitHub #111).
 // Twenty a run at most.
+void App::launcherLostFront()
+{
+    // Clicking elsewhere or switching apps dismisses the launcher, like a
+    // menu; the clipboard under its search box goes with it (see there).
+    // Not a press on Win顺's box on the taskbar: that brings it back. Nor
+    // the press that just brought it back: Qt may hear of the taskbar
+    // taking the focus for it only after that (it slid back up while on
+    // its way out). Those leave no window in front (or the taskbar, the
+    // pointer on the box), nor does the Start menu closing as it opens
+    // over it; another window in front (a click on it, on the desktop,
+    // on the rest of the taskbar) dismisses it at once, however soon
+    // after it opened.
+    if (!m_window || !m_window->isVisible() || clipboardUnderLauncher())
+        return;
+    if (m_launcher->contentPane()->modalOperation() || m_launcher->contentPane()->ownsForeground())
+        return;
+    // The preview (Alt+P) took the focus for a moment: a handler's
+    // window of ours (handed back at once), or QuickLook's or Seer's
+    // (which hand it back themselves). The launcher stays.
+    if (m_preview->ownsForeground()) {
+        if (m_preview->foregroundIsOurs())
+            QMetaObject::invokeMethod(this, [this] {
+                if (m_window && m_window->isVisible() && !m_window->isActive())
+                    win::bringToFront(m_window);
+            }, Qt::QueuedConnection);
+        return;
+    }
+    // A command of the shell's menu that keeps the launcher (删除,
+    // say) runs, or just did: its dialogs, owned by a hidden window
+    // of ours, take the focus and hand it back (Launcher::
+    // runSystemMenu); another program's window ends that.
+    if (m_launcher->systemCommandRunning()) {
+        DWORD pid = 0;
+        ::GetWindowThreadProcessId(::GetForegroundWindow(), &pid);
+        if (pid == ::GetCurrentProcessId())
+            return;
+        m_launcher->systemCommandDone();
+    }
+    if (m_launcher->pinned()) { // stays up, behind nothing (topmost), until Esc
+        cancelTypingSelection();
+        m_typingOrigin = {}; // used elsewhere now: a folder opened later is not for that tab
+        m_boxPressGrace.stop();
+        // A press on Win顺's box took the focus: that press hides it
+        // (searchBoxPressed), as double Ctrl would.
+        if (m_searchBox && m_searchBox->underPointer())
+            m_pinnedLostToBox.start();
+        else
+            m_pinnedLostToBox.invalidate();
+        return;
+    }
+    const bool justShown = m_launcherShown.isValid() && m_launcherShown.elapsed() < 500;
+    const bool onBox = m_searchBox && m_searchBox->underPointer();
+    const HWND front = ::GetForegroundWindow();
+    const bool elsewhere = front && front != reinterpret_cast<HWND>(m_window->winId())
+        && !(onBox && taskbar::isTaskbar(front)) && !win::isShellFlyout(front);
+    if (m_searchBox && m_launcherOverBox && !elsewhere && (justShown || onBox))
+        m_boxPressGrace.start();
+    else {
+        logLauncherLostFront(front);
+        hideLauncher();
+    }
+}
+
+void CALLBACK App::foregroundChanged(HWINEVENTHOOK, DWORD, HWND, LONG, LONG, DWORD, DWORD)
+{
+    // After what this thread is told of the change (WM_ACTIVATE, Qt's
+    // activeChanged): a launcher that heard of it is no longer active here.
+    if (!g_launcherApp)
+        return;
+    QMetaObject::invokeMethod(g_launcherApp, [] {
+        App* app = g_launcherApp;
+        if (!app || !app->m_window || !app->m_window->isVisible() || !app->m_window->isActive())
+            return;
+        DWORD pid = 0;
+        const HWND front = ::GetForegroundWindow();
+        if (!front || (::GetWindowThreadProcessId(front, &pid), pid == ::GetCurrentProcessId()))
+            return;
+        if (!app->m_launcher->pinned())
+            qWarning().noquote() << "Launcher: active only in Win顺, another program's window in front: as if it lost the focus";
+        app->launcherLostFront();
+        app->updateNumberKeys();
+    }, Qt::QueuedConnection);
+}
+
 void App::logLauncherLostFront(HWND front)
 {
     static constexpr qint64 kJustShownMs = 1500;
@@ -5167,6 +5078,7 @@ void App::logLauncherLostFront(HWND front)
 
 void App::hideLauncher()
 {
+    cancelTypingSelection();
     m_typingOrigin = {}; // whatever opened it, that opening is over
     if (!m_window || !m_window->isVisible() || m_launcherClosing)
         return;
@@ -5356,41 +5268,43 @@ void App::showTrayMenu()
             text = tr("索引服务未连接，只索引选中的文件夹");
         items.insert(at + 1, {AccessInfo, text, false, false});
     }
-    // Under the clipboard's, with the key that does it too. With the capture
-    // off, while pictures pinned from a file or the clipboard are up: what is
-    // about them alone.
-    const int pinCount = m_pins ? m_pins->count() : 0;
-    if (m_capture || pinCount > 0) {
-        const QString key = !m_settings.captureHotkey.isEmpty() ? m_settings.captureHotkey
-            : m_settings.capturePrintScreen                      ? u"PrtScn"_s
-                                                                 : QString();
-        const auto at = std::ranges::find_if(items, [](const shell::MenuItem& i) { return i.id == PauseClipboardCommand; });
-        // A submenu: the capture itself first, then what is pinned.
-        shell::MenuItem captureMenu {0, tr("截图")};
-        if (m_capture) {
-            captureMenu.children = {
-                {CaptureCommand, key.isEmpty() ? tr("开始截图") : tr("开始截图") + u'\t' + key},
-                {0, tr("延时截图"), false, true, false,
-                    {{DelayThreeCommand, tr("3 秒"), m_settings.captureDelay == 3},
-                        {DelayFiveCommand, tr("5 秒"), m_settings.captureDelay == 5},
-                        {DelayTenCommand, tr("10 秒"), m_settings.captureDelay == 10}}},
-                {PinLastCommand, tr("贴上最近一次截图"), false, m_capture->hasLast()},
-                {RestoreDraftCommand, tr("找回刚放弃的标注"), false, m_capture->hasDraft()},
-                shell::MenuItem::separator(),
+    // The plugins' submenus (trayMenu: the screenshot's), under the
+    // clipboard's: what each said as the icon was pressed (prefetchTrayMenus).
+    std::vector<std::pair<QString, QString>> pluginChoices; // PluginMenuCommand + i: the plugin, its entry
+    if (m_pluginHost) {
+        auto at = std::ranges::find_if(items, [](const shell::MenuItem& i) { return i.id == PauseClipboardCommand; });
+        for (const auto& [id, entries] : m_trayMenus) {
+            const plugin::Entry* entry = m_pluginHost->catalog().find(id);
+            if (!entry || !m_pluginHost->catalog().enabled(id) || entries.isEmpty())
+                continue;
+            // {id, title, checked, enabled, children} or {} for a line; two levels at most.
+            const auto convert = [&](const QJsonArray& array, auto& self, int depth) -> std::vector<shell::MenuItem> {
+                std::vector<shell::MenuItem> out;
+                for (const QJsonValue& v : array) {
+                    const QJsonObject o = v.toObject();
+                    const QString title = o.value(u"title"_s).toString();
+                    if (title.isEmpty()) {
+                        if (!out.empty() && out.back().id != 0)
+                            out.push_back(shell::MenuItem::separator());
+                        continue;
+                    }
+                    shell::MenuItem item {0, title, o.value(u"checked"_s).toBool(), o.value(u"enabled"_s).toBool(true)};
+                    if (o.value(u"children"_s).isArray() && depth < 2) {
+                        item.children = self(o.value(u"children"_s).toArray(), self, depth + 1);
+                    } else {
+                        item.id = PluginMenuCommand + static_cast<int>(pluginChoices.size());
+                        pluginChoices.emplace_back(id, o.value(u"id"_s).toString());
+                    }
+                    out.push_back(std::move(item));
+                }
+                return out;
             };
+            shell::MenuItem menu {0, entry->manifest->trayMenu.pick(m_language)};
+            menu.children = convert(entries, convert, 1);
+            if (menu.text.isEmpty() || menu.children.empty())
+                continue;
+            at = items.insert(at + 1, std::move(menu));
         }
-        const auto withKey = [](const QString& text, const QString& hotkey) {
-            return hotkey.isEmpty() ? text : text + u'\t' + hotkey;
-        };
-        captureMenu.children.push_back({ClickThroughCommand,
-            withKey(tr("取消所有贴图的穿透（单个：按住 Ctrl 点它）"), m_settings.capturePinsRestoreHotkey), false,
-            m_pins && m_pins->anyClickThrough()});
-        captureMenu.children.push_back({HideAllPinsCommand,
-            withKey(m_pins && m_pins->allHidden() ? tr("显示全部贴图") : tr("隐藏全部贴图"), m_settings.capturePinsHotkey), false,
-            pinCount > 0});
-        captureMenu.children.push_back({AllPinsTopmostCommand, tr("全部置顶"), m_pins && m_pins->allTopmost(), pinCount > 0});
-        captureMenu.children.push_back({CloseAllPinsCommand, tr("关闭全部贴图"), false, pinCount > 0});
-        items.insert(at + 1, std::move(captureMenu));
     }
     // Win顺 keeps the computer awake: said at the top, and a click ends it. Not there when it is off.
     if (const SwitchState awake = m_switches ? m_switches->state(u"keep-awake") : SwitchState {};
@@ -5408,7 +5322,30 @@ void App::showTrayMenu()
     ::GetCursorPos(&pos);
     const DWORD built = ::GetTickCount();
     // A slow menu leaves a line in the log: which part it waited on.
-    const int chosen = shell::popupMenu(m_messages->hwnd(), items, pos, [&] {
+    for (auto& item : items) {
+        char16_t glyph = 0;
+        switch (item.id) {
+        case ShowCommand: glyph = 0xE721; break;
+        case ClipboardCommand: glyph = 0xE77F; break;
+        case PauseClipboardCommand: glyph = 0xE769; break;
+        case IndexInfo: glyph = 0xE968; break;
+        case ContentInfo: glyph = 0xE8A5; break;
+        case AccessInfo: glyph = 0xE7BA; break;
+        case RebuildCommand: glyph = 0xE895; break;
+        case AutostartCommand: glyph = 0xE7E8; break;
+        case SettingsCommand: glyph = 0xE713; break;
+        case CheckUpdateCommand: case UpdateCommand: glyph = 0xE896; break;
+        case KeepAwakeCommand: glyph = 0xE823; break;
+        case RestartCommand: glyph = 0xE72C; break;
+        case QuitCommand: glyph = 0xE8BB; break;
+        default: if (!item.children.empty()) glyph = 0xEA86; break;
+        }
+        if (glyph)
+            item.glyph = QString(QChar(glyph));
+        item.secondary = item.id == IndexInfo || item.id == ContentInfo || item.id == AccessInfo;
+    }
+    QObject* theme = m_qml->singletonInstance<QObject*>(u"WinShun"_s, u"Theme"_s);
+    const int chosen = traymenu::popup(m_messages->hwnd(), items, pos, theme, [&](HWND, HMENU) {
         const DWORD shown = ::GetTickCount();
         if (shown - input.dwTime >= kSlowMenuMs)
             qWarning().nospace() << "Tray menu shown " << shown - input.dwTime << " ms after the click: "
@@ -5417,6 +5354,11 @@ void App::showTrayMenu()
     });
     if (chosen != QuitCommand && chosen != RestartCommand)
         readAutostart(); // changed outside WinShun? Ready for the next time
+    if (chosen >= PluginMenuCommand && chosen - PluginMenuCommand < static_cast<int>(pluginChoices.size())) {
+        const auto& [plugin, entry] = pluginChoices[chosen - PluginMenuCommand];
+        m_pluginHost->notify(plugin, u"menu"_s, {{u"id"_s, entry}}, true);
+    }
+    prefetchTrayMenus(); // what changed meanwhile, for a menu opened by the keyboard
     switch (chosen) {
     case ShowCommand:
         showLauncher();
@@ -5427,50 +5369,6 @@ void App::showTrayMenu()
     case PauseClipboardCommand:
         setClipboardPaused(!m_clipboardPaused);
         break;
-    case CaptureCommand:
-        // Once the menu is gone from the screen: not in the picture.
-        QTimer::singleShot(200ms, this, [this] { triggerCapture(); });
-        break;
-    case PinLastCommand:
-        pinLastCapture();
-        break;
-    case RestoreDraftCommand:
-        if (m_capture)
-            m_capture->restoreDraft();
-        break;
-    case ClickThroughCommand:
-        if (m_pins)
-            m_pins->clearClickThrough();
-        break;
-    case CloseAllPinsCommand:
-        if (m_pins)
-            m_pins->closeAll();
-        break;
-    case HideAllPinsCommand:
-        if (m_pins)
-            m_pins->setAllHidden(!m_pins->allHidden());
-        break;
-    case AllPinsTopmostCommand:
-        if (m_pins)
-            m_pins->setAllTopmost(!m_pins->allTopmost());
-        break;
-    case DelayThreeCommand:
-    case DelayFiveCommand:
-    case DelayTenCommand: {
-        const int seconds = chosen == DelayThreeCommand ? 3 : chosen == DelayFiveCommand ? 5 : 10;
-        if (m_settings.captureDelay != seconds) { // the choice is remembered (D in the overlay uses it)
-            m_settings.captureDelay = seconds;
-            m_settings.save();
-            if (m_settingsEditor)
-                m_settingsEditor->setSettings(m_settings);
-        }
-        // Once the menu is gone from the screen: the countdown is a window of ours.
-        QTimer::singleShot(200ms, this, [this, seconds] {
-            if (m_capture)
-                m_capture->startDelayed(seconds);
-        });
-        break;
-    }
     case RebuildCommand:
         m_index->rebuild();
         m_messages->showNotification(tr("正在重建索引"), tr("可以照常搜索，完成后结果会自动更新。"));
@@ -5934,11 +5832,12 @@ mcp::Policy App::mcpPolicy() const
     mcp::Policy policy;
     policy.allowOpen = m_settings.mcpAllowOpen;
     policy.allowClipboard = m_settings.mcpClipboard;
+    policy.clipboardHistory = m_settings.clipboard; // without a history there is nothing to read
     policy.allowScreenshot = m_settings.mcpScreenshot;
     policy.settingsMode = m_settings.mcpSettings == u"auto" ? mcp::SettingsMode::Auto
         : m_settings.mcpSettings == u"off"                  ? mcp::SettingsMode::Off
                                                             : mcp::SettingsMode::Ask;
-    policy.captureEnabled = m_settings.captureEnabled;
+    policy.captureEnabled = screenshotPluginOn();
     policy.excludedPaths = m_settings.mcpExcludedPaths;
     policy.content = m_settings.contentSearch;
     policy.contentExtensions = m_settings.contentExtensions;
@@ -6141,15 +6040,22 @@ void App::applyMcp()
         m_mcpServer.reset();
         m_mcpHost.reset();
         m_mcpEngine.reset();
+        m_mcpContentEngine.reset();
         refreshMcpStatus();
         return;
     }
     if (!m_mcpServer) {
         // Its own engine: an engine runs only its newest request, so one
-        // shared with the launcher would drop the launcher's searches.
+        // shared with the launcher would drop the launcher's searches. And
+        // one more for content searches (seconds), which a name search
+        // (milliseconds) would otherwise wait behind: an AI agent runs
+        // several ws commands at once. Made now: an idle engine is a dozen or
+        // so sleeping threads (its worker and pool), no work for the CPU.
         m_mcpEngine = std::make_unique<SearchEngine>(m_index.get(), m_apps.get(), m_places.get());
+        m_mcpContentEngine = std::make_unique<SearchEngine>(m_index.get());
         mcp::Services services = toolServices();
         services.engine = m_mcpEngine.get();
+        services.contentEngine = m_mcpContentEngine.get();
         // The AI's alone: plugins never take pictures of the screen.
         services.takeScreenshot = [this](const mcp::ScreenshotRequest& request, std::function<void(mcp::ScreenshotTaken)> done) {
             confirmScreenshot(request, std::move(done));
@@ -6169,6 +6075,12 @@ void App::applyMcp()
         m_mcpHost->setPolicy(mcpPolicy());
         m_mcpServer = std::make_unique<mcp::McpServer>(m_mcpHost.get(), QStringLiteral(WINSHUN_VERSION));
         connect(m_mcpServer.get(), &mcp::McpServer::sessionsChanged, this, &App::refreshMcpStatus);
+        // ws calls: not one status line per call (an agent runs several a second),
+        // and none at all while no settings window is there to show it.
+        connect(m_mcpServer.get(), &mcp::McpServer::cliCalled, this, [this] {
+            if (m_settingsEditor && !m_cliTallyTimer.isActive())
+                m_cliTallyTimer.start();
+        });
         connect(m_mcpHost.get(), &mcp::ToolHost::toolsChanged, this, &App::writeMcpToolsCache);
         DWORD error = 0;
         if (!m_mcpServer->listen(pipe::defaultName(), &error))
@@ -6221,11 +6133,39 @@ void App::createPluginHost()
         options.bundledPluginDir = appDir + u"\\plugins"_s;
     options.logPath = dataDir + u"\\plugins.log"_s;
     options.runnerExe = appDir + u"\\WinShunPluginHost.exe"_s;
+    options.appDir = appDir;
     options.locale = m_language;
     options.theme = isDarkMode() ? u"dark"_s : u"light"_s;
     options.version = QStringLiteral(WINSHUN_VERSION);
+    options.appearance = pluginLook();
     m_pluginHost = std::make_unique<plugin::Host>(options);
     connect(&m_pluginHost->catalog(), &plugin::Catalog::changed, this, &App::pluginsChanged);
+    connect(m_pluginHost.get(), &plugin::Host::stateChanged, this, [this](const QString& id) {
+        // A deferred install completed later from the regular plugin page.
+        if (!m_onboarding && id == u"winshun.capture" && m_settings.onboardingCapturePending
+            && m_pluginHost->catalog().enabled(id)
+            && m_pluginHost->state(id).status == plugin::Host::State::Status::Running) {
+            m_settings.onboardingCapturePending = false;
+            m_settings.save();
+            if (m_settingsEditor)
+                m_settingsEditor->setSettings(m_settings);
+        }
+    });
+    setUpAppTools();
+    // The shortcuts a plugin registers itself (the screenshot's): Win+Shift+S
+    // and the global digits are left to it (applyTaskbarHotkeys, applyQuickPasteHotkeys).
+    connect(m_pluginHost.get(), &plugin::Host::hotkeysChanged, this, [this](const QString& id, const QStringList& keys) {
+        const auto had = m_pluginHotkeys.find(id);
+        if (had == m_pluginHotkeys.end() ? keys.isEmpty() : had->second == keys)
+            return;
+        if (keys.isEmpty())
+            m_pluginHotkeys.erase(id);
+        else
+            m_pluginHotkeys[id] = keys;
+        applyTaskbarHotkeys();
+        applyQuickPasteHotkeys();
+    });
+    connect(m_pluginHost.get(), &plugin::Host::processExited, this, [this](const QString& id) { m_trayMenus.erase(id); });
     connect(m_pluginHost.get(), &plugin::Host::disabledAfterCrashes, this, [this](const QString& id) {
         const plugin::Entry* e = m_pluginHost->catalog().find(id);
         const QString name = e && e->manifest ? e->manifest->name.pick(m_language) : id;
@@ -6281,12 +6221,9 @@ void App::createPluginHost()
     pluginsChanged();
     m_pluginHost->catalog().setWatching(true); // a folder put into plugins\ is a plugin at once
     m_launcher->setPluginHost(m_pluginHost.get());
-    // Resident plugins that want starting early: after the start-up rescan
-    // has had its say (see RescanOnStartup), not with it.
-    QTimer::singleShot(10s, this, [this] {
-        if (m_pluginHost)
-            m_pluginHost->preload();
-    });
+    // Host starts enabled eager plugins once their configuration has settled.
+    // Restore moved features asynchronously too, without a ten-second gap.
+    QTimer::singleShot(0, this, &App::installMovedPlugins);
     // On the way out: shutdown requests, two seconds, then the job ends them.
     // Not the two seconds when Windows ends the session (Qt says aboutToQuit
     // then too): they are the seconds the index needs to be saved.
@@ -6296,12 +6233,131 @@ void App::createPluginHost()
     });
 }
 
+// The screenshot of a Win顺 before 0.17, on: the plugin winshun.capture,
+// turned on with its settings (MovedPlugins.h), fetched with the others.
+void App::moveCapture()
+{
+    if (!m_settings.captureEnabled || m_settings.plugin(moved::kCapture))
+        return;
+    if (!moved::moveCaptureSettings(Settings::filePath(), m_pluginHost->options().dataRoot)) {
+        qWarning() << "Screenshot: its settings not moved to the plugin; tried again at the next start";
+        return;
+    }
+    PluginConfig config;
+    config.id = moved::kCapture.toString();
+    config.enabled = true;
+    config.confirmed = moved::capturePermissions();
+    m_settings.plugins.push_back(std::move(config));
+    m_settings.captureEnabled = false; // gone from the file: not moved twice
+    // Keep the host's recovery record until the plugin is available: an
+    // offline upgrade must still give PrtScn back to Windows.
+    m_settings.save();
+    qInfo() << "Screenshot: its settings moved to the plugin" << moved::kCapture;
+}
+
+// 局域网传输, 按意思找 and the screenshot came with 0.16.0 and are in the
+// plugin library now (GitHub #138, MovedPlugins.h): one the user had on is
+// fetched from it, then started with their existing settings.
+void App::setPluginRecoveryState(const QString& message, bool busy)
+{
+    m_pluginRecoveryMessage = message;
+    m_pluginRecoveryBusy = busy;
+    if (m_settingsEditor)
+        m_settingsEditor->plugins()->setRecoveryState(message, busy);
+}
+
+void App::installMovedPlugins()
+{
+    if (!m_pluginHost || m_pluginRecoveryBusy)
+        return;
+    const QStringList ids = moved::missing(m_pluginHost->catalog(), m_settings.plugins);
+    if (ids.isEmpty()) {
+        setPluginRecoveryState({});
+        return;
+    }
+    QStringList names;
+    for (const QString& id : ids)
+        names.push_back(moved::name(id));
+    setPluginRecoveryState(tr("正在从插件库恢复 %1。原来的设置和数据会保留。").arg(names.join(u"、"_s)), true);
+    qInfo().noquote() << "Plugins moved to the library, installing:" << ids.join(u", "_s);
+    moved::install(ids, m_pluginHost->options().userPluginDir, m_language, [self = QPointer(this)](const QList<moved::Outcome>& outcomes) {
+        if (!self || !self->m_pluginHost)
+            return;
+        QStringList installed;
+        QStringList failed;
+        for (const moved::Outcome& o : outcomes) {
+            if (o.error.isEmpty()) {
+                installed.push_back(o.name);
+                continue;
+            }
+            qWarning().noquote() << "Plugin moved to the library, not installed:" << o.id << o.error;
+            failed.push_back(tr("%1：%2").arg(o.name, o.offline ? tr("网络连接失败") : o.error));
+        }
+        if (!installed.isEmpty()) {
+            self->m_pluginHost->catalog().scan();
+            self->applyPlugins(); // its settings
+            self->m_pluginHost->preload();
+            if (failed.isEmpty())
+                self->m_messages->showNotification(tr("插件已从插件库装好"),
+                    tr("%1 不再随 Win顺 自带，已经从插件库为你装上，设置照旧。").arg(installed.join(u"、"_s)));
+        }
+        self->setPluginRecoveryState(failed.isEmpty() ? QString()
+            : tr("以下功能尚未恢复：%1。原来的设置和数据仍在，可以重试或从本地安装插件包。").arg(failed.join(u"；"_s)));
+        if (!failed.isEmpty())
+            self->m_messages->showNotification(tr("部分功能尚未恢复"), self->m_pluginRecoveryMessage, [self] {
+                if (!self)
+                    return;
+                self->showSettings();
+                if (self->m_settingsWindow)
+                    QMetaObject::invokeMethod(self->m_settingsWindow, "showPage",
+                        Q_ARG(QVariant, self->m_settingsWindow->property("pluginsPage")), Q_ARG(QVariant, QVariant(0)));
+            });
+    });
+}
+
+void App::applySwitches()
+{
+    if (!m_pluginHost || !m_launcher)
+        return;
+    const QString provider = SwitchPlugin::provider(m_pluginHost->catalog());
+    if ((m_switchPlugin && m_switchPlugin->id() == provider) || (!m_switchPlugin && provider.isEmpty()))
+        return;
+    m_launcher->setSwitches(nullptr, statePath());
+    m_switches.reset();
+    m_switchPlugin.reset();
+    if (!provider.isEmpty()) {
+        m_switchPlugin = std::make_unique<SwitchPlugin>(m_pluginHost.get(), provider);
+        m_switches = std::make_unique<Switches>(m_switchPlugin->remote());
+        m_launcher->setSwitches(m_switches.get(), statePath());
+        connect(m_switchPlugin.get(), &SwitchPlugin::changed, m_switches.get(), [this](const QString& id) {
+            if (id.isEmpty())
+                m_switches->refresh();
+            else
+                m_switches->refresh(id);
+        });
+        connect(m_switches.get(), &Switches::changed, this, [this](const QString& id) {
+            if (id == u"keep-awake" && m_messages)
+                m_messages->setTrayTooltip(trayTooltip());
+        });
+    }
+    if (m_messages)
+        m_messages->setTrayTooltip(trayTooltip());
+}
+
 void App::pluginsChanged()
 {
+    applySwitches();
     QHash<QString, QString> folders;
     for (const plugin::Entry& e : m_pluginHost->catalog().entries())
         folders.insert(e.id, e.dir);
     FileIconProvider::setPluginFolders(std::move(folders));
+    pluginPicturesChanged(); // one installed or taken away
+    const bool update = localSendNeedsUpdate(m_pluginHost->catalog());
+    if (m_clipboard)
+        m_clipboard->setLanSendAvailable(m_pluginHost->catalog().enabled(u"winshun.localsend"_s) && !update, update);
+    applyScreenshots();
+    if (!m_pluginRecoveryBusy && moved::missing(m_pluginHost->catalog(), m_settings.plugins).isEmpty())
+        setPluginRecoveryState({});
 }
 
 void App::applyPlugins()
@@ -6355,6 +6411,12 @@ void App::applyPlugins()
         m_pluginHost->setPluginSettings(e.id, plugin::secrets::settingsOf(e.id, *e.manifest, c ? c->settings : QList<std::pair<QString, QString>>()));
     }
     applyAiBridge(); // the cards' "给 AI 用" switches
+    pluginPicturesChanged(); // 贴到屏幕 and 编辑 come and go with the screenshot plugin's switch
+    applySwitches();
+    const bool update = localSendNeedsUpdate(catalog);
+    m_clipboard->setLanSendAvailable(catalog.enabled(u"winshun.localsend"_s) && !update, update);
+    applyScreenshots(); // and 截图历史
+    restorePrintScreen();
 }
 
 void App::refreshMcpStatus()
@@ -6376,6 +6438,29 @@ void App::refreshMcpStatus()
         status = tr("没能建立连接通道，详见 WinShun.log");
     }
     m_settingsEditor->setMcpStatus(status);
+    refreshCliTally();
+}
+
+void App::refreshCliTally()
+{
+    if (!m_settingsEditor)
+        return;
+    // The command line ws: its runs last a few milliseconds each and are not
+    // listed as sessions; counted, with the last one's time (a clock time: it
+    // does not go stale on the screen as "3 分钟前" would) and tool. Shown in
+    // the 命令行 section, a row of its own: as a second line of the switch's
+    // row it pushed that section down with the first run, from under the mouse.
+    QString text;
+    if (m_mcpServer && m_mcpServer->listening()) {
+        const mcp::McpServer::CliTally& tally = m_mcpServer->cliTally();
+        if (tally.calls > 0) {
+            const QLocale locale;
+            const QString when = tally.lastCall.date() == QDate::currentDate() ? locale.toString(tally.lastCall.time(), QLocale::ShortFormat)
+                                                                              : locale.toString(tally.lastCall, QLocale::ShortFormat);
+            text = tr("%1 次调用，最近 %2（%3）").arg(tally.calls).arg(when, tally.lastTool);
+        }
+    }
+    m_settingsEditor->setCliTally(text);
 }
 
 void App::writeMcpToolsCache()
@@ -6418,6 +6503,7 @@ aisettings::Env App::aiEnv() const
         const qsizetype i = typedFavoriteKeyword(m_favorites->items(), keyword);
         return i < 0 ? QString() : m_favorites->items()[i].name;
     };
+    env.screenshotHistory = [this] { return screenshotPluginOn(); };
     return env;
 }
 
@@ -6547,8 +6633,6 @@ App::AiApplyReport App::applyAiState(const aisettings::State& wanted,
         } else if (entry->type == aisettings::Type::Hotkey && m_settingsEditor && m_settingsEditor->recordingHotkey()) {
             report.notes.insert(key, u"The settings window is recording a shortcut just now: this one is registered when that ends."_s);
         }
-        if (key == u"Capture/PrintScreen" && !m_applyProblems.value(key).isEmpty())
-            report.notes.insert(key, u"Windows would not let Win顺 change what PrtScn does (the Snipping Tool setting)."_s);
         if (key == u"Clipboard/QuickPaste" && !m_applyProblems.value(key).isEmpty())
             report.notes.insert(key, m_applyProblems.value(key)); // partial registration: name the unavailable digits
     }

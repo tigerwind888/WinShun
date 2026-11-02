@@ -11,11 +11,14 @@ qt_add_library(wscore STATIC
     ContentIndex.cpp ContentIndex.h
     ContentIndexer.cpp ContentIndexer.h
     ContentScanner.cpp ContentScanner.h
+    ContentDetails.cpp ContentDetails.h
+    ContentReport.cpp ContentReport.h
     Crawler.cpp Crawler.h
     DialogNav.cpp DialogNav.h
     DocExtractor.cpp DocExtractor.h
     DiagnosticLog.cpp DiagnosticLog.h
     Documents.h
+    Download.cpp Download.h
     DoubleClickDetector.h
     DoubleTapDetector.h
     Favorites.cpp Favorites.h
@@ -51,6 +54,7 @@ qt_add_library(wscore STATIC
     ServiceVolumeAccess.cpp ServiceVolumeAccess.h
     SettingsMatch.cpp SettingsMatch.h
     ShareIndexer.cpp ShareIndexer.h
+    ShareScan.h
     ShareLister.cpp ShareLister.h
     ShareReach.cpp ShareReach.h
     ShareRetry.h
@@ -80,6 +84,7 @@ qt_add_resources(wscore "places" PREFIX "/winshun" FILES places.txt)
 qt_add_resources(wscore "apps" PREFIX "/winshun" FILES apps.txt)
 
 target_include_directories(wscore PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(wscore PRIVATE "${CMAKE_BINARY_DIR}/generated")
 target_link_libraries(wscore
     PUBLIC Qt6::Core Qt6::Sql winshun_options wsextract_api
-    PRIVATE kernel32 advapi32 bcrypt cabinet cfgmgr32 mpr netapi32 ole32 shell32 shlwapi user32 ws2_32)
+    PRIVATE miniz kernel32 advapi32 bcrypt cabinet cfgmgr32 mpr netapi32 ole32 shell32 shlwapi user32 ws2_32)

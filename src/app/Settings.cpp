@@ -1,6 +1,9 @@
 #include "Settings.h"
+#include "PreviewShortcut.h"
+#include "platform/HotkeyText.h"
 #include "PathText.h"
 #include "Query.h"
+#include "SwitchWire.h"
 
 #include "ServiceVolumeAccess.h"
 #include "Unc.h"
@@ -345,6 +348,13 @@ void writeShares(QSettings& s, const QList<NetworkShare>& shares)
         s.setValue(u"Name"_s, shares[i].name);
         if (shares[i].content)
             s.setValue(u"Content"_s, true);
+        const ShareScan& scan = shares[i].scan;
+        if (scan.scheduled)
+            s.setValue(u"ScanScheduled"_s, true);
+        s.setValue(u"ScanFrom"_s, scan.fromMinute);
+        s.setValue(u"ScanUntil"_s, scan.untilMinute);
+        if (scan.maxDepth > 0)
+            s.setValue(u"ScanDepth"_s, scan.maxDepth);
     }
     s.endArray();
 }
@@ -365,7 +375,12 @@ QList<NetworkShare> readShares(QSettings& s)
         if (path.isEmpty()
             || std::ranges::any_of(shares, [&](const NetworkShare& n) { return unc::equal(n.path.toStdWString(), path.toStdWString()); }))
             continue;
-        shares.append({path, s.value(u"Name"_s).toString().trimmed(), s.value(u"Content"_s, false).toBool()});
+        ShareScan scan;
+        scan.scheduled = s.value(u"ScanScheduled"_s, false).toBool();
+        scan.fromMinute = std::clamp(s.value(u"ScanFrom"_s, scan.fromMinute).toInt(), 0, 1439);
+        scan.untilMinute = std::clamp(s.value(u"ScanUntil"_s, scan.untilMinute).toInt(), 0, 1439);
+        scan.maxDepth = std::clamp(s.value(u"ScanDepth"_s, 0).toInt(), 0, 1024);
+        shares.append({path, s.value(u"Name"_s).toString().trimmed(), s.value(u"Content"_s, false).toBool(), scan});
     }
     s.endArray();
     return shares;
@@ -694,88 +709,12 @@ QString Settings::excludedFolderName(const QString& text)
 
 QString Settings::normalizedHotkey(const QString& shortcut)
 {
-    bool win = false;
-    bool ctrl = false;
-    bool alt = false;
-    bool shift = false;
-    QString key;
-    for (const QString& part : shortcut.split(u'+', Qt::SkipEmptyParts)) {
-        const QString name = part.trimmed().toLower();
-        if (name == u"ctrl" || name == u"control")
-            ctrl = true;
-        else if (name == u"alt")
-            alt = true;
-        else if (name == u"shift")
-            shift = true;
-        else if (name == u"win" || name == u"meta")
-            win = true;
-        else if (!key.isEmpty() || name.isEmpty())
-            return {}; // two keys
-        else if (name == u"return")
-            key = u"enter"_s;
-        else if (name == u"print" || name == u"prtsc")
-            key = u"printscreen"_s;
-        else if (name == u"backquote")
-            key = u"`"_s;
-        else
-            key = name;
-    }
-    // The keys MessageWindow::parseHotkey knows.
-    static const QRegularExpression knownKey(u"^([a-z0-9]|f([1-9]|1\\d|2[0-4])|space|tab|enter|printscreen|`)$"_s);
-    if (!knownKey.match(key).hasMatch())
-        return {};
-    QStringList parts;
-    if (win)
-        parts.push_back(u"win"_s);
-    if (ctrl)
-        parts.push_back(u"ctrl"_s);
-    if (alt)
-        parts.push_back(u"alt"_s);
-    if (shift)
-        parts.push_back(u"shift"_s);
-    parts.push_back(key);
-    return parts.join(u'+');
-}
-
-QStringList Settings::captureToolbarButtonIds()
-{
-    return {u"undo"_s, u"redo"_s, u"copy"_s, u"save"_s, u"pin"_s, u"ocr"_s, u"long"_s, u"record"_s, u"qr"_s, u"delay"_s, u"cancel"_s};
-}
-
-QStringList Settings::normalizedSmartWords(const QString& text)
-{
-    QStringList words;
-    for (const QString& part : text.split(QRegularExpression(u"[,;\\n\\r\uFF0C\u3001\uFF1B]"_s), Qt::SkipEmptyParts)) {
-        const QString word = part.trimmed().left(64);
-        if (!word.isEmpty() && !words.contains(word, Qt::CaseInsensitive))
-            words.append(word);
-    }
-    return words;
-}
-
-QString Settings::normalizedToolbarHidden(const QString& text)
-{
-    QStringList asked;
-    for (const QString& part : text.split(u',', Qt::SkipEmptyParts))
-        asked.append(part.trimmed().toLower());
-    QStringList kept;
-    for (const QString& id : captureToolbarButtonIds()) {
-        if (asked.contains(id))
-            kept.append(id);
-    }
-    return kept.join(u',');
+    return hotkeys::normalized(shortcut);
 }
 
 bool Settings::hotkeyAllowed(const QString& shortcut)
 {
-    const QString normal = normalizedHotkey(shortcut);
-    if (normal.isEmpty())
-        return false;
-    const QStringList parts = normal.split(u'+');
-    static const QRegularExpression functionKey(u"^f([1-9]|1\\d|2[0-4])$"_s);
-    if (functionKey.match(parts.last()).hasMatch())
-        return true;
-    return parts.contains(u"ctrl") || parts.contains(u"alt") || parts.contains(u"win");
+    return hotkeys::allowed(shortcut);
 }
 
 FileTypes Settings::namedFileTypes() const
@@ -845,6 +784,8 @@ void Settings::load()
     const Settings d = defaults();
     // Before anything below writes to it: nothing in it, a new install.
     const bool firstRun = s.allKeys().isEmpty();
+    onboardingComplete = readOrDefault(s, u"Setup/Completed"_s, !firstRun);
+    onboardingCapturePending = readOrDefault(s, u"Setup/CapturePending"_s, false);
 
     doubleCtrl = readOrDefault(s, u"Launcher/DoubleCtrl"_s, d.doubleCtrl);
     doubleTapKey = readOrDefault(s, u"Launcher/DoubleTapKey"_s, d.doubleTapKey).trimmed().toLower();
@@ -899,6 +840,7 @@ void Settings::load()
         folderMenu = folderMenuBefore;
     folderMenuExplorer = readOrDefault(s, u"Launcher/FolderMenuExplorer"_s, d.folderMenuExplorer);
     folderMenuDesktop = readOrDefault(s, u"Launcher/FolderMenuDesktop"_s, d.folderMenuDesktop);
+    folderMenuMiddle = readOrDefault(s, u"Launcher/FolderMenuMiddle"_s, d.folderMenuMiddle);
     folderMenuFavorites = readOrDefault(s, u"Launcher/FolderMenuFavorites"_s, d.folderMenuFavorites);
     folderMenuRecent = readOrDefault(s, u"Launcher/FolderMenuRecent"_s, d.folderMenuRecent);
     folderMenuWindows = readOrDefault(s, u"Launcher/FolderMenuWindows"_s, d.folderMenuWindows);
@@ -924,6 +866,9 @@ void Settings::load()
     doubleClickToOpen = readOrDefault(s, u"Results/DoubleClickToOpen"_s, d.doubleClickToOpen);
     tabEntersFavoriteFolder = readOrDefault(s, u"Results/TabEntersFavoriteFolder"_s, d.tabEntersFavoriteFolder);
     thumbnails = readOrDefault(s, u"Results/Thumbnails"_s, d.thumbnails);
+    searchApps = readOrDefault(s, u"Results/SearchApps"_s, d.searchApps);
+    searchSystem = readOrDefault(s, u"Results/SearchSystem"_s, d.searchSystem);
+    regexMode = readOrDefault(s, u"Results/RegexMode"_s, d.regexMode);
     if (!s.contains(u"Results/Sort"_s) && s.value(u"Results/SortByModified"_s).toBool())
         s.setValue(u"Results/Sort"_s, u"newest"_s); // 0.6.0's switch: newest first, or best match
     s.remove(u"Results/SortByModified"_s);
@@ -931,6 +876,8 @@ void Settings::load()
     if (!isSortName(sort))
         sort = d.sort;
     startList = readOrDefault(s, u"Results/StartList"_s, d.startList).trimmed().toLower();
+    recentItems = std::clamp(readOrDefault(s, u"Results/RecentItems"_s, d.recentItems), 1, 200);
+    favoritesOnStart = readOrDefault(s, u"Results/FavoritesOnStart"_s, d.favoritesOnStart);
     if (startList != u"modified" && startList != u"none")
         startList = d.startList;
     clearOnOpen = readOrDefault(s, u"Launcher/ClearOnOpen"_s, d.clearOnOpen);
@@ -938,11 +885,17 @@ void Settings::load()
     if (numberKeys != u"alt" && numberKeys != u"off")
         numberKeys = d.numberKeys;
     numberHints = readOrDefault(s, u"Results/NumberHints"_s, d.numberHints).trimmed().toLower();
-    if (numberHints != u"always" && numberHints != u"off")
+    if (numberHints != u"held" && numberHints != u"always" && numberHints != u"off")
         numberHints = d.numberHints;
     previewWith = readOrDefault(s, u"Results/PreviewWith"_s, d.previewWith).trimmed().toLower();
     if (previewWith != u"builtin")
         previewWith = d.previewWith;
+    previewHotkey = readOrDefault(s, u"Results/PreviewHotkey"_s, d.previewHotkey).trimmed();
+    if (!previewHotkey.isEmpty()) {
+        previewHotkey = previewkeys::normalized(previewHotkey);
+        if (previewHotkey.isEmpty())
+            previewHotkey = d.previewHotkey;
+    }
 
     theme = readOrDefault(s, u"Appearance/Theme"_s, d.theme).trimmed().toLower();
     if (theme != u"light" && theme != u"dark")
@@ -1072,6 +1025,8 @@ void Settings::load()
     clipboardClickToPaste = readOrDefault(s, u"Clipboard/ClickToPaste"_s, d.clipboardClickToPaste);
     clipboardLargePictures = readOrDefault(s, u"Clipboard/LargePictures"_s, d.clipboardLargePictures);
     clipboardKeepPlace = readOrDefault(s, u"Clipboard/KeepPlace"_s, d.clipboardKeepPlace);
+    clipboardAtPointer = readOrDefault(s, u"Clipboard/AtPointer"_s, d.clipboardAtPointer);
+    clipboardPauseInFullScreen = readOrDefault(s, u"Clipboard/PauseInFullScreen"_s, d.clipboardPauseInFullScreen);
     clipboardFlipAbove = readOrDefault(s, u"Clipboard/FlipAbove"_s, d.clipboardFlipAbove);
     clipboardHoldToStep = readOrDefault(s, u"Clipboard/HoldToStep"_s, d.clipboardHoldToStep);
     clipboardSearchBoxSide = readOrDefault(s, u"Clipboard/SearchBoxSide"_s, d.clipboardSearchBoxSide).trimmed().toLower();
@@ -1095,75 +1050,10 @@ void Settings::load()
     // there). The box has one place now (taskbar::SearchBox).
     s.remove(u"Taskbar/StartGap"_s);
 
+    // The rest of [Capture] is the screenshot plugin's (MovedPlugins).
     captureEnabled = readOrDefault(s, u"Capture/Enabled"_s, d.captureEnabled);
-    captureHotkey = readOrDefault(s, u"Capture/Hotkey"_s, d.captureHotkey).trimmed();
-    capturePrintScreen = readOrDefault(s, u"Capture/PrintScreen"_s, d.capturePrintScreen);
     capturePrintScreenBefore = readOrDefault(s, u"Capture/PrintScreenBefore"_s, d.capturePrintScreenBefore).trimmed();
-    captureCopyOnSelect = readOrDefault(s, u"Capture/CopyOnSelect"_s, d.captureCopyOnSelect);
-    captureMagnifier = readOrDefault(s, u"Capture/Magnifier"_s, d.captureMagnifier);
-    capturePinOnCopy = readOrDefault(s, u"Capture/PinOnCopy"_s, d.capturePinOnCopy);
-    const auto mouseAction = [&](const QString& key, const QString& fallback, bool allowBack) {
-        const QString v = readOrDefault(s, key, fallback).trimmed().toLower();
-        static const QStringList known {u"none"_s, u"copy"_s, u"copypin"_s, u"save"_s, u"pin"_s, u"ocr"_s, u"ocrcopy"_s,
-            u"ocrsearch"_s, u"ocrweb"_s, u"cancel"_s};
-        return known.contains(v) || (allowBack && v == u"back") ? v : fallback;
-    };
-    captureMouseDoubleLeft = mouseAction(u"Capture/MouseDoubleLeft"_s, d.captureMouseDoubleLeft, false);
-    captureMouseRight = mouseAction(u"Capture/MouseRight"_s, d.captureMouseRight, true);
-    captureMouseMiddle = mouseAction(u"Capture/MouseMiddle"_s, d.captureMouseMiddle, false);
-    captureMouseBack = mouseAction(u"Capture/MouseBack"_s, d.captureMouseBack, false);
-    captureMouseForward = mouseAction(u"Capture/MouseForward"_s, d.captureMouseForward, false);
-    // A hand-written "undo,pin" with no quotes reads back as a list (QSettings splits at commas); ours are quoted.
-    const QVariant hiddenRaw = s.value(u"Capture/ToolbarHidden"_s);
-    captureToolbarHidden = normalizedToolbarHidden(hiddenRaw.metaType().id() == QMetaType::QStringList
-            ? hiddenRaw.toStringList().join(u',')
-            : (hiddenRaw.isValid() ? hiddenRaw.toString() : d.captureToolbarHidden));
     captureKeyword = readOrDefault(s, u"Capture/Keyword"_s, d.captureKeyword).trimmed();
-    captureAnnotateStyles = readOrDefault(s, u"Capture/AnnotateStyles"_s, d.captureAnnotateStyles).trimmed();
-    captureSmartPrescan = readOrDefault(s, u"Capture/SmartPrescan"_s, d.captureSmartPrescan);
-    captureSmartIpMac = readOrDefault(s, u"Capture/SmartIpMac"_s, d.captureSmartIpMac);
-    captureSmartAllText = readOrDefault(s, u"Capture/SmartAllText"_s, d.captureSmartAllText);
-    // Unquoted and hand-written, "a,b" reads back as a list too.
-    const QVariant wordsRaw = s.value(u"Capture/SmartWords"_s);
-    captureSmartWords = normalizedSmartWords(wordsRaw.metaType().id() == QMetaType::QStringList
-            ? wordsRaw.toStringList().join(u',')
-            : (wordsRaw.isValid() ? wordsRaw.toString() : d.captureSmartWords)).join(u',');
-
-    captureCursor = readOrDefault(s, u"Capture/IncludeCursor"_s, d.captureCursor);
-    captureHdrFile = readOrDefault(s, u"Capture/HdrFile"_s, d.captureHdrFile);
-    captureControlsUia = readOrDefault(s, u"Capture/ControlsUia"_s, d.captureControlsUia);
-    {
-        const int seconds = readOrDefault(s, u"Capture/DelaySeconds"_s, d.captureDelay);
-        captureDelay = seconds == 3 || seconds == 5 || seconds == 10 ? seconds : d.captureDelay;
-    }
-    {
-        const QString format = readOrDefault(s, u"Capture/ColorFormat"_s, d.captureColorFormat).trimmed().toLower();
-        captureColorFormat = format == u"rgb" || format == u"hsl" ? format : u"hex"_s;
-    }
-    capturePinsHotkey = readOrDefault(s, u"Capture/PinsHotkey"_s, d.capturePinsHotkey).trimmed();
-    capturePinsRestoreHotkey = readOrDefault(s, u"Capture/PinsRestoreHotkey"_s, d.capturePinsRestoreHotkey).trimmed();
-    captureLastPinHotkey = readOrDefault(s, u"Capture/LastPinHotkey"_s, d.captureLastPinHotkey).trimmed();
-    captureSaveFolder = readOrDefault(s, u"Capture/SaveFolder"_s, d.captureSaveFolder).trimmed();
-    captureRecordingFolder = readOrDefault(s, u"Capture/RecordingFolder"_s, d.captureRecordingFolder).trimmed();
-    captureRecordingSystemAudio = readOrDefault(s, u"Capture/RecordingSystemAudio"_s, d.captureRecordingSystemAudio);
-    captureRecordingMicrophone = readOrDefault(s, u"Capture/RecordingMicrophone"_s, d.captureRecordingMicrophone);
-    captureRecordingQuality = readOrDefault(s, u"Capture/RecordingQuality"_s,
-        readOrDefault(s, u"Capture/RecordingHighQuality"_s, false) ? 2 : d.captureRecordingQuality);
-    if (captureRecordingQuality < 0 || captureRecordingQuality > 2)
-        captureRecordingQuality = d.captureRecordingQuality;
-    captureRecordingCursor = readOrDefault(s, u"Capture/RecordingCursor"_s, d.captureRecordingCursor);
-    captureRecordingCountdown = readOrDefault(s, u"Capture/RecordingCountdown"_s, d.captureRecordingCountdown);
-    captureRecordingClicks = readOrDefault(s, u"Capture/RecordingClicks"_s, d.captureRecordingClicks);
-    captureRecordingFormat = readOrDefault(s, u"Capture/RecordingFormat"_s, d.captureRecordingFormat);
-    if (captureRecordingFormat < 0 || captureRecordingFormat > 1) captureRecordingFormat = d.captureRecordingFormat;
-    captureRecordingKeys = readOrDefault(s, u"Capture/RecordingKeys"_s, d.captureRecordingKeys).trimmed().toLower();
-    if (captureRecordingKeys != u"shortcuts" && captureRecordingKeys != u"all")
-        captureRecordingKeys = d.captureRecordingKeys;
-    captureRecordingMouseButtons = readOrDefault(s, u"Capture/RecordingMouseButtons"_s, d.captureRecordingMouseButtons);
-    {
-        const QString action = readOrDefault(s, u"Capture/PinDoubleClick"_s, d.capturePinDoubleClick).trimmed().toLower();
-        capturePinDoubleClick = action == u"close" || action == u"collapse" || action == u"none" ? action : u"reset"_s;
-    }
 
     pasteFileEnabled = readOrDefault(s, u"PasteFile/Enabled"_s, d.pasteFileEnabled);
     pasteFileCtrlV = readOrDefault(s, u"PasteFile/CtrlV"_s, d.pasteFileCtrlV);
@@ -1204,11 +1094,35 @@ void Settings::load()
 
     pluginDeveloperMode = readOrDefault(s, u"Plugins/DeveloperMode"_s, d.pluginDeveloperMode);
     plugins = readPlugins(s);
+    // System switches used to be unconditional native backends. Preserve
+    // existing users' system-search choice once; a fresh profile starts off.
+    // Persist the marker even when off, so the second load is not an upgrade.
+    if (!s.value(u"Plugins/SwitchesMigrated"_s, false).toBool()) {
+        if (!plugin(switchwire::kPlugin) && !firstRun) {
+            PluginConfig config;
+            config.id = switchwire::kPlugin.toString();
+            config.enabled = searchSystem;
+            config.confirmed = {u"ui"_s, u"system:settings"_s};
+            plugins.append(config);
+            const QString group = u"Plugin."_s + config.id + u'/';
+            s.setValue(group + u"Enabled"_s, config.enabled);
+            s.setValue(group + u"Confirmed"_s, config.confirmed);
+        }
+        s.setValue(u"Plugins/SwitchesMigrated"_s, true);
+        s.sync();
+    }
 }
 
 void Settings::save() const
 {
+    saveChecked();
+}
+
+bool Settings::saveChecked() const
+{
     QSettings s(QSettings::IniFormat, QSettings::UserScope, u"WinShun"_s, u"WinShun"_s);
+    s.setValue(u"Setup/Completed"_s, onboardingComplete);
+    s.setValue(u"Setup/CapturePending"_s, onboardingCapturePending);
     s.setValue(u"Launcher/DoubleCtrl"_s, doubleCtrl);
     s.setValue(u"Launcher/DoubleTapKey"_s, doubleTapKey);
     s.setValue(u"Launcher/DoubleCtrlKey"_s, doubleCtrlKey);
@@ -1238,6 +1152,7 @@ void Settings::save() const
     s.setValue(u"Launcher/FolderMenu"_s, folderMenu);
     s.setValue(u"Launcher/FolderMenuExplorer"_s, folderMenuExplorer);
     s.setValue(u"Launcher/FolderMenuDesktop"_s, folderMenuDesktop);
+    s.setValue(u"Launcher/FolderMenuMiddle"_s, folderMenuMiddle);
     s.setValue(u"Launcher/FolderMenuFavorites"_s, folderMenuFavorites);
     s.setValue(u"Launcher/FolderMenuRecent"_s, folderMenuRecent);
     s.setValue(u"Launcher/FolderMenuWindows"_s, folderMenuWindows);
@@ -1256,12 +1171,18 @@ void Settings::save() const
     s.setValue(u"Results/DoubleClickToOpen"_s, doubleClickToOpen);
     s.setValue(u"Results/TabEntersFavoriteFolder"_s, tabEntersFavoriteFolder);
     s.setValue(u"Results/Thumbnails"_s, thumbnails);
+    s.setValue(u"Results/SearchApps"_s, searchApps);
+    s.setValue(u"Results/SearchSystem"_s, searchSystem);
+    s.setValue(u"Results/RegexMode"_s, regexMode);
     s.setValue(u"Results/Sort"_s, sort);
     s.setValue(u"Results/StartList"_s, startList);
+    s.setValue(u"Results/RecentItems"_s, recentItems);
+    s.setValue(u"Results/FavoritesOnStart"_s, favoritesOnStart);
     s.setValue(u"Launcher/ClearOnOpen"_s, clearOnOpen);
     s.setValue(u"Results/NumberKeys"_s, numberKeys);
     s.setValue(u"Results/NumberHints"_s, numberHints);
     s.setValue(u"Results/PreviewWith"_s, previewWith);
+    s.setValue(u"Results/PreviewHotkey"_s, previewHotkey);
     s.setValue(u"Appearance/Theme"_s, theme);
     s.setValue(u"Appearance/Language"_s, language);
     s.setValue(u"Appearance/Transparency"_s, transparency);
@@ -1308,6 +1229,8 @@ void Settings::save() const
     s.setValue(u"Clipboard/ClickToPaste"_s, clipboardClickToPaste);
     s.setValue(u"Clipboard/LargePictures"_s, clipboardLargePictures);
     s.setValue(u"Clipboard/KeepPlace"_s, clipboardKeepPlace);
+    s.setValue(u"Clipboard/AtPointer"_s, clipboardAtPointer);
+    s.setValue(u"Clipboard/PauseInFullScreen"_s, clipboardPauseInFullScreen);
     s.setValue(u"Clipboard/FlipAbove"_s, clipboardFlipAbove);
     s.setValue(u"Clipboard/HoldToStep"_s, clipboardHoldToStep);
     s.setValue(u"Clipboard/SearchBoxSide"_s, clipboardSearchBoxSide);
@@ -1318,45 +1241,11 @@ void Settings::save() const
     s.setValue(u"Taskbar/StartMenuTyping"_s, taskbarStartTyping);
     s.setValue(u"Taskbar/SearchBox"_s, taskbarSearchBox);
     s.setValue(u"Taskbar/SearchBoxStyle"_s, taskbarSearchBoxStyle);
-    s.setValue(u"Capture/Enabled"_s, captureEnabled);
-    s.setValue(u"Capture/Hotkey"_s, captureHotkey);
-    s.setValue(u"Capture/PrintScreen"_s, capturePrintScreen);
-    s.setValue(u"Capture/PrintScreenBefore"_s, capturePrintScreenBefore);
-    s.setValue(u"Capture/CopyOnSelect"_s, captureCopyOnSelect);
-    s.setValue(u"Capture/Magnifier"_s, captureMagnifier);
-    s.setValue(u"Capture/PinOnCopy"_s, capturePinOnCopy);
-    s.setValue(u"Capture/MouseDoubleLeft"_s, captureMouseDoubleLeft);
-    s.setValue(u"Capture/MouseRight"_s, captureMouseRight);
-    s.setValue(u"Capture/MouseMiddle"_s, captureMouseMiddle);
-    s.setValue(u"Capture/MouseBack"_s, captureMouseBack);
-    s.setValue(u"Capture/MouseForward"_s, captureMouseForward);
-    s.setValue(u"Capture/ToolbarHidden"_s, captureToolbarHidden);
+    if (capturePrintScreenBefore.isEmpty())
+        s.remove(u"Capture/PrintScreenBefore"_s);
+    else
+        s.setValue(u"Capture/PrintScreenBefore"_s, capturePrintScreenBefore);
     s.setValue(u"Capture/Keyword"_s, captureKeyword);
-    s.setValue(u"Capture/AnnotateStyles"_s, captureAnnotateStyles);
-    s.setValue(u"Capture/SmartPrescan"_s, captureSmartPrescan);
-    s.setValue(u"Capture/SmartIpMac"_s, captureSmartIpMac);
-    s.setValue(u"Capture/SmartAllText"_s, captureSmartAllText);
-    s.setValue(u"Capture/SmartWords"_s, captureSmartWords);
-    s.setValue(u"Capture/IncludeCursor"_s, captureCursor);
-    s.setValue(u"Capture/HdrFile"_s, captureHdrFile);
-    s.setValue(u"Capture/ControlsUia"_s, captureControlsUia);
-    s.setValue(u"Capture/DelaySeconds"_s, captureDelay);
-    s.setValue(u"Capture/ColorFormat"_s, captureColorFormat);
-    s.setValue(u"Capture/PinsHotkey"_s, capturePinsHotkey);
-    s.setValue(u"Capture/PinsRestoreHotkey"_s, capturePinsRestoreHotkey);
-    s.setValue(u"Capture/LastPinHotkey"_s, captureLastPinHotkey);
-    s.setValue(u"Capture/SaveFolder"_s, captureSaveFolder);
-    s.setValue(u"Capture/RecordingFolder"_s, captureRecordingFolder);
-    s.setValue(u"Capture/RecordingSystemAudio"_s, captureRecordingSystemAudio);
-    s.setValue(u"Capture/RecordingMicrophone"_s, captureRecordingMicrophone);
-    s.setValue(u"Capture/RecordingQuality"_s, captureRecordingQuality);
-    s.setValue(u"Capture/RecordingCursor"_s, captureRecordingCursor);
-    s.setValue(u"Capture/RecordingCountdown"_s, captureRecordingCountdown);
-    s.setValue(u"Capture/RecordingClicks"_s, captureRecordingClicks);
-    s.setValue(u"Capture/RecordingFormat"_s, captureRecordingFormat);
-    s.setValue(u"Capture/RecordingKeys"_s, captureRecordingKeys);
-    s.setValue(u"Capture/RecordingMouseButtons"_s, captureRecordingMouseButtons);
-    s.setValue(u"Capture/PinDoubleClick"_s, capturePinDoubleClick);
     s.setValue(u"PasteFile/Enabled"_s, pasteFileEnabled);
     s.setValue(u"PasteFile/CtrlV"_s, pasteFileCtrlV);
     s.setValue(u"PasteFile/Menu"_s, pasteFileMenu);
@@ -1378,6 +1267,8 @@ void Settings::save() const
     s.setValue(u"Mcp/Settings"_s, mcpSettings);
     s.setValue(u"Plugins/DeveloperMode"_s, pluginDeveloperMode);
     writePlugins(s, plugins);
+    s.sync();
+    return s.status() == QSettings::NoError;
 }
 
 ContentSizeLimits Settings::contentSizeLimits() const
@@ -1476,7 +1367,7 @@ ShareIndexer::Options Settings::shareOptions() const
 {
     ShareIndexer::Options o;
     for (const NetworkShare& n : shares)
-        o.shares.push_back({n.path.toStdWString(), n.name.toStdWString(), n.content});
+        o.shares.push_back({n.path.toStdWString(), n.name.toStdWString(), n.content, n.scan});
     o.rules = crawlRules();
     for (const QString& n : networkExcludedNames) {
         if (!n.trimmed().isEmpty())

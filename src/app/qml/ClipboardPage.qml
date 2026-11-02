@@ -64,7 +64,7 @@ Item {
     readonly property real footerFrom: header.height + tabs.height + 1 + body.height
     // ... as a y, for a section that tall.
     function placed(from: real, size: real): real {
-        return flipped ? implicitHeight - from - size : from
+        return flipped ? height - from - size : from
     }
     // ↑ in rows: toward the first row; flipped, away from it.
     readonly property int rowUp: flipped ? 1 : -1
@@ -486,6 +486,10 @@ Item {
                 page.selectHeld(held)
         }
         function onStepped(row) { page.selectHeld(row) }
+        function onBrowseStepRequested() {
+            if (list.count > 0)
+                page.selectHeld((list.currentIndex + 1) % list.count)
+        }
         function onQueryChanged() {
             pinyinHintTimer.stop() // also for a paste, which goes past handleKey
             if (input.text !== page.clipboard.query)
@@ -520,7 +524,7 @@ Item {
 
     Item { // the sections, each where page.placed() puts it
         width: page.width
-        height: page.implicitHeight
+        height: page.height
 
         Item { // header: drags the window, except for the field
             id: header
@@ -674,7 +678,7 @@ Item {
             id: body
             y: page.placed(page.bodyFrom, height)
             width: parent.width
-            height: page.rows * page.rowHeight + 8
+            height: Math.max(0, page.height - page.chromeHeight) + 8
 
             // The mouse left the list and the preview: the preview is the
             // current row's again. Into the preview it stays (to scroll it,
@@ -687,9 +691,11 @@ Item {
                 id: listArea
                 width: page.previewOpen ? page.listWidth : parent.width
                 height: parent.height
+                readonly property real scrollbarInset: page.previewOpen ? 0 : page.frame.resizeMargin(Screen.devicePixelRatio)
 
                 ListView {
                     id: list
+                    objectName: "clipboardEntries"
                     anchors.fill: parent
                     topMargin: 4
                     bottomMargin: 4
@@ -822,8 +828,10 @@ Item {
                 }
 
                 ListScrollBar {
+                    objectName: "clipboardListScrollBar"
                     flickable: list
                     anchors.right: parent.right
+                    anchors.rightMargin: listArea.scrollbarInset
                     anchors.top: parent.top
                     anchors.bottom: parent.bottom
                 }
@@ -897,6 +905,7 @@ Item {
                 width: parent.width - x
                 height: parent.height
                 parentTop: page.y + body.y
+                resizeMargin: page.frame.resizeMargin(Screen.devicePixelRatio)
                 // Re-read when the rows change. The revision is part of the
                 // condition: a bare read of it would be dropped by the QML
                 // compiler, and the binding would not depend on it.

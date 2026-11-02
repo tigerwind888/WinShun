@@ -2,39 +2,39 @@
 
 #include "AutostartRun.h"
 #include "CommandLaunch.h"
+#include "Unc.h"
 
-#include "DragOut.h"
 #include "FileManagers.h"
 #include "Favorites.h"
 #include "Integrity.h"
 #include "SystemCatalog.h"
 #include "Win32Util.h"
 
-#include <QClipboard>
 #include <QDebug>
 #include <QDir>
-#include <QEventLoop>
 #include <QFileInfo>
 #include <QGuiApplication>
 #include <QMimeData>
 #include <QSettings>
-#include <QThread>
 #include <QUrl>
 
 #include <ole2.h> // before exdisp.h: WIN32_LEAN_AND_MEAN keeps it out of windows.h
 
 #include <exdisp.h>
+#include <propkey.h>
 #include <shellapi.h>
 #include <shldisp.h>
 #include <shlguid.h>
 #include <shlobj.h>
 #include <shobjidl.h>
 #include <taskschd.h>
+#include <userenv.h>
 #include <wrl/client.h>
 #include <wrl/implements.h>
 
 #include <algorithm>
 #include <atomic>
+#include <cstddef>
 #include <mutex>
 #include <optional>
 #include <thread>
@@ -74,82 +74,6 @@ namespace {
 
 // Where open() takes folders and reveal() shows items (setFileManager).
 std::atomic<filemanager::Kind> g_fileManager {filemanager::Kind::Explorer};
-
-thread_local const std::atomic_bool* t_pickerCancelled = nullptr;
-
-class PickerEvents final
-    : public Microsoft::WRL::RuntimeClass<Microsoft::WRL::RuntimeClassFlags<Microsoft::WRL::ClassicCom>,
-          IFileDialogEvents> {
-public:
-    IFACEMETHODIMP OnFolderChange(IFileDialog* dialog) override
-    {
-        if (t_pickerCancelled && t_pickerCancelled->load())
-            dialog->Close(HRESULT_FROM_WIN32(ERROR_CANCELLED));
-        return S_OK;
-    }
-    IFACEMETHODIMP OnFileOk(IFileDialog*) override { return S_OK; }
-    IFACEMETHODIMP OnFolderChanging(IFileDialog*, IShellItem*) override { return S_OK; }
-    IFACEMETHODIMP OnSelectionChange(IFileDialog*) override { return S_OK; }
-    IFACEMETHODIMP OnShareViolation(IFileDialog*, IShellItem*, FDE_SHAREVIOLATION_RESPONSE* response) override
-    {
-        *response = FDESVR_DEFAULT;
-        return S_OK;
-    }
-    IFACEMETHODIMP OnTypeChange(IFileDialog*) override { return S_OK; }
-    IFACEMETHODIMP OnOverwrite(IFileDialog*, IShellItem*, FDE_OVERWRITE_RESPONSE* response) override
-    {
-        *response = FDEOR_DEFAULT;
-        return S_OK;
-    }
-};
-
-HRESULT showPicker(IFileDialog* dialog, HWND owner)
-{
-    if (t_pickerCancelled && t_pickerCancelled->load())
-        return HRESULT_FROM_WIN32(ERROR_CANCELLED);
-    const auto events = Microsoft::WRL::Make<PickerEvents>();
-    DWORD cookie = 0;
-    const HRESULT advised = dialog->Advise(events.Get(), &cookie);
-    const HRESULT result = dialog->Show(owner);
-    if (SUCCEEDED(advised))
-        dialog->Unadvise(cookie);
-    return result;
-}
-
-template <typename Fn> QString runPicker(Fn&& pick)
-{
-    auto* app = QCoreApplication::instance();
-    if (!app || QThread::currentThread() != app->thread())
-        return pick();
-    // Keep the native dialog's drag loop off Qt's GUI thread. The GUI keeps
-    // processing its search bar and folder menu while the caller waits.
-    QEventLoop loop;
-    QString result;
-    std::atomic_bool cancelled {false};
-    std::atomic<DWORD> threadId {0};
-    const auto closing = QObject::connect(app, &QCoreApplication::aboutToQuit, &loop, [&] {
-        cancelled.store(true);
-        if (const DWORD id = threadId.load())
-            ::EnumThreadWindows(
-                id,
-                [](HWND window, LPARAM) -> BOOL {
-                    ::PostMessageW(window, WM_CLOSE, 0, 0);
-                    return TRUE;
-                },
-                0);
-    });
-    std::jthread worker([&] {
-        threadId.store(::GetCurrentThreadId());
-        t_pickerCancelled = &cancelled;
-        if (!cancelled.load())
-            result = pick();
-        QMetaObject::invokeMethod(&loop, &QEventLoop::quit, Qt::QueuedConnection);
-    });
-    loop.exec();
-    worker.join();
-    QObject::disconnect(closing);
-    return result;
-}
 
 // Runs `fn` on a detached thread with COM initialised (the shell needs an STA).
 template <typename Fn> void runOnShellThread(Fn&& fn)
@@ -246,9 +170,40 @@ bool executeAsUser(const std::wstring& file, const std::wstring& args, const std
     return SUCCEEDED(shell->ShellExecute(target, parameters, workDir, verb, show));
 }
 
+// An environment block for a program started with `token`'s user: CreateEnvironmentBlock reads the
+// system's and the user's variables from the registry as they are now. `inherit`: over this process's
+// own variables (the user's own account: what this process had and the registry does not, such as a
+// variable a parent set, stays; what the registry has now wins), else those alone.
+class EnvironmentBlock {
+public:
+    EnvironmentBlock() = default;
+    EnvironmentBlock(const EnvironmentBlock&) = delete;
+    EnvironmentBlock& operator=(const EnvironmentBlock&) = delete;
+    ~EnvironmentBlock()
+    {
+        if (m_block)
+            ::DestroyEnvironmentBlock(m_block);
+    }
+    bool create(HANDLE token, bool inherit) { return ::CreateEnvironmentBlock(&m_block, token, inherit) && m_block; }
+    LPVOID get() const noexcept { return m_block; }
+
+private:
+    LPVOID m_block = nullptr;
+};
+
+// The standard handles of a console program started for its output
+// (runUnelevatedCaptured): what it reads, and where it writes (both streams).
+struct StdHandles {
+    HANDLE input;
+    HANDLE output;
+};
+
 // Starts `command` with the desktop shell's own token: the user's normal
-// rights. Invalid when there is no shell to take them from.
-win32::UniqueHandle startWithShellToken(std::wstring command, const std::wstring& dir, DWORD flags = 0)
+// rights and environment. Invalid when there is no shell to take them from.
+// `io`: the program's standard handles, and no console window (a console
+// program started from a program of ours would open one).
+win32::UniqueHandle startWithShellToken(
+    std::wstring command, const std::wstring& dir, DWORD flags = 0, const StdHandles* io = nullptr)
 {
     DWORD pid = 0;
     const HWND shellWindow = ::GetShellWindow();
@@ -266,8 +221,24 @@ win32::UniqueHandle startWithShellToken(std::wstring command, const std::wstring
         return {};
     const win32::UniqueHandle token(primaryToken);
     STARTUPINFOW startup {sizeof(STARTUPINFOW)};
+    if (io) {
+        // The secondary logon service copies these three into the new process
+        // (no other handle of ours gets in, see pitfalls: CreateProcessWithTokenW).
+        startup.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
+        startup.wShowWindow = SW_HIDE;
+        startup.hStdInput = io->input;
+        startup.hStdOutput = io->output;
+        startup.hStdError = io->output;
+        flags |= CREATE_NO_WINDOW;
+    }
+    // What it starts gets the user's own environment, from their token (their
+    // variables as the registry has them now), not this process's, which is as
+    // old as this process and may be an administrator's (another account's, even).
+    EnvironmentBlock environment;
+    if (environment.create(token.get(), false))
+        flags |= CREATE_UNICODE_ENVIRONMENT;
     PROCESS_INFORMATION started {};
-    if (!::CreateProcessWithTokenW(token.get(), 0, nullptr, command.data(), flags, nullptr,
+    if (!::CreateProcessWithTokenW(token.get(), 0, nullptr, command.data(), flags, environment.get(),
             dir.empty() ? nullptr : dir.c_str(), &startup, &started))
         return {};
     ::CloseHandle(started.hThread);
@@ -292,6 +263,21 @@ bool isShellTarget(const std::wstring& file)
     return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY);
 }
 
+// rundll32 starting `file` with ShellExecute. Empty when `file` cannot be
+// quoted on the command line (no path has a quote).
+std::wstring rundllCommand(const std::wstring& file, const std::wstring& args)
+{
+    wchar_t folder[MAX_PATH] = {};
+    const UINT n = ::GetSystemDirectoryW(folder, MAX_PATH);
+    if (n == 0 || n >= MAX_PATH || file.find(L'"') != std::wstring::npos)
+        return {};
+    std::wstring command
+        = L'"' + std::wstring(folder, n) + L"\\rundll32.exe\" shell32.dll,ShellExec_RunDLL \"" + file + L'"';
+    if (!args.empty())
+        command += L' ' + args;
+    return command;
+}
+
 // Without an Explorer window to ask (another shell is in use, or Explorer
 // lists none), start the target with the desktop shell's own token: the
 // user's normal rights. Folders, shell locations and URIs go to a new
@@ -304,8 +290,8 @@ bool executeWithShellToken(const std::wstring& file, const std::wstring& args, c
 {
     if (file.find(L'"') != std::wstring::npos)
         return false; // cannot be quoted on the command line (no path has one)
-    wchar_t folder[MAX_PATH] = {};
     if (args.empty() && isShellTarget(file)) {
+        wchar_t folder[MAX_PATH] = {};
         const UINT n = ::GetWindowsDirectoryW(folder, MAX_PATH);
         if (n == 0 || n >= MAX_PATH)
             return false;
@@ -313,21 +299,121 @@ bool executeWithShellToken(const std::wstring& file, const std::wstring& args, c
         const std::wstring target = file.ends_with(L'\\') ? file : L'"' + file + L'"';
         return startWithShellToken(L'"' + std::wstring(folder, n) + L"\\explorer.exe\" " + target, {}).valid();
     }
-    const UINT n = ::GetSystemDirectoryW(folder, MAX_PATH);
-    if (n == 0 || n >= MAX_PATH)
+    std::wstring command = rundllCommand(file, args);
+    return !command.empty() && startWithShellToken(std::move(command), dir).valid();
+}
+
+// The program a shortcut starts. Empty for one to no file (a Control Panel
+// item, an app of the Store).
+std::wstring shortcutTarget(const std::wstring& link)
+{
+    ComPtr<IShellLinkW> shortcut;
+    ComPtr<IPersistFile> file;
+    wchar_t target[MAX_PATH] {};
+    if (FAILED(::CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&shortcut)))
+        || FAILED(shortcut.As(&file)) || FAILED(file->Load(link.c_str(), STGM_READ))
+        || shortcut->GetPath(target, MAX_PATH, nullptr, 0) != S_OK)
+        return {};
+    return target;
+}
+
+// A console program, or a shortcut to one, which must not start through
+// Explorer: a console program whose parent is explorer.exe takes it for a
+// double-click in a folder window, and command-line tools built with Go's
+// cobra then only say "This is a command line tool" and quit (GitHub #139).
+// Only .exe, .com and .lnk files and bare names ("cmd") are looked at: a
+// folder, a document or a URI never is one.
+bool startsConsole(const std::wstring& file, const std::wstring& dir)
+{
+    const QString name = QString::fromStdWString(file);
+    const QString suffix = QFileInfo(name).suffix().toLower();
+    QString program;
+    if (suffix == u"lnk")
+        program = QString::fromStdWString(shortcutTarget(file));
+    else if (suffix == u"exe" || suffix == u"com"
+        || (suffix.isEmpty() && !name.contains(u'\\') && !name.contains(u'/') && !name.contains(u':')))
+        program = commandlaunch::resolveProgram(name, QString::fromStdWString(dir));
+    return !program.isEmpty() && commandlaunch::kindOf(program) == commandlaunch::Kind::Console;
+}
+
+// A console program (startsConsole): rundll32 starts it as Explorer would
+// (ShellExecute: a console of its own, the shell's checks of downloaded
+// files, a shortcut's settings) and exits. With the user's normal rights and
+// environment as Explorer has them, not Win顺's own: our own token, or the
+// desktop shell's when we are elevated.
+bool executeConsoleProgram(const std::wstring& file, const std::wstring& args, const std::wstring& dir)
+{
+    // rundll32 starts nothing for a path with forward slashes, and exits 0 all the same.
+    std::wstring path = file;
+    std::replace(path.begin(), path.end(), L'/', L'\\');
+    std::wstring command = rundllCommand(path, args);
+    if (command.empty())
         return false;
-    std::wstring command
-        = L'"' + std::wstring(folder, n) + L"\\rundll32.exe\" shell32.dll,ShellExec_RunDLL \"" + file + L'"';
-    if (!args.empty())
-        command += L' ' + args;
-    return startWithShellToken(std::move(command), dir).valid();
+    if (integrity::processElevated())
+        return startWithShellToken(std::move(command), dir).valid();
+    HANDLE ownToken = nullptr;
+    if (!::OpenProcessToken(::GetCurrentProcess(), TOKEN_QUERY | TOKEN_DUPLICATE | TOKEN_IMPERSONATE, &ownToken))
+        return false;
+    const win32::UniqueHandle token(ownToken);
+    EnvironmentBlock environment;
+    const DWORD flags = environment.create(token.get(), false) ? CREATE_UNICODE_ENVIRONMENT : 0;
+    STARTUPINFOW startup {sizeof(STARTUPINFOW)};
+    PROCESS_INFORMATION started {};
+    if (!::CreateProcessW(nullptr, command.data(), nullptr, nullptr, FALSE, flags, environment.get(),
+            dir.empty() ? nullptr : dir.c_str(), &startup, &started))
+        return false;
+    ::CloseHandle(started.hThread);
+    ::CloseHandle(started.hProcess);
+    return true;
+}
+
+struct ConsoleApp {
+    std::wstring program;
+    std::wstring arguments;
+};
+
+// Applications found through the Start menu have a virtual AppsFolder path,
+// not an .exe suffix. Resolve its desktop target on this shell worker too:
+// otherwise it bypasses startsConsole and cobra still sees Explorer (#139).
+std::optional<ConsoleApp> consoleApp(const std::wstring& file)
+{
+    if (!QString::fromStdWString(file).startsWith(u"shell:AppsFolder\\", Qt::CaseInsensitive))
+        return std::nullopt;
+    ComPtr<IShellItem2> item;
+    if (FAILED(::SHCreateItemFromParsingName(file.c_str(), nullptr, IID_PPV_ARGS(&item))))
+        return std::nullopt;
+    const auto property = [&](REFPROPERTYKEY key) {
+        PWSTR value = nullptr;
+        const HRESULT result = item->GetString(key, &value);
+        std::wstring text = SUCCEEDED(result) && value ? value : L"";
+        ::CoTaskMemFree(value);
+        return text;
+    };
+    std::wstring program = property(PKEY_Link_TargetParsingPath);
+    if (program.empty() || commandlaunch::kindOf(QString::fromStdWString(program)) != commandlaunch::Kind::Console)
+        return std::nullopt; // packaged and GUI applications keep their shell activation
+    return ConsoleApp {std::move(program), property(PKEY_Link_Arguments)};
 }
 
 // Starts through Explorer with the user's normal rights. Without Explorer:
 // ShellExecute from a normal process, or the shell token from an elevated
-// one. Only the latter waits briefly for the desktop shell to restart.
+// one. Only the latter waits briefly for the desktop shell to restart. A
+// console program never goes to Explorer (startsConsole).
 bool executeUnelevated(const std::wstring& file, const std::wstring& args, const std::wstring& dir)
 {
+    if (auto app = consoleApp(file)) {
+        if (!args.empty()) {
+            if (!app->arguments.empty())
+                app->arguments += L' ';
+            app->arguments += args;
+        }
+        const std::wstring cwd = dir.empty()
+            ? QDir::toNativeSeparators(QFileInfo(QString::fromStdWString(app->program)).absolutePath()).toStdWString()
+            : dir;
+        return executeConsoleProgram(app->program, app->arguments, cwd);
+    }
+    if (startsConsole(file, dir))
+        return executeConsoleProgram(file, args, dir);
     if (executeAsUser(file, args, dir))
         return true;
     if (!integrity::processElevated()) {
@@ -445,18 +531,19 @@ bool launchCustom(const QString& command, const QString& directory, const QStrin
 void open(const QString& path, bool asAdministrator, std::function<void(bool)> done)
 {
     ::AllowSetForegroundWindow(ASFW_ANY); // the launched app may take focus from us
-    const QString native = QDir::toNativeSeparators(path);
-    const QFileInfo info(native);
-    const QString workDir = info.isDir() ? QString() : QDir::toNativeSeparators(info.absolutePath());
-    // A folder goes to the file manager chosen (setFileManager); Explorer
-    // takes it if that does not start.
-    const filemanager::Kind manager
-        = info.isDir() && !asAdministrator ? g_fileManager.load() : filemanager::Kind::Explorer;
+    const auto manager = g_fileManager.load();
     runOnShellThread(
-        [file = native.toStdWString(), dir = workDir.toStdWString(), asAdministrator, manager, done = std::move(done)] {
+        [path, asAdministrator, manager, done = std::move(done)] {
+            // Network attributes and drive resolution stay off the UI thread.
+            // Index/history keys remain UNC; only the actual opening uses
+            // an active mapping, preserving the user's NAS drive (#116).
+            const auto file = unc::preferredOpenPath(QDir::toNativeSeparators(path).toStdWString());
+            const QFileInfo info(QString::fromStdWString(file));
+            const bool folder = info.isDir();
+            const auto dir = folder ? std::wstring() : QDir::toNativeSeparators(info.absolutePath()).toStdWString();
             const bool ok = asAdministrator
                 ? executeAsAdministrator(file, {}, dir)
-                : (manager != filemanager::Kind::Explorer && filemanager::openFolder(manager, file))
+                : (folder && manager != filemanager::Kind::Explorer && filemanager::openFolder(manager, file))
                     || executeUnelevated(file, {}, dir);
             if (done)
                 done(ok);
@@ -489,6 +576,24 @@ void openTerminal(const QString& folder, std::function<void(bool)> done)
                 ok = executeUnelevated(cmd, {}, dir);
             }
         }
+        if (done)
+            done(ok);
+    });
+}
+
+void openPowerShell(const QString& folder, std::function<void(bool)> done)
+{
+    ::AllowSetForegroundWindow(ASFW_ANY);
+    runOnShellThread([folder, done = std::move(done)] {
+        QString program = commandlaunch::resolveProgram(u"pwsh"_s, {});
+        if (program.isEmpty()) {
+            wchar_t system[MAX_PATH] {};
+            const UINT length = ::GetSystemDirectoryW(system, MAX_PATH);
+            if (length > 0 && length < MAX_PATH)
+                program = QString::fromWCharArray(system, length) + u"\\WindowsPowerShell\\v1.0\\powershell.exe"_s;
+        }
+        const bool ok = !program.isEmpty() && executeUnelevated(program.toStdWString(), L"-NoLogo -NoExit",
+            QDir::toNativeSeparators(folder).toStdWString());
         if (done)
             done(ok);
     });
@@ -639,7 +744,9 @@ void revealIn(const QStringList& paths, filemanager::Kind manager)
     if (natives.empty())
         return;
     ::AllowSetForegroundWindow(ASFW_ANY);
-    runOnShellThread([natives = std::move(natives), manager] {
+    runOnShellThread([natives = std::move(natives), manager]() mutable {
+        for (std::wstring& path : natives)
+            path = unc::preferredOpenPath(path);
         if (manager == filemanager::Kind::Explorer || !filemanager::reveal(manager, natives))
             selectInExplorer(natives);
     });
@@ -692,6 +799,143 @@ win32::UniqueHandle startUnelevated(const std::wstring& program, const std::wstr
     return win32::UniqueHandle(started.hProcess);
 }
 
+bool runsAsShellUser()
+{
+    // The user of this process's token and of the desktop shell's: the same account, else Win顺 was
+    // started as another one (an administrator's credentials at a UAC prompt, say).
+    const auto userOf = [](HANDLE token) {
+        DWORD size = 0;
+        ::GetTokenInformation(token, TokenUser, nullptr, 0, &size);
+        std::vector<std::byte> buffer(size);
+        if (size == 0 || !::GetTokenInformation(token, TokenUser, buffer.data(), size, &size))
+            return std::vector<std::byte>();
+        PSID sid = static_cast<const TOKEN_USER*>(static_cast<const void*>(buffer.data()))->User.Sid;
+        const auto* bytes = static_cast<const std::byte*>(sid);
+        return std::vector<std::byte>(bytes, bytes + ::GetLengthSid(sid));
+    };
+    HANDLE own = nullptr;
+    DWORD pid = 0;
+    const HWND shellWindow = ::GetShellWindow();
+    if (!::OpenProcessToken(::GetCurrentProcess(), TOKEN_QUERY, &own))
+        return true;
+    const win32::UniqueHandle ownToken(own);
+    if (!shellWindow || !::GetWindowThreadProcessId(shellWindow, &pid) || pid == 0)
+        return true; // no shell to compare with
+    const win32::UniqueHandle process(::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid));
+    HANDLE shell = nullptr;
+    if (!process.valid() || !::OpenProcessToken(process.get(), TOKEN_QUERY, &shell))
+        return true;
+    const win32::UniqueHandle shellToken(shell);
+    const std::vector<std::byte> mine = userOf(ownToken.get());
+    const std::vector<std::byte> theirs = userOf(shellToken.get());
+    if (mine.empty() || theirs.empty())
+        return true; // cannot tell: not a reason to refuse
+    return mine == theirs;
+}
+
+Captured runUnelevatedCaptured(const std::wstring& program, const std::wstring& args, unsigned long timeoutMs,
+    const std::wstring& cwd)
+{
+    Captured result;
+    if (program.find(L'"') != std::wstring::npos)
+        return result; // cannot be quoted on the command line (no path has one)
+    // One pipe for both streams: a program that writes a result to stdout
+    // and an error to stderr never does both, and nothing then waits on a
+    // full pipe that is not the one being read.
+    SECURITY_ATTRIBUTES inheritable {sizeof inheritable, nullptr, TRUE};
+    HANDLE readEnd = nullptr;
+    HANDLE writeEnd = nullptr;
+    if (!::CreatePipe(&readEnd, &writeEnd, &inheritable, 0))
+        return result;
+    const win32::UniqueHandle reader(readEnd);
+    win32::UniqueHandle writer(writeEnd);
+    ::SetHandleInformation(reader.get(), HANDLE_FLAG_INHERIT, 0); // ours alone
+    const win32::UniqueHandle nothing(::CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, &inheritable,
+        OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr));
+    if (!nothing.valid())
+        return result;
+    const StdHandles io {nothing.get(), writer.get()};
+
+    std::wstring command = L'"' + program + L'"';
+    if (!args.empty())
+        command += L' ' + args;
+    win32::UniqueHandle process;
+    if (integrity::processElevated()) {
+        process = startWithShellToken(std::move(command), cwd, 0, &io);
+    } else {
+        // Not elevated: our own rights are the user's. Only the two handles
+        // are inherited (a handle list), not whatever else is inheritable.
+        SIZE_T size = 0;
+        ::InitializeProcThreadAttributeList(nullptr, 1, 0, &size);
+        std::vector<std::byte> storage(size);
+        auto* attributes = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(storage.data());
+        if (!::InitializeProcThreadAttributeList(attributes, 1, 0, &size))
+            return result;
+        HANDLE inherited[] = {io.input, io.output};
+        STARTUPINFOEXW startup {};
+        startup.StartupInfo.cb = sizeof startup;
+        startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
+        startup.StartupInfo.wShowWindow = SW_HIDE;
+        startup.StartupInfo.hStdInput = io.input;
+        startup.StartupInfo.hStdOutput = io.output;
+        startup.StartupInfo.hStdError = io.output;
+        startup.lpAttributeList = attributes;
+        // Our own account's variables as the registry has them now, over ours (a variable set
+        // after this program started, setx for CLAUDE_CONFIG_DIR, is seen).
+        EnvironmentBlock environment;
+        HANDLE ownToken = nullptr;
+        DWORD flags = CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT;
+        if (::OpenProcessToken(::GetCurrentProcess(), TOKEN_QUERY | TOKEN_DUPLICATE, &ownToken)) {
+            const win32::UniqueHandle owned(ownToken);
+            if (environment.create(ownToken, true))
+                flags |= CREATE_UNICODE_ENVIRONMENT;
+        }
+        PROCESS_INFORMATION started {};
+        if (::UpdateProcThreadAttribute(attributes, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, inherited, sizeof inherited, nullptr,
+                nullptr)
+            && ::CreateProcessW(program.c_str(), command.data(), nullptr, nullptr, TRUE, flags, environment.get(),
+                cwd.empty() ? nullptr : cwd.c_str(), &startup.StartupInfo, &started)) {
+            ::CloseHandle(started.hThread);
+            process.reset(started.hProcess);
+        }
+        ::DeleteProcThreadAttributeList(attributes);
+    }
+    if (!process.valid())
+        return result;
+    result.started = true;
+
+    // Our copy of the write end goes now: the pipe then ends with the program.
+    writer.reset();
+    const auto drain = [&] {
+        for (;;) {
+            DWORD available = 0;
+            if (!::PeekNamedPipe(reader.get(), nullptr, 0, nullptr, &available, nullptr) || available == 0)
+                return;
+            char chunk[4096];
+            DWORD got = 0;
+            if (!::ReadFile(reader.get(), chunk, std::min<DWORD>(available, sizeof chunk), &got, nullptr) || got == 0)
+                return;
+            result.output.append(chunk, got);
+        }
+    };
+    const ULONGLONG deadline = ::GetTickCount64() + timeoutMs;
+    for (;;) {
+        drain();
+        if (::WaitForSingleObject(process.get(), 10) == WAIT_OBJECT_0)
+            break;
+        if (::GetTickCount64() >= deadline) {
+            ::TerminateProcess(process.get(), 1);
+            result.timedOut = true;
+            break;
+        }
+    }
+    drain(); // what it wrote last
+    DWORD code = 0;
+    if (::GetExitCodeProcess(process.get(), &code))
+        result.exitCode = code;
+    return result;
+}
+
 void recycle(const QStringList& paths, HWND owner, std::function<void(bool)> done)
 {
     std::vector<std::wstring> files;
@@ -724,103 +968,10 @@ void recycle(const QStringList& paths, HWND owner, std::function<void(bool)> don
     });
 }
 
-void copyText(const QString& text)
-{
-    QGuiApplication::clipboard()->setText(text);
-}
-
-void copyFiles(const QStringList& paths)
-{
-    // As Explorer copies files: the files only. Qt's way added the paths as
-    // text and as file:// URLs, which WPS pasted instead of a copied picture
-    // (GitHub #130); 复制完整路径 is there for the text.
-    const ComPtr<IDataObject> data = dragout::fileNamesObject(paths);
-    if (!data)
-        return;
-    for (int attempt = 0; attempt < 5; ++attempt) {
-        if (SUCCEEDED(::OleSetClipboard(data.Get()))) {
-            ::OleFlushClipboard(); // on the clipboard itself: kept when Win顺 exits
-            return;
-        }
-        ::Sleep(20); // another program has the clipboard open for a moment
-    }
-    qWarning("copyFiles: the clipboard stayed busy");
-}
-
 bool canRunAsAdministrator(const QString& path)
 {
     static const QStringList kRunnable {u"exe"_s, u"bat"_s, u"cmd"_s, u"msi"_s, u"ps1"_s, u"lnk"_s, u"com"_s};
     return kRunnable.contains(QFileInfo(path).suffix(), Qt::CaseInsensitive);
-}
-
-namespace {
-
-thread_local std::function<void()> t_menuShown; // popupMenu()'s `shown`
-
-void CALLBACK onMenuShown(HWINEVENTHOOK, DWORD, HWND, LONG, LONG, DWORD, DWORD)
-{
-    if (auto shown = std::exchange(t_menuShown, {}))
-        shown();
-}
-
-} // namespace
-
-namespace {
-
-// A popup menu of `items`, submenus included (destroyed with it).
-HMENU buildMenu(const std::vector<MenuItem>& items)
-{
-    HMENU menu = ::CreatePopupMenu();
-    if (!menu)
-        return nullptr;
-    for (const MenuItem& item : items) {
-        if (item.id == 0 && item.text.isEmpty() && item.children.empty()) {
-            ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-            continue;
-        }
-        UINT flags = MF_STRING;
-        if (item.checked)
-            flags |= MF_CHECKED;
-        if (!item.enabled)
-            flags |= MF_GRAYED;
-        if (!item.children.empty()) {
-            if (HMENU sub = buildMenu(item.children)) {
-                ::AppendMenuW(menu, flags | MF_POPUP, reinterpret_cast<UINT_PTR>(sub),
-                    reinterpret_cast<LPCWSTR>(item.text.utf16()));
-                continue;
-            }
-        }
-        ::AppendMenuW(menu, flags, static_cast<UINT_PTR>(item.id), reinterpret_cast<LPCWSTR>(item.text.utf16()));
-        if (item.isDefault)
-            ::SetMenuDefaultItem(menu, static_cast<UINT>(item.id), FALSE);
-    }
-    return menu;
-}
-
-} // namespace
-
-int popupMenu(HWND owner, const std::vector<MenuItem>& items, POINT screenPos, std::function<void()> shown)
-{
-    HMENU menu = buildMenu(items);
-    if (!menu)
-        return 0;
-    // Delivered from the menu's own message loop, as it opens.
-    HWINEVENTHOOK hook = nullptr;
-    if (shown) {
-        t_menuShown = std::move(shown);
-        hook = ::SetWinEventHook(EVENT_SYSTEM_MENUPOPUPSTART, EVENT_SYSTEM_MENUPOPUPSTART, nullptr, &onMenuShown,
-            ::GetCurrentProcessId(), ::GetCurrentThreadId(), WINEVENT_OUTOFCONTEXT);
-    }
-    // Documented requirement for menus owned by a background window (tray).
-    ::SetForegroundWindow(owner);
-    const int chosen = static_cast<int>(::TrackPopupMenuEx(
-        menu, TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON, screenPos.x, screenPos.y, owner, nullptr));
-    if (hook)
-        ::UnhookWinEvent(hook);
-    t_menuShown = {};
-    ::PostMessageW(owner, WM_NULL, 0, 0);
-    ::DestroyMenu(menu);
-    return chosen;
 }
 
 void prepareMenuHooks()
@@ -840,104 +991,6 @@ void prepareMenuHooks()
             ::TrackPopupMenuEx(menu, TPM_RETURNCMD | TPM_NONOTIFY | TPM_NOANIMATION, 0, 0, nullptr, nullptr);
             ::DestroyMenu(menu);
         });
-    });
-}
-
-QString pickFolder(HWND owner, const QString& title)
-{
-    return runPicker([&] {
-        const HRESULT init = ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
-        QString result;
-        {
-            ComPtr<IFileOpenDialog> dialog;
-            ComPtr<IShellItem> item;
-            PWSTR path = nullptr;
-            DWORD options = 0;
-            if (SUCCEEDED(
-                    ::CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dialog)))
-                && SUCCEEDED(dialog->GetOptions(&options))
-                && SUCCEEDED(dialog->SetOptions(options | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST))
-                && SUCCEEDED(dialog->SetTitle(reinterpret_cast<LPCWSTR>(title.utf16())))
-                && SUCCEEDED(showPicker(dialog.Get(), owner)) && SUCCEEDED(dialog->GetResult(&item))
-                && SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &path))) {
-                result = QString::fromWCharArray(path);
-                ::CoTaskMemFree(path);
-            }
-        } // released before COM is uninitialised
-        if (SUCCEEDED(init))
-            ::CoUninitialize();
-        return result;
-    });
-}
-
-QString pickFile(HWND owner, const QString& title, const std::vector<std::pair<QString, QString>>& filters)
-{
-    return runPicker([&] {
-        const HRESULT init = ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
-        QString result;
-        {
-            std::vector<std::wstring> names;
-            std::vector<std::wstring> patterns;
-            for (const auto& [name, pattern] : filters) {
-                names.push_back(name.toStdWString());
-                patterns.push_back(pattern.toStdWString());
-            }
-            std::vector<COMDLG_FILTERSPEC> specs;
-            for (std::size_t i = 0; i < names.size(); ++i)
-                specs.push_back({names[i].c_str(), patterns[i].c_str()});
-            ComPtr<IFileOpenDialog> dialog;
-            ComPtr<IShellItem> item;
-            PWSTR path = nullptr;
-            DWORD options = 0;
-            if (SUCCEEDED(
-                    ::CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dialog)))
-                && SUCCEEDED(dialog->GetOptions(&options))
-                && SUCCEEDED(dialog->SetOptions(options | FOS_FORCEFILESYSTEM | FOS_FILEMUSTEXIST))
-                && (specs.empty() || SUCCEEDED(dialog->SetFileTypes(static_cast<UINT>(specs.size()), specs.data())))
-                && SUCCEEDED(dialog->SetTitle(reinterpret_cast<LPCWSTR>(title.utf16())))
-                && SUCCEEDED(showPicker(dialog.Get(), owner)) && SUCCEEDED(dialog->GetResult(&item))
-                && SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &path))) {
-                result = QString::fromWCharArray(path);
-                ::CoTaskMemFree(path);
-            }
-        } // released before COM is uninitialised
-        if (SUCCEEDED(init))
-            ::CoUninitialize();
-        return result;
-    });
-}
-
-QString pickSaveFile(
-    HWND owner, const QString& title, const QString& fileName, const QString& filterName, const QString& extension)
-{
-    return runPicker([&] {
-        const HRESULT init = ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
-        QString result;
-        {
-            const std::wstring name = filterName.toStdWString();
-            const std::wstring pattern = (u"*."_s + extension).toStdWString();
-            const COMDLG_FILTERSPEC spec {name.c_str(), pattern.c_str()};
-            ComPtr<IFileSaveDialog> dialog;
-            ComPtr<IShellItem> item;
-            PWSTR path = nullptr;
-            DWORD options = 0;
-            if (SUCCEEDED(
-                    ::CoCreateInstance(CLSID_FileSaveDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dialog)))
-                && SUCCEEDED(dialog->GetOptions(&options))
-                && SUCCEEDED(dialog->SetOptions(options | FOS_FORCEFILESYSTEM | FOS_OVERWRITEPROMPT))
-                && SUCCEEDED(dialog->SetFileTypes(1, &spec))
-                && SUCCEEDED(dialog->SetDefaultExtension(reinterpret_cast<LPCWSTR>(extension.utf16())))
-                && SUCCEEDED(dialog->SetFileName(reinterpret_cast<LPCWSTR>(fileName.utf16())))
-                && SUCCEEDED(dialog->SetTitle(reinterpret_cast<LPCWSTR>(title.utf16())))
-                && SUCCEEDED(showPicker(dialog.Get(), owner)) && SUCCEEDED(dialog->GetResult(&item))
-                && SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &path))) {
-                result = QString::fromWCharArray(path);
-                ::CoTaskMemFree(path);
-            }
-        } // released before COM is uninitialised
-        if (SUCCEEDED(init))
-            ::CoUninitialize();
-        return result;
     });
 }
 

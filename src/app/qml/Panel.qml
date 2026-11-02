@@ -35,6 +35,32 @@ Item {
     signal rowDragRequested(int index)
 
     readonly property int sidebarWidth: 290
+    readonly property bool contentMode: launcher.scope === Launcher.Content
+    readonly property bool detailsVisible: contentMode && launcher.contentPane.opened
+    readonly property bool compactDetails: width - sidebarWidth < 720
+    property real draggedPaneWidth: 0
+    readonly property real paneWidth: compactDetails ? width
+        : Math.min(Math.max(320, draggedPaneWidth > 0 ? draggedPaneWidth : launcher.contentPane.preferredWidth), width - sidebarWidth - 340)
+    function handleContentKey(event) {
+        const mods = event.modifiers & ~Qt.KeypadModifier
+        if (contentMode && mods === (Qt.ControlModifier | Qt.ShiftModifier)
+                && event.key >= Qt.Key_1 && event.key <= Qt.Key_5) {
+            launcher.contentPane.opened = true
+            launcher.contentPane.tab = event.key - Qt.Key_1
+            event.accepted = true
+            return true
+        }
+        return detailsVisible && details.status === Loader.Ready ? details.item.handleKey(event) : false
+    }
+    Binding {
+        target: panel.launcher.contentPane
+        property: "active"
+        value: panel.visible && panel.contentMode && !!panel.Window.window && panel.Window.window.visible
+    }
+    Item {
+        id: resultsBoundary
+        x: panel.detailsVisible && !panel.compactDetails ? panel.width - panel.paneWidth - 6 : panel.width
+    }
     readonly property var columnSpecs: launcher.panelColumns.visibleColumns
     property string resizingColumn: ""
     property real resizingWidth: 0
@@ -177,7 +203,7 @@ Item {
             elide: Text.ElideMiddle
             color: choice.active || choiceArea.containsMouse ? Theme.text : Theme.subtext
             font.pixelSize: Theme.uiBody
-            font.weight: choice.active ? Font.DemiBold : Font.Normal
+            font.weight: choice.active ? Theme.fontStrong : Font.Normal
         }
         MouseArea {
             id: choiceArea
@@ -235,7 +261,7 @@ Item {
             text: chip.text
             color: chip.active || chipArea.containsMouse ? Theme.text : Theme.subtext
             font.pixelSize: Theme.uiBody
-            font.weight: chip.active ? Font.DemiBold : Font.Normal
+            font.weight: chip.active ? Theme.fontStrong : Font.Normal
         }
         MouseArea {
             id: chipArea
@@ -261,6 +287,7 @@ Item {
 
     Item {
         id: sidebar
+        visible: !(panel.detailsVisible && panel.compactDetails)
         anchors.top: topDivider.bottom
         anchors.bottom: footer.top
         width: panel.sidebarWidth
@@ -268,6 +295,7 @@ Item {
         Flickable {
             id: filters
             anchors.fill: parent
+            anchors.topMargin: panel.contentMode ? 42 : 0
             contentWidth: width
             contentHeight: filterColumn.height + 12
             clip: true
@@ -290,7 +318,7 @@ Item {
                         text: qsTr("筛选")
                         color: Theme.subtext
                         font.pixelSize: Theme.uiBody
-                        font.weight: Font.DemiBold
+                        font.weight: Theme.fontStrong
                     }
                     Text {
                         id: clearAll
@@ -576,7 +604,7 @@ Item {
             elide: Text.ElideRight
             color: header.active ? Theme.text : Theme.subtext
             font.pixelSize: Theme.uiBody
-            font.weight: header.active ? Font.DemiBold : Font.Normal
+            font.weight: header.active ? Theme.fontStrong : Font.Normal
         }
         Glyph {
             id: arrow
@@ -631,13 +659,18 @@ Item {
         HoverTip {
             target: headerArea.containsMouse && !headerArea.pressed ? header : null
             delay: 900
-            text: qsTr("右键选择列；拖动表头调整顺序，拖动分隔线调整宽度")
+            text: header.columnId === "size"
+                ? qsTr("文件夹大小按索引估算，不包含未索引内容；拖动分隔线调整宽度")
+                : qsTr("右键选择列；拖动表头调整顺序，拖动分隔线调整宽度")
         }
         MouseArea {
+            id: resizeArea
             objectName: "columnResize-" + header.columnId
-            x: parent.width + 8
-            width: 8
+            x: parent.width + 4
+            width: 16
             height: parent.height
+            hoverEnabled: true
+            preventStealing: true
             cursorShape: Qt.SizeHorCursor
             property real startX: 0
             property real startWidth: 0
@@ -657,6 +690,19 @@ Item {
                 panel.launcher.panelColumns.resize(header.columnId, width)
             }
             onCanceled: panel.resizingColumn = ""
+
+            Rectangle {
+                anchors.centerIn: parent
+                width: resizeArea.containsMouse || resizeArea.pressed ? 2 : Theme.edge(Screen.devicePixelRatio)
+                height: parent.height - 12
+                radius: width / 2
+                color: resizeArea.containsMouse || resizeArea.pressed ? Theme.accent : Theme.faint
+                Accessible.ignored: true
+            }
+            HoverTip {
+                target: resizeArea.containsMouse && !resizeArea.pressed ? resizeArea : null
+                text: qsTr("拖动调整列宽")
+            }
         }
     }
 
@@ -664,7 +710,7 @@ Item {
         id: columns
         anchors.left: sidebar.right
         anchors.leftMargin: 1
-        anchors.right: parent.right
+        anchors.right: resultsBoundary.left
         anchors.top: topDivider.bottom
         height: panel.launcher.gallery ? 0 : Theme.labelRowHeight + 8
         visible: !panel.launcher.gallery
@@ -702,9 +748,9 @@ Item {
         objectName: "panelResultList"
         anchors.left: sidebar.right
         anchors.leftMargin: 1
-        anchors.right: parent.right
+        anchors.right: resultsBoundary.left
         anchors.top: columns.bottom
-        anchors.bottom: footer.top
+        anchors.bottom: contentOffer.top
         topMargin: 4
         bottomMargin: horizontalScroll.visible ? 14 : 4
         clip: true
@@ -772,11 +818,13 @@ Item {
 
     ListScrollBar {
         id: listScrollBar
+        objectName: "panelResultScrollBar"
         flickable: panel.view
-        anchors.right: parent.right
+        anchors.right: resultsBoundary.left
+        anchors.rightMargin: panel.frame.resizeMargin(Screen.devicePixelRatio)
         anchors.top: list.top
         anchors.bottom: list.bottom
-        // Its own at the window's right edge, not the edge that resizes the window.
+        // Leave the native resize border outside the scroll bar's hit area.
         Component.onCompleted: panel.frame.addControl(listScrollBar)
     }
 
@@ -786,11 +834,11 @@ Item {
         visible: panel.launcher.gallery
         anchors.left: sidebar.right
         anchors.leftMargin: 8
-        anchors.right: parent.right
+        anchors.right: resultsBoundary.left
         anchors.rightMargin: 12
         anchors.top: columns.bottom
         anchors.topMargin: 8
-        anchors.bottom: footer.top
+        anchors.bottom: contentOffer.top
         launcher: panel.launcher
         nameTip: panel.nameTip
         opacity: panel.dimmed ? 0.45 : 1
@@ -817,6 +865,107 @@ Item {
         font.pixelSize: Theme.uiBody
     }
 
+    // Automatic 全部 searches can leave contents unread (#153). Keep the
+    // continuation reachable in both the table and gallery, even with rows.
+    Item {
+        id: contentOffer
+        readonly property var hint: panel.launcher.leftOutHints.find(h => h.kind === "deferred")
+        visible: !!hint
+        height: visible ? Theme.hintRowHeight : 0
+        anchors.left: sidebar.right
+        anchors.leftMargin: 12
+        anchors.right: resultsBoundary.left
+        anchors.rightMargin: 12
+        anchors.bottom: footer.top
+
+        Text {
+            anchors.left: parent.left
+            anchors.right: contentAction.left
+            anchors.rightMargin: 8
+            anchors.verticalCenter: parent.verticalCenter
+            text: contentOffer.hint ? contentOffer.hint.text : ""
+            textFormat: Text.PlainText
+            color: Theme.subtext
+            font.pixelSize: Theme.uiBody
+            elide: Text.ElideRight
+        }
+        FlatButton {
+            id: contentAction
+            objectName: "panelContentSearch"
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            height: Theme.hintRowHeight - 4
+            text: contentOffer.hint ? contentOffer.hint.action : ""
+            flat: true
+            visible: contentOffer.visible
+            Accessible.role: Accessible.Button
+            Accessible.name: text
+            onClicked: {
+                panel.launcher.searchLeftOut(contentOffer.hint.kind)
+                panel.searchBar.focusAtEnd()
+            }
+        }
+    }
+
+    FlatButton {
+        x: 12
+        y: topDivider.y + topDivider.height + 6
+        width: panel.sidebarWidth - 24
+        height: 32
+        visible: panel.contentMode && !(panel.detailsVisible && panel.compactDetails)
+        text: panel.launcher.contentPane.opened ? qsTr("收起内容详情") : qsTr("显示内容详情")
+        flat: true
+        onClicked: panel.launcher.contentPane.opened = !panel.launcher.contentPane.opened
+        Accessible.role: Accessible.Button
+        Accessible.name: text
+    }
+    MouseArea {
+        id: paneResize
+        objectName: "contentPaneResize"
+        x: resultsBoundary.x
+        width: 6
+        anchors.top: topDivider.bottom
+        anchors.bottom: footer.top
+        visible: panel.detailsVisible && !panel.compactDetails
+        cursorShape: Qt.SizeHorCursor
+        hoverEnabled: true
+        preventStealing: true
+        activeFocusOnTab: true
+        Accessible.role: Accessible.Separator
+        Accessible.name: qsTr("内容详情宽度，左右方向键调整")
+        property real startX: 0
+        property real startWidth: 0
+        onPressed: mouse => { startX = mapToGlobal(mouse.x, mouse.y).x; startWidth = panel.paneWidth }
+        onPositionChanged: mouse => {
+            if (pressed) panel.draggedPaneWidth = Math.max(320, startWidth + startX - mapToGlobal(mouse.x, mouse.y).x)
+        }
+        onReleased: { panel.launcher.contentPane.preferredWidth = panel.paneWidth; panel.draggedPaneWidth = 0 }
+        onCanceled: panel.draggedPaneWidth = 0
+        Keys.onLeftPressed: panel.launcher.contentPane.preferredWidth = panel.paneWidth + 24
+        Keys.onRightPressed: panel.launcher.contentPane.preferredWidth = panel.paneWidth - 24
+        Rectangle {
+            anchors.horizontalCenter: parent.horizontalCenter
+            width: paneResize.containsMouse || paneResize.pressed || paneResize.activeFocus ? 2 : Theme.edge(Screen.devicePixelRatio)
+            height: parent.height
+            color: paneResize.containsMouse || paneResize.pressed || paneResize.activeFocus ? Theme.accent : Theme.divider
+        }
+    }
+    Loader {
+        id: details
+        anchors.right: parent.right
+        anchors.top: topDivider.bottom
+        anchors.bottom: footer.top
+        width: panel.paneWidth
+        active: panel.detailsVisible
+        visible: active
+        onXChanged: panel.launcher.contentPane.movePreview()
+        sourceComponent: ContentPaneView {
+            pane: panel.launcher.contentPane
+            launcher: panel.launcher
+            compact: panel.compactDetails
+            onSearchFocusRequested: panel.searchBar.focusAtEnd()
+        }
+    }
     Footer {
         id: footer
         anchors.bottom: parent.bottom

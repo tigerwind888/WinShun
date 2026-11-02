@@ -80,6 +80,7 @@ public:
         // under the pointer and where (physical pixels). None: the mouse only
         // around a press of the key.
         std::function<void(HWND window, POINT pt)> doubleClick;
+        std::function<void(HWND window, POINT pt)> middleClick; // opt-in blank-space menu; observed, never swallowed
         // Recording's optional click feedback. It observes presses on this
         // same Raw Input registration, including a touchpad's short taps.
         std::function<void(POINT pt, bool secondary, std::uint32_t time)> mousePress;
@@ -166,7 +167,7 @@ private:
     void listenToMouse(bool on);
     bool registerKeyboard(HWND window);
     void removeKeyboard(HWND window);
-    bool mouseWanted() const noexcept { return m_callbacks.doubleClick || m_callbacks.dragMenu || m_callbacks.mousePress; }
+    bool mouseWanted() const noexcept { return m_callbacks.doubleClick || m_callbacks.middleClick || m_callbacks.dragMenu || m_callbacks.mousePress; }
     bool keyboardWanted() const noexcept { return m_callbacks.doubleCtrl || m_callbacks.dragMenu; }
     bool serviceTells() const noexcept;
     void followService();
@@ -198,6 +199,7 @@ private:
     bool m_dragFound = false; // an OLE drag seen while the button is held; listener thread only
     std::uint32_t m_dragLooked = 0; // when it was last looked for (message time)
     bool m_dragKeyGuarded = false; // the drop pie's key held back from the drag's source
+    bool m_dragConflictLogged = false; // at most one hotkey-conflict note per primary-button press
     // The key pressed on a file still held, not dragged yet: the drag being
     // started for it (startDrag). Listener thread only.
     bool m_starting = false;

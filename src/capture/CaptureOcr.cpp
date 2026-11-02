@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <utility>
 
 using namespace Qt::StringLiterals;
 using namespace std::chrono_literals;
@@ -42,13 +43,19 @@ CaptureOcr::~CaptureOcr()
         m_thread.join();
 }
 
+QString CaptureOcr::programFolder()
+{
+    return s_programFolder.isEmpty() ? QCoreApplication::applicationDirPath() : s_programFolder;
+}
+
 bool CaptureOcr::available()
 {
-    return PaddleOcr::installed(QCoreApplication::applicationDirPath());
+    return PaddleOcr::installed(programFolder());
 }
 
 void CaptureOcr::read(const QImage& image, double dpr)
 {
+    m_pendingImage = {};
     ++m_round;
     m_text.clear();
     m_message.clear();
@@ -62,7 +69,9 @@ void CaptureOcr::read(const QImage& image, double dpr)
     }
     if (!available()) {
         m_busy = false;
-        m_message = tr("没有安装文字识别模型（Win顺 文件夹里的 ocr 文件夹），无法识别文字。");
+        m_pendingImage = image;
+        m_pendingDpr = dpr;
+        m_message = tr("增强文字识别尚未安装。安装后可以离线使用，并继续识别这张图片。");
         emit changed();
         return;
     }
@@ -75,8 +84,15 @@ void CaptureOcr::read(const QImage& image, double dpr)
     m_wake.notify_all();
 }
 
+void CaptureOcr::retry()
+{
+    if (!m_pendingImage.isNull() && available())
+        read(std::exchange(m_pendingImage, {}), m_pendingDpr);
+}
+
 void CaptureOcr::showTexts(const QStringList& texts, const QString& title, const QString& none)
 {
+    m_pendingImage = {};
     ++m_round; // a reading still under way is for a picture no longer shown
     m_busy = false;
     m_title = title;
@@ -165,7 +181,7 @@ void CaptureOcr::done(int round, const QString& text, const QString& error)
 void CaptureOcr::work(const std::stop_token& stop)
 {
     ::SetThreadPriority(::GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
-    const QString folder = QCoreApplication::applicationDirPath();
+    const QString folder = programFolder();
     // Its own threads besides this one, as the clipboard's: up to 4, half the processors.
     const int threads = std::clamp(static_cast<int>(std::thread::hardware_concurrency()) / 2, 1, 4);
     std::unique_ptr<PaddleOcr> reader;

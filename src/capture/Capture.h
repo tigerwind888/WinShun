@@ -2,6 +2,7 @@
 
 #include "AnnotationFormat.h"
 #include "CaptureDiagnostics.h"
+#include "CaptureHistory.h"
 #include "CaptureSession.h"
 #include "CaptureTools.h"
 #include "CountdownWindow.h"
@@ -23,6 +24,7 @@
 #include <windows.h>
 
 #include <functional>
+#include <future>
 #include <memory>
 #include <optional>
 #include <set>
@@ -60,8 +62,9 @@ class Capture : public QObject {
 public:
     struct Callbacks {
         // Enter, a double click, the toolbar. `project`: the annotated
-        // picture's editable form (empty: it has no annotations).
-        std::function<void(const QImage&, const QByteArray& project)> copy;
+        // picture's editable form (empty: it has no annotations). `origin`
+        // identifies this regular capture; a long picture passes an empty id.
+        std::function<void(const QImage&, const QByteArray& project, const QString& origin)> copy;
         // Ctrl+S and F3 also put the picture in the screenshot history,
         // leaving the system clipboard alone.
         std::function<void(const QImage&, const QByteArray& project)> record;
@@ -123,6 +126,14 @@ public:
     // UI Automation for the controls that are not child windows ([Capture] ControlsUia).
     void setControlDetection(bool on) { m_uiaEnabled = on; }
     void setColorFormat(ColorFormat format) { m_session.setColorFormat(format); }
+    // 截图历史: each capture taken keeps its monitors' pictures, its selection
+    // and annotations in `folder` (the last `count`; 0: none, and those kept
+    // go), for , and . in the overlay ([Capture] HistoryCount).
+    void setHistory(const QString& folder, int count)
+    {
+        m_history.setFolder(folder);
+        m_history.setLimit(count);
+    }
     // 延时截图: after 3, 5 or 10 seconds (0: the last one used), a countdown at
     // the corner of the screen and then the capture as the hotkey starts it.
     // The hotkey (or a click on the countdown) cancels it.
@@ -140,9 +151,10 @@ public:
     // 贴上最近一次截图 (the tray menu).
     bool hasLast() const { return !m_last.isNull(); }
     void pinLast(); // the last capture taken, where it was
-    // The clipboard as it stood when that capture was taken
-    // (GetClipboardSequenceNumber): a picture copied since is the one to pin.
-    DWORD lastClipboardSeq() const { return m_lastSeq; }
+    // The clipboard before this capture's asynchronous copy, plus an identity
+    // carried with that copy's pixels when they actually reach the clipboard.
+    quint32 lastClipboardSequence() const { return m_lastClipboardSequence; }
+    QString lastClipboardId() const { return m_lastClipboardId; }
     // 找回刚放弃的标注: a capture ended with annotations on it (hotkey, Esc)
     // keeps them for kDraftMs or until the next capture; this pins their
     // picture where the capture was, with the project.
@@ -188,6 +200,15 @@ private:
     void watchTick();
     bool pointerOverOverlay(POINT at) const;
     void recordCapture(CaptureSession::Action action, const QRect& rect);
+    // , and . in the overlay: the capture before or after the one shown (the
+    // live screens are the newest), skipping those of another monitor layout.
+    void stepHistory(int step);
+    void showHistoryShot(const HistoryShot& shot);
+    void showLive();
+    void restoreLive(); // showLive without a word: the live screens, selection and annotations back
+    std::vector<QRect> shownMonitors() const; // the overlays with a picture, physical
+    void prefetchHistory(int at); // the shot at `at` read in the background
+    void forgetHistory(); // the capture ended: the live screens again next time
 
     QQmlEngine* m_engine;
     Callbacks m_callbacks;
@@ -231,13 +252,26 @@ private:
     QImage m_last; // the last capture taken (copied, saved, pinned, read), for 贴上最近一次截图
     QPoint m_lastOrigin; // where it was, physical
     QByteArray m_lastProject;
-    DWORD m_lastSeq = 0; // the clipboard's sequence number as m_last was taken
+    quint32 m_lastClipboardSequence = 0;
+    QString m_lastClipboardId;
     struct Draft {
         annot::Project project; // the selection's pixels and the annotations over them
         QPoint origin; // physical, virtual desktop
     };
     std::optional<Draft> m_draft;
     QTimer m_draftTimer;
+    CaptureHistory m_history;
+    // While the overlay shows: where in the history it is (-1: the live
+    // screens, m_shots), the ids then (newest first), the one shown, what
+    // the live screens had when left (their windows, selection and
+    // annotations), and the next one being read.
+    int m_historyAt = -1;
+    QStringList m_historyIds;
+    QString m_historyShown;
+    CaptureSession::Windows m_liveWindows;
+    CaptureSession::Kept m_liveKept;
+    int m_prefetchAt = -1;
+    std::future<std::optional<HistoryShot>> m_prefetch;
     // The time between frames drawn while an annotation gesture is under way,
     // logged at the end of the capture: how smooth drawing was (nanoseconds).
     QElapsedTimer m_frameClock;

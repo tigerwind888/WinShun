@@ -1,11 +1,14 @@
+#include "CommandLaunch.h"
 #include "platform/Integrity.h"
 #include "platform/FileManagers.h"
+#include "platform/OneCommanderTabs.h"
 #include "platform/FolderViewHit.h"
 #include "platform/Shell.h"
 #include "platform/FileDialog.h"
 
 #include <QCoreApplication>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -23,6 +26,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstdlib>
 #include <memory>
 
 using namespace Qt::StringLiterals;
@@ -146,6 +150,70 @@ private slots:
         QTest::newRow("MTA") << int(COINIT_MULTITHREADED);
     }
 
+    void oneCommanderSessionTabs()
+    {
+        using ws::onecommander::TabState;
+        using ws::onecommander::sessionTabs;
+        const auto json = [](const QStringList& paths) {
+            QJsonArray tabs;
+            for (const QString& path : paths)
+                tabs.append(QJsonObject {{u"FullPath"_s, path}, {u"IsFolder"_s, true}});
+            return QJsonDocument(tabs).toJson();
+        };
+        const QString a = u"C:\\工作 目录\\A"_s;
+        const QString b = u"C:\\工作 目录\\John's B"_s;
+        const QString c = u"\\\\server\\share\\资料"_s;
+        const QString d = u"D:\\Other"_s;
+        const std::array<QByteArray, 2> panes {json({a, b}), json({c, d})};
+        std::array<TabState, 2> state {{{2, 1}, {2, 0}}};
+        const auto tabs = sessionTabs(panes, state, b);
+        QVERIFY(tabs);
+        QCOMPARE(tabs->size(), 4);
+        QCOMPARE(tabs->at(0).path, a);
+        QCOMPARE(tabs->at(0).state, 0);
+        QCOMPARE(tabs->at(1).path, b);
+        QCOMPARE(tabs->at(1).state, 1);
+        QCOMPARE(tabs->at(2).state, 2);
+        QCOMPARE(tabs->at(3).state, 0);
+        state[1].visible = false;
+        QCOMPARE(sessionTabs(panes, state, b)->size(), 2);
+        state[0].count = 1;
+        QVERIFY(!sessionTabs(panes, state, b)); // saved data predates a tab closing
+        state[0] = {2, 0};
+        QVERIFY(!sessionTabs(panes, state, b)); // selection no longer agrees
+        state[0] = {2, 1};
+        QVERIFY(!sessionTabs({QByteArray("{"), panes[1]}, state, b));
+        QVERIFY(!sessionTabs(panes, state, u"C:\\elsewhere"_s));
+        QVERIFY(!sessionTabs(panes, std::span<const TabState>(), b));
+        QCOMPARE(sessionTabs({panes[0], {}}, state, b)->size(), 2); // untouched second pane
+        const QByteArray virtualTabs = R"([{"FullPath":"::{ThisPC}","IsFolder":true},{"FullPath":"C:\\Work","IsFolder":false}])";
+        QVERIFY(!sessionTabs({virtualTabs, {}}, state, b));
+    }
+
+    void oneCommanderOpenTabs()
+    {
+        const QString root = qEnvironmentVariable("WINSHUN_ONECOMMANDER_TABS_ROOT");
+        if (root.isEmpty())
+            QSKIP("Set WINSHUN_ONECOMMANDER_TABS_ROOT to an isolated prepared tab fixture");
+        const HRESULT com = ::CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+        QVERIFY(SUCCEEDED(com));
+        auto uninitialize = qScopeGuard([] { ::CoUninitialize(); });
+        const DWORD clipboard = ::GetClipboardSequenceNumber();
+        const HWND foreground = ::GetForegroundWindow();
+        QStringList paths;
+        for (const auto& folder : ws::filemanager::openFolders()) {
+            if (folder.shownIn == ws::filemanager::Kind::OneCommander)
+                paths.append(QDir::fromNativeSeparators(QString::fromStdWString(folder.path)));
+        }
+        const QDir fixtures(root);
+        QVERIFY2(paths.contains(fixtures.filePath(u"Hidden-B"_s)), qPrintable(paths.join(u'\n')));
+        QVERIFY2(paths.contains(fixtures.filePath(u"Current-A"_s)), qPrintable(paths.join(u'\n')));
+        QVERIFY(!paths.contains(fixtures.filePath(u"Other-Pane-C"_s))); // closed, but still in RecentFolders
+        QCOMPARE(paths.count(fixtures.filePath(u"Hidden-B"_s)), 1);
+        QCOMPARE(::GetClipboardSequenceNumber(), clipboard);
+        QCOMPARE(::GetForegroundWindow(), foreground);
+    }
+
     // Opt-in: the HWND must belong to an isolated OneCommander copy. Uses
     // the same live active-pane query as Ctrl+G and the dialog suggestions.
     void oneCommanderNavigation()
@@ -247,8 +315,20 @@ private slots:
         restore.dismiss();
     }
 
-    void customCommandViaExplorer()
+    // A program starts through Explorer, a console program not: one whose
+    // parent is explorer.exe takes it for a double-click in a folder window,
+    // and Go tools built with cobra then quit (GitHub #139). The console one
+    // is this probe with its PE subsystem word made the console's.
+    void customCommand_data()
     {
+        QTest::addColumn<bool>("console");
+        QTest::newRow("program, via Explorer") << false;
+        QTest::newRow("console program, not via Explorer") << true;
+    }
+
+    void customCommand()
+    {
+        QFETCH(bool, console);
         if (!::GetShellWindow())
             QSKIP("No desktop shell in this test session");
         QTemporaryDir temporary(QDir::tempPath() + u"/WinShun launch-XXXXXX"_s);
@@ -257,6 +337,16 @@ private slots:
         // helper and its Qt DLLs so the test also works on a clean build.
         const QString helper = temporary.filePath(u"launch-probe.exe"_s);
         QVERIFY(QFile::copy(QCoreApplication::applicationFilePath(), helper));
+        if (console) {
+            QFile exe(helper);
+            QVERIFY(exe.open(QIODevice::ReadWrite) && exe.seek(0x3c));
+            quint32 header = 0;
+            QCOMPARE(exe.read(reinterpret_cast<char*>(&header), 4), 4);
+            const quint16 subsystem = IMAGE_SUBSYSTEM_WINDOWS_CUI; // after "PE\0\0" and the file header, 68 bytes in
+            QVERIFY(exe.seek(header + 4 + 20 + 68));
+            QCOMPARE(exe.write(reinterpret_cast<const char*>(&subsystem), 2), 2);
+        }
+        QCOMPARE(ws::commandlaunch::kindOf(helper), console ? ws::commandlaunch::Kind::Console : ws::commandlaunch::Kind::Gui);
         const QDir qtBin(QLibraryInfo::path(QLibraryInfo::BinariesPath));
         for (const auto* module : {"Core", "Gui", "Sql", "Test"}) {
             const QString dll = u"Qt6"_s + QString::fromLatin1(module)
@@ -277,12 +367,119 @@ private slots:
         QFile file(output);
         QVERIFY(file.open(QIODevice::ReadOnly));
         const QJsonObject result = QJsonDocument::fromJson(file.readAll()).object();
-        QVERIFY2(result.value(u"parent"_s).toString().endsWith(u"\\explorer.exe", Qt::CaseInsensitive),
+        // Through rundll32, which has often quit already: no parent to name.
+        QVERIFY2(result.value(u"parent"_s).toString().endsWith(u"\\explorer.exe", Qt::CaseInsensitive) == !console,
             qPrintable(result.value(u"parent"_s).toString()));
         QVERIFY(!result.value(u"elevated"_s).toBool());
         QCOMPARE(QDir::cleanPath(result.value(u"cwd"_s).toString()), QDir::cleanPath(working));
         QCOMPARE(result.value(u"arguments"_s).toArray().last().toString(), query);
         qInfo() << "Launched by" << result.value(u"parent"_s).toString() << "with the requested arguments and folder";
+    }
+
+    // The application catalog supplies an AppsFolder ID, not an .exe path.
+    // Exercise the same executeUnelevated path with Windows' own console app,
+    // passing only a command that writes to our temporary directory and exits.
+    void appsFolderConsole_data()
+    {
+        QTest::addColumn<bool>("explicitDirectory");
+        QTest::newRow("explicit working directory") << true;
+        QTest::newRow("default target directory") << false;
+    }
+
+    void appsFolderConsole()
+    {
+        QFETCH(bool, explicitDirectory);
+        if (!::GetShellWindow())
+            QSKIP("No desktop shell in this test session");
+        QTemporaryDir temporary;
+        QVERIFY(temporary.isValid());
+        const QString output = temporary.filePath(u"app-console.json"_s);
+        QString quotedOutput = QDir::toNativeSeparators(output);
+        quotedOutput.replace(u'\'', u"''"_s);
+        const QString script = u"$p=(Get-CimInstance Win32_Process -Filter ('ProcessId='+$PID)).ParentProcessId; "_s
+            + u"$v=@{parent_pid=$p; parent=(Get-Process -Id $p -ErrorAction SilentlyContinue).ProcessName; cwd=(Get-Location).Path}; "_s
+            + u"[IO.File]::WriteAllText('"_s + quotedOutput
+            + u"',($v|ConvertTo-Json -Compress),[Text.UTF8Encoding]::new($false))"_s;
+        const QString command = u"\"shell:AppsFolder\\{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\WindowsPowerShell\\v1.0\\powershell.exe\" "_s
+            + u"-NoProfile -NonInteractive -Command \""_s + script + u'"';
+        const auto done = std::make_shared<std::atomic<int>>(-1);
+        ws::shell::runCustom(command, explicitDirectory ? temporary.path() : QString(), {},
+            [done](bool ok) { done->store(ok ? 1 : 0); });
+        QTRY_COMPARE_WITH_TIMEOUT(done->load(), 1, 10000);
+        QTRY_VERIFY_WITH_TIMEOUT(QFile::exists(output), 15000);
+        QFile file(output);
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        QJsonParseError error;
+        const QJsonObject result = QJsonDocument::fromJson(file.readAll(), &error).object();
+        QCOMPARE(error.error, QJsonParseError::NoError);
+        QVERIFY(result.value(u"parent_pid"_s).toInteger() > 0);
+        QVERIFY(result.value(u"parent"_s).toString().compare(u"explorer"_s, Qt::CaseInsensitive) != 0);
+        wchar_t system[MAX_PATH];
+        const UINT length = ::GetSystemDirectoryW(system, MAX_PATH);
+        QVERIFY(length > 0 && length < MAX_PATH);
+        const QString expected = explicitDirectory ? temporary.path()
+            : QString::fromWCharArray(system, static_cast<qsizetype>(length)) + u"/WindowsPowerShell/v1.0"_s;
+        QCOMPARE(QDir::cleanPath(result.value(u"cwd"_s).toString()).toLower(), QDir::cleanPath(expected).toLower());
+    }
+
+    // A console program run for what it writes (the Skill is installed so): both
+    // streams, the exit code, no window of its own.
+    void capturesWhatAProgramWrites()
+    {
+        const std::wstring cmd = qEnvironmentVariable("ComSpec").toStdWString();
+        QVERIFY(!cmd.empty());
+        const auto run = ws::shell::runUnelevatedCaptured(cmd, L"/d /c \"echo out& echo err 1>&2& exit /b 3\"", 15000);
+        QVERIFY(run.started);
+        QVERIFY(!run.timedOut);
+        QCOMPARE(run.exitCode, 3ul);
+        const QString text = QString::fromLatin1(run.output.data(), static_cast<qsizetype>(run.output.size()));
+        QVERIFY2(text.contains(u"out"_s) && text.contains(u"err"_s), qPrintable(text));
+        // Nothing on standard input to wait for: it ends at once.
+        const auto reads = ws::shell::runUnelevatedCaptured(cmd, L"/d /c \"set /p x=& echo done\"", 15000);
+        QVERIFY(reads.started && !reads.timedOut);
+        QVERIFY(QString::fromLatin1(reads.output.data(), static_cast<qsizetype>(reads.output.size())).contains(u"done"_s));
+        // A program that does not exist does not start.
+        QVERIFY(!ws::shell::runUnelevatedCaptured(L"C:\\wstest\\nothing\\not-there.exe", {}, 1000).started);
+    }
+
+    // The program gets the user's environment as the registry has it now, not the one this
+    // process started with: a variable set (setx) after Win顺 started is seen by ws.
+    void getsTheUsersEnvironmentAsTheRegistryHasIt()
+    {
+        const std::wstring cmd = qEnvironmentVariable("ComSpec").toStdWString();
+        const QString name = u"WS_TEST_ENV_"_s + QUuid::createUuid().toString(QUuid::Id128).left(12);
+        HKEY key = nullptr;
+        QCOMPARE(::RegCreateKeyExW(HKEY_CURRENT_USER, L"Environment", 0, nullptr, 0, KEY_SET_VALUE, nullptr, &key, nullptr), LSTATUS(ERROR_SUCCESS));
+        const std::wstring value = L"from the registry";
+        QCOMPARE(::RegSetValueExW(key, name.toStdWString().c_str(), 0, REG_SZ, reinterpret_cast<const BYTE*>(value.c_str()),
+                     static_cast<DWORD>((value.size() + 1) * sizeof(wchar_t))),
+            LSTATUS(ERROR_SUCCESS));
+        const auto remove = qScopeGuard([&] {
+            ::RegDeleteValueW(key, name.toStdWString().c_str());
+            ::RegCloseKey(key);
+            _wputenv_s(L"WS_TEST_ONLY_HERE", L"");
+        });
+        _wputenv_s(L"WS_TEST_ONLY_HERE", L"set by a parent");
+        const auto run = ws::shell::runUnelevatedCaptured(cmd, (L"/d /c \"echo [%" + name.toStdWString() + L"%] [%WS_TEST_ONLY_HERE%]\"").c_str(), 15000);
+        QVERIFY(run.started && !run.timedOut);
+        const QString text = QString::fromLatin1(run.output.data(), static_cast<qsizetype>(run.output.size()));
+        QVERIFY2(text.contains(u"[from the registry]"_s), qPrintable(text));
+        // Over this process's own variables (the user's account): what a parent set stays.
+        if (!ws::integrity::processElevated())
+            QVERIFY2(text.contains(u"[set by a parent]"_s), qPrintable(text));
+        // The shell's account, which this one is (the tests run as the user).
+        QVERIFY(ws::shell::runsAsShellUser());
+    }
+
+    void endsAProgramThatTakesTooLong()
+    {
+        const std::wstring cmd = qEnvironmentVariable("ComSpec").toStdWString();
+        QElapsedTimer timer;
+        timer.start();
+        const auto run = ws::shell::runUnelevatedCaptured(cmd, L"/d /c \"ping -n 30 127.0.0.1 >nul\"", 400);
+        QVERIFY(run.started);
+        QVERIFY(run.timedOut);
+        QVERIFY2(timer.elapsed() < 5000, qPrintable(QString::number(timer.elapsed())));
     }
 };
 

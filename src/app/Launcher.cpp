@@ -1,4 +1,6 @@
 #include "Launcher.h"
+#include "platform/ContentOpen.h"
+#include "PreviewShortcut.h"
 #include "ResultColumns.h"
 #include "Settings.h"
 #include "Wsl.h"
@@ -85,6 +87,7 @@ constexpr QLatin1StringView kTypesHint("types");
 // Files on shares and in WSL whose contents are not indexed (GitHub #114):
 // the settings' section of those folders, where they are turned on.
 constexpr QLatin1StringView kRemoteHint("remote");
+constexpr QLatin1StringView kDeferredHint("deferred");
 constexpr QLatin1StringView kDriveHint("drive:"); // + "E:"
 // With only the chosen folders indexed (GitHub #52): a folder not among them
 // walked for the query (+ its path), the same folder added to them (+ its
@@ -464,6 +467,18 @@ Launcher::Launcher(IndexService* index, AppCatalog* apps, SystemCatalog* places,
     , m_sink(std::make_unique<ModelSink>(*this))
 {
     m_columns.load(Settings::filePath());
+    m_contentPane = std::make_unique<ContentPane>(index);
+    const auto syncPane = [this] { syncContentPane(); };
+    connect(this, &Launcher::currentRowChanged, this, syncPane);
+    connect(this, &Launcher::statusChanged, this, syncPane);
+    connect(this, &Launcher::scopeChanged, this, syncPane);
+    connect(this, &Launcher::folderChipsChanged, this, syncPane);
+    connect(&m_results, &ResultModel::selectionChanged, this, syncPane);
+    connect(m_contentPane.get(), &ContentPane::openRequested, this, [this](const QString& path, int line) {
+        remember(path, m_query);
+        contentopen::open(path, line, reportFailure(QFileInfo(path).fileName()));
+    });
+    m_results.setFolderIndex([index] { return index ? index->index() : nullptr; });
     m_pluginWait.setSingleShot(true);
     m_pluginWait.setInterval(150ms); // a plugin that answers within it shows nothing of the wait
     connect(&m_pluginWait, &QTimer::timeout, this, [this] {
@@ -643,6 +658,33 @@ void Launcher::setFolderKeyword(const QString& keyword)
     updateQueryPrefix();
     if (m_window && m_window->isVisible())
         search();
+}
+
+void Launcher::setSearchKinds(bool apps, bool places)
+{
+    if (apps == m_searchApps && places == m_searchPlaces)
+        return;
+    m_searchApps = apps;
+    m_searchPlaces = places;
+    if (m_window && m_window->isVisible())
+        search();
+}
+
+void Launcher::setRegexMode(bool on)
+{
+    if (on == m_regexMode)
+        return;
+    m_regexMode = on;
+    emit regexModeChanged();
+    if (m_window && m_window->isVisible())
+        search();
+}
+
+void Launcher::toggleRegexMode()
+{
+    setRegexMode(!m_regexMode);
+    if (m_window && m_window->isVisible())
+        flash(m_regexMode ? tr("正则模式：每个词都按正则表达式匹配名字") : tr("已关闭正则模式"));
 }
 
 void Launcher::setQuery(const QString& query)
@@ -887,6 +929,8 @@ QVariantList Launcher::leftOutHints() const
     const bool onlyTypingFolder = m_typingOnly && !typingWords().isEmpty();
     if (onlyTypingFolder)
         add(kEverywhereHint, tr("只在 %1 里搜").arg(typingFolder()), tr("也搜其他位置"));
+    if (m_scope == All && m_scanComplete && !m_moreContent && m_leftOut.deferred > 0)
+        add(kDeferredHint, tr("还有 %Ln 个文件未搜索内容", nullptr, m_leftOut.deferred), tr("搜索内容"));
     // The counts are of files not read, whatever was typed: offered under
     // every list they would be noise. Only when what was found does not fill
     // the window (Main.qml maxRows), where "is that all?" is the question.
@@ -974,6 +1018,10 @@ void Launcher::searchLeftOut(const QString& kind)
             return hint[u"kind"_s] == kind || hint[u"kind2"_s] == kind;
         }))
         return;
+    if (kind == kDeferredHint) {
+        setScope(Content); // explicit opt-in to read files, with the same query
+        return;
+    }
     // Not searches: the settings' page, the note closed, a folder added.
     if (kind == kRemoteHint) {
         emit shareSettingsRequested();
@@ -1019,6 +1067,7 @@ void Launcher::searchLeftOut(const QString& kind)
         request.extensions = fileExtensions();
         request.limit = kPage;
         request.walkFolder = walkedPath(kind);
+        request.regex = regexTerms();
         m_walkRunning = true;
         m_walkSeen = 0;
     } else {
@@ -1224,10 +1273,16 @@ void Launcher::setSwitches(Switches* switches, const QString& stateFile)
     if (m_switches)
         disconnect(m_switches, nullptr, this, nullptr);
     m_switches = switches;
+    m_switchWaiting.clear();
     m_stateFile = stateFile;
+    m_contentPane->loadPreferences(stateFile);
     m_switchPageTold = !stateFile.isEmpty() && QSettings(stateFile, QSettings::IniFormat).value(u"Hints/SwitchPage"_s).toBool();
     m_previewWanted = !stateFile.isEmpty() && QSettings(stateFile, QSettings::IniFormat).value(u"Launcher/PreviewOpen"_s).toBool();
     m_results.setSwitches(switches);
+    refreshKeyHints();
+    scheduleAwakeTick();
+    if (m_window && m_window->isVisible())
+        search(); // remove a keep-awake status row when its provider is off
     if (!switches)
         return;
     // What Enter does on the row the keyboard is on follows its switch, whoever changed it.
@@ -1235,8 +1290,23 @@ void Launcher::setSwitches(Switches* switches, const QString& stateFile)
         const SearchResult* r = m_results.at(m_currentRow);
         if (r && r->switchId == id)
             refreshKeyHints();
-        if (id == u"keep-awake" && m_window && m_window->isVisible())
+        if (id == u"keep-awake" && m_window && m_window->isVisible()) {
             scheduleAwakeTick(); // turned on or off, or given another end time
+            if (m_scope == All && m_query.trimmed().isEmpty()) {
+                bool pinned = false;
+                for (int row = 0; row < m_results.count(); ++row) {
+                    const SearchResult* item = m_results.at(row);
+                    if (item->statusRow && item->switchId == id) {
+                        pinned = true;
+                        break;
+                    }
+                }
+                const SwitchState awake = m_switches->state(id);
+                const bool wanted = awake.ready() && awake.on == SwitchState::Value::On;
+                if (m_pending || pinned != wanted)
+                    search(); // async startup, expiry or a provider crash changed the status row
+            }
+        }
     });
     // A toggle that had to wait for the state is done, or given up.
     connect(switches, &Switches::waitEnded, this, [this](const QString& id, Switches::Outcome outcome) {
@@ -1311,6 +1381,20 @@ void Launcher::setNumberHints(const QString& hints)
     emit resultOptionsChanged();
 }
 
+void Launcher::setPreviewHotkey(const QString& shortcut)
+{
+    if (m_previewHotkey == shortcut)
+        return;
+    m_previewHotkey = shortcut;
+    m_previewSequence = QKeySequence::fromString(shortcut, QKeySequence::PortableText);
+    emit resultOptionsChanged();
+}
+
+bool Launcher::isPreviewKey(int key, int modifiers) const
+{
+    return previewkeys::matches(m_previewSequence, key, modifiers);
+}
+
 void Launcher::setNumberKeysLeft(unsigned digits)
 {
     if (digits == m_numberKeysLeft)
@@ -1352,6 +1436,16 @@ void Launcher::setStartList(StartList list)
     m_startList = list;
     emit startListChanged();
     if (m_window && m_window->isVisible() && showsStartList())
+        search();
+}
+
+void Launcher::setStartOptions(int recentItems, bool favorites)
+{
+    if (m_recentItems == recentItems && m_favoritesOnStart == favorites)
+        return;
+    m_recentItems = recentItems;
+    m_favoritesOnStart = favorites;
+    if (m_window && m_window->isVisible() && searchText().isEmpty())
         search();
 }
 
@@ -1604,7 +1698,7 @@ void Launcher::search(bool more)
     // the names' (or back): "=" and "= " are the same text trimmed.
     std::optional<KeywordMode> keyword = m_filePrefix ? std::nullopt : matchKeyword(m_query);
     const QString error = m_scope == Content || keyword || typedKeyword(m_web, m_query)
-        ? QString() : parseQuery(nameText()).error;
+        ? QString() : parseQuery(nameText(), regexTerms()).error;
     if (m_queryError != error) {
         m_queryError = error;
         emit queryErrorChanged();
@@ -1616,7 +1710,7 @@ void Launcher::search(bool more)
         && m_preferredTypes == m_shownPreferredTypes && keywordKey == m_shownKeyword
         && (m_scope != Content || (m_contentFolder == m_shownContentFolder && pickKey(m_contentPick) == m_shownPick))
         && (!text.isEmpty() || m_startList == m_shownStartList) && panelKey() == m_shownPanelKey
-        && typingKey() == m_shownTyping;
+        && typingKey() == m_shownTyping && regexTerms() == m_shownRegex;
     m_replacePending = !m_refresh;
     // The text is the one shown (another scope, order, kind of file): nobody
     // is typing, so a content scan starts at once, without waiting for a pause.
@@ -1712,6 +1806,8 @@ void Launcher::search(bool more)
     request.excludedTypes = m_excludedTypes;
     request.excludedFileNames = m_excludedFileNames;
     request.startList = m_startList == RecentlyModified ? ws::StartList::Modified : ws::StartList::Opened;
+    request.recentItems = m_recentItems;
+    request.favoritesOnStart = m_favoritesOnStart;
     request.limit = kPage * m_pages;
     request.browse = m_filePrefix.has_value() || (m_scope == Files && m_fileType >= 0);
     if (m_panel) { // its filters and order; nothing typed lists everything
@@ -1723,9 +1819,15 @@ void Launcher::search(bool more)
     if (m_panel || m_filePrefix || !text.isEmpty())
         request.order = nameOrder();
     // With no start list, nothing opened shows before something is typed.
-    if (m_recordHistory && !(text.isEmpty() && m_startList == NoStartList))
-        request.history = m_history->ranked(text, QDateTime::currentMSecsSinceEpoch());
+    if (m_recordHistory && !(text.isEmpty() && m_startList == NoStartList)) {
+        const qint64 now = QDateTime::currentMSecsSinceEpoch();
+        request.history = m_history->ranked(text, now);
+        request.historyAffinity = m_history->affinities(text, now);
+    }
     request.web = m_web;
+    request.apps = m_searchApps;
+    request.places = m_searchPlaces;
+    request.regex = regexTerms();
     if (m_favorites)
         request.favorites = m_favorites->items();
     // Keep awake is Win顺's own state: while it is on it is listed first, to be seen and ended.
@@ -1777,6 +1879,7 @@ void Launcher::showRows(SearchResults rows, QStringList highlights)
     m_shownPick = pickKey(m_contentPick);
     m_shownPanelKey = panelKey();
     m_shownTyping = typingKey();
+    m_shownRegex = regexTerms();
     m_haveResults = true;
     if (m_replacePending) {
         m_replacePending = false;
@@ -1914,7 +2017,7 @@ QString Launcher::contentNeedle() const
     if (typedInFolder())
         return {};
     const QString text = searchText();
-    const ParsedQuery query = ws::parseQuery(text);
+    const ParsedQuery query = ws::parseQuery(text, regexTerms());
     if (!query.alternatives.empty() || !query.error.isEmpty()
         || std::ranges::any_of(query.terms, [](const QueryTerm& t) { return t.regex; }))
         return {};
@@ -1930,7 +2033,7 @@ QString Launcher::contentNeedle() const
     return text;
 }
 
-void Launcher::startContentSearch()
+SearchEngine::Request Launcher::contentRequest() const
 {
     SearchEngine::Request request;
     request.text = m_scope == Content ? searchText() : contentNeedle();
@@ -1954,10 +2057,42 @@ void Launcher::startContentSearch()
         request.contentThreads = kContentThreads;
         setContentPlace(request);
     } else {
-        // 全部 looks in your own files on its own, gently.
-        request.contentThreads = std::clamp(static_cast<int>(std::thread::hardware_concurrency()) / 2, 2, 6);
+        // Typing a file name must not start a parallel document-parsing
+        // workload (#153). Verify indexed matches on one reader; offer the
+        // unsearched contents explicitly instead of silently omitting them.
+        request.contentIndexedOnly = true;
+        request.contentThreads = 1;
     }
-    m_requestId = m_engine->submit(std::move(request));
+    return request;
+}
+
+void Launcher::syncContentPane()
+{
+    if (!m_contentPane) return;
+    if (m_scope != Content) {
+        m_contentPane->setActive(false);
+        m_contentPane->cancelReport();
+        return;
+    }
+    SearchResults rows;
+    if (m_scope == Content && !stale()) {
+        rows.reserve(m_results.count());
+        for (int i = 0; i < m_results.count(); ++i) {
+            const auto* row = m_results.at(i);
+            if (row && !row->isDir && row->app == AppKind::None) rows.append(*row);
+        }
+    }
+    const QString current = m_scope == Content && !stale() ? m_results.pathAt(m_currentRow) : QString();
+    const QString words = m_contentScope.words.isEmpty() ? splitContentQuery(searchText()).words : m_contentScope.words;
+    m_contentPane->setContentIndexEnabled(m_contentIndex);
+    m_contentPane->update(contentRequest(), words, searchText() + u'\n' + panelKey() + u'\n' + pickKey(m_contentPick)
+            + u'\n' + m_contentFolder, std::move(rows), stale() ? SearchResults{} : m_results.selection(), current,
+        m_contentScanned, m_contentTotal, m_scanComplete && !m_moreContent, searching(), m_leftOut);
+}
+
+void Launcher::startContentSearch()
+{
+    m_requestId = m_engine->submit(contentRequest());
     m_pending = true;
     m_contentRunning = true;
     refreshStatus();
@@ -2073,7 +2208,7 @@ void Launcher::onResults(quint64 id, const SearchResults& results, qint64 total,
     // heading says so (approximateHeading), and the names are highlighted by
     // the pinyin, as the result list reads "bg" back into 报告.
     m_approximate = std::ranges::any_of(results, [](const SearchResult& r) { return r.approximate; });
-    const ParsedQuery query = ws::parseQuery(nameText()); // typed in a folder, its words each (GitHub #110)
+    const ParsedQuery query = ws::parseQuery(nameText(), regexTerms()); // typed in a folder, its words each (GitHub #110)
     QStringList highlights = query.highlights;
     if (m_approximate) {
         highlights.clear();
@@ -2255,6 +2390,7 @@ void Launcher::setPanel(bool on)
         emit panelSortChanged();
     }
     m_panel = on;
+    m_results.setFolderSizesEnabled(on);
     emit panelChanged();
     refreshStatus();
     if (m_window && m_window->isVisible() && !m_keyword)
@@ -2437,7 +2573,7 @@ void Launcher::sortShownPanel(const QString& currentPath)
     for (int i = 0; i < m_results.count(); ++i)
         rows.push_back(*m_results.at(i));
     std::stable_sort(rows.begin(), rows.end(), [&](const auto& a, const auto& b) { return resultColumnLess(a, b, m_panelSort); });
-    m_results.assign(std::move(rows), ws::parseQuery(searchText()).highlights);
+    m_results.assign(std::move(rows), ws::parseQuery(searchText(), regexTerms()).highlights);
     if (!kept.isEmpty())
         emit panelRowRestored(m_results.indexOf(kept));
 }
@@ -3660,7 +3796,7 @@ void Launcher::perform(const SearchResult& result, Action action, bool fileCheck
         return;
     }
     if (action == PinPicture) {
-        if (!r.isApp() && !r.isDir) {
+        if (!r.isApp() && !r.isDir && m_pictureVerbs.pin) {
             emit pinRequested(r.path, false);
             emit dismissRequested();
         }
@@ -4559,9 +4695,11 @@ QVariantList Launcher::menuItems(int row) const
     };
     if (r->clipId > 0) { // a screenshot of the history
         items.append(entry(Open, tr("复制并粘贴"), u"Enter"_s, u"\uE77F"_s)); // Paste
-        items.append(entry(PinPicture, tr("贴到屏幕"), u"Ctrl+Enter"_s, u"\uE718"_s)); // Pin
-        items.append(entry(EditPicture, tr("编辑"), u"Shift+Enter"_s, u"\uE70F"_s)); // Edit
-        items.append(entry(Preview, tr("预览"), u"Alt+P"_s, u"\uE890"_s)); // View
+        if (m_pictureVerbs.pin)
+            items.append(entry(PinPicture, tr("贴到屏幕"), u"Ctrl+Enter"_s, u"\uE718"_s)); // Pin
+        if (m_pictureVerbs.edit)
+            items.append(entry(EditPicture, tr("编辑"), u"Shift+Enter"_s, u"\uE70F"_s)); // Edit
+        items.append(entry(Preview, tr("预览"), m_previewHotkey, u"\uE890"_s)); // View
         items.append(separator);
         items.append(entry(CopyItem, tr("复制图片"), u"Ctrl+C"_s, u"\uE8C8"_s));
         if (r->plugin && !r->plugin->copy.isEmpty())
@@ -4661,8 +4799,8 @@ QVariantList Launcher::menuItems(int row) const
     if (navigation::canBrowseFolder(*r))
         items.append(entry(BrowseFolder, tr("进入此文件夹搜索"), QString(), u"\uE721"_s));
     if (!r->missing && !r->offline)
-        items.append(entry(Preview, tr("预览"), u"Alt+P"_s, u"\uE890"_s)); // View
-    if (!r->isDir && !r->missing && !r->offline && pinnablePicture(r->path))
+        items.append(entry(Preview, tr("预览"), m_previewHotkey, u"\uE890"_s)); // View
+    if (!r->isDir && !r->missing && !r->offline && m_pictureVerbs.pin && pinnablePicture(r->path))
         items.append(entry(PinPicture, tr("贴到屏幕"), QString(), u"\uE718"_s)); // Pin
     items.append(entry(OpenTerminal, tr("在终端中打开"), QString(), u"\uE756"_s)); // CommandPrompt
     if (r->isDir && m_contentEnabled && !r->path.startsWith(u"\\\\"_s)) // shares: contents are not read there
@@ -5088,6 +5226,8 @@ void Launcher::performScreenshot(const SearchResult& result, Action action)
     case Reveal:
     case PinPicture:
     case PluginAction + 1:
+        if (!m_pictureVerbs.pin)
+            return;
         emit pinRequested(result.target, true);
         emit dismissRequested();
         return;
@@ -5490,6 +5630,17 @@ void Launcher::runFileCommand(int row, int index)
         return;
     }
     m_plugins->action(++m_pluginRequest, chosen.pluginId, chosen.commandId, u"files"_s, QJsonObject {}, QString(), paths);
+}
+
+void Launcher::runPluginCommand(const QString& pluginId, const QString& commandId, const QString& actionId,
+    const QString& text, const QStringList& files)
+{
+    if (!m_plugins)
+        return;
+    setScope(All);
+    clearFilters();
+    setQuery({});
+    m_plugins->action(++m_pluginRequest, pluginId, commandId, actionId, QJsonObject {}, text, files);
 }
 
 // Win顺 carries out a plugin's declarative open (an item's default action, or

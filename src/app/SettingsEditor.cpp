@@ -1,6 +1,11 @@
 #include "SettingsEditor.h"
+#include "PreviewShortcut.h"
+#include "platform/OcrFiles.h"
+#include "platform/OcrPackage.h"
 
 #include "ClipImport.h"
+#include "CliSetup.h"
+#include "CommandLine.h"
 #include "FavoritesSettings.h"
 #include "FileIconProvider.h"
 #include "IndexFolder.h"
@@ -113,6 +118,22 @@ struct SettingsEditor::TaskbarWatch {
     }
 };
 
+void SettingsEditor::useOcrPackage(OcrPackage* package)
+{
+    if (m_ocrPackage == package)
+        return;
+    if (m_ocrPackage)
+        disconnect(m_ocrPackage, nullptr, this, nullptr);
+    if (m_ocrPackage && m_ocrPackage->parent() == this)
+        delete m_ocrPackage;
+    m_ocrPackage = package;
+    connect(package, &OcrPackage::localRequested, this, [this] {
+        const QString file = shell::pickFile(nullptr, OcrPackage::tr("选择增强识别包"), {{OcrPackage::tr("增强识别包"), u"*.zip"_s}});
+        if (!file.isEmpty())
+            m_ocrPackage->installFile(file);
+    });
+}
+
 SettingsEditor::SettingsEditor(const Settings& settings, const QString& runningRenderer, QObject* parent)
     : QObject(parent)
     , m_settings(settings)
@@ -125,7 +146,10 @@ SettingsEditor::SettingsEditor(const Settings& settings, const QString& runningR
     , m_taskbarWatch(std::make_unique<TaskbarWatch>())
     , m_plugins(new PluginSettings(this, this))
     , m_favorites(new FavoritesSettings(this, this))
+    , m_cli(new CliSetup(this, this))
 {
+    ocr::setComponentsRoot(Settings::dataDir() + u"/components"_s);
+    useOcrPackage(new OcrPackage(this));
     connect(this, &SettingsEditor::changed, this, &SettingsEditor::drivesChanged);
     connect(siteicons::notifier(), &siteicons::Notifier::fetched, this, [this] {
         ++m_siteIconsArrived;
@@ -175,15 +199,12 @@ void SettingsEditor::setSettings(const Settings& settings)
     const bool keys = settings.numberKeys != m_settings.numberKeys || settings.hotkey != m_settings.hotkey
         || settings.clipboardNumberKeys != m_settings.clipboardNumberKeys
         || settings.clipboardHotkey != m_settings.clipboardHotkey
-        || settings.folderMenuHotkey != m_settings.folderMenuHotkey
-        || settings.captureHotkey != m_settings.captureHotkey
-        || settings.capturePinsHotkey != m_settings.capturePinsHotkey
-        || settings.capturePinsRestoreHotkey != m_settings.capturePinsRestoreHotkey
-        || settings.captureLastPinHotkey != m_settings.captureLastPinHotkey;
+        || settings.folderMenuHotkey != m_settings.folderMenuHotkey;
     // The shares' cards say whether their contents are read, too (GitHub #114).
     const bool shares = settings.shares != m_settings.shares || settings.contentSearch != m_settings.contentSearch;
     const bool drives = settings.selectedDrives != m_settings.selectedDrives;
     m_settings = settings;
+    m_previewHotkeyError.clear();
     emit changed();
     if (shares)
         emit sharesChanged();
@@ -256,6 +277,30 @@ void SettingsEditor::setTabEntersFavoriteFolder(bool on)
     commit();
 }
 
+void SettingsEditor::setSearchApps(bool on)
+{
+    if (m_settings.searchApps == on)
+        return;
+    m_settings.searchApps = on;
+    commit();
+}
+
+void SettingsEditor::setSearchSystem(bool on)
+{
+    if (m_settings.searchSystem == on)
+        return;
+    m_settings.searchSystem = on;
+    commit();
+}
+
+void SettingsEditor::setRegexMode(bool on)
+{
+    if (m_settings.regexMode == on)
+        return;
+    m_settings.regexMode = on;
+    commit();
+}
+
 void SettingsEditor::setThumbnails(bool on)
 {
     if (m_settings.thumbnails == on)
@@ -285,6 +330,23 @@ void SettingsEditor::setStartList(const QString& list)
     if (m_settings.startList == list || (list != u"opened" && list != u"modified" && list != u"none"))
         return;
     m_settings.startList = list;
+    commit();
+}
+
+void SettingsEditor::setRecentItems(int count)
+{
+    count = std::clamp(count, 1, 200);
+    if (m_settings.recentItems == count)
+        return;
+    m_settings.recentItems = count;
+    commit();
+}
+
+void SettingsEditor::setFavoritesOnStart(bool on)
+{
+    if (m_settings.favoritesOnStart == on)
+        return;
+    m_settings.favoritesOnStart = on;
     commit();
 }
 
@@ -319,6 +381,30 @@ void SettingsEditor::setPreviewWith(const QString& with)
         return;
     m_settings.previewWith = with;
     commit();
+}
+
+void SettingsEditor::setPreviewHotkey(const QString& shortcut)
+{
+    const QString value = shortcut.trimmed().isEmpty() ? QString() : previewkeys::normalized(shortcut);
+    QString error;
+    if (!shortcut.trimmed().isEmpty() && value.isEmpty())
+        error = tr("这个快捷键用于输入或其他操作，请换一个");
+    if (previewkeys::usedGlobally(value, {m_settings.hotkey, m_settings.clipboardHotkey, m_settings.folderMenuHotkey}))
+        error = tr("这个快捷键已用于全局操作，请换一个");
+    m_previewHotkeyError = error;
+    if (!error.isEmpty() || value == m_settings.previewHotkey) {
+        emit changed();
+        return;
+    }
+    m_settings.previewHotkey = value;
+    commit();
+}
+
+QString SettingsEditor::previewHotkeyError() const
+{
+    if (previewkeys::usedGlobally(m_settings.previewHotkey, {m_settings.hotkey, m_settings.clipboardHotkey, m_settings.folderMenuHotkey}))
+        return tr("这个快捷键已用于全局操作，请换一个");
+    return m_previewHotkeyError;
 }
 
 void SettingsEditor::setClipboardNumberKeys(const QString& keys)
@@ -366,12 +452,7 @@ QString describeNumberKeys(const QString& keys, const Settings& settings)
         const QString c = chord(n);
         const bool mine = settings.hotkey.compare(c, Qt::CaseInsensitive) == 0
             || settings.clipboardHotkey.compare(c, Qt::CaseInsensitive) == 0
-            || settings.folderMenuHotkey.compare(c, Qt::CaseInsensitive) == 0
-            || (settings.captureEnabled
-                && (settings.captureHotkey.compare(c, Qt::CaseInsensitive) == 0
-                    || settings.capturePinsHotkey.compare(c, Qt::CaseInsensitive) == 0
-                    || settings.capturePinsRestoreHotkey.compare(c, Qt::CaseInsensitive) == 0
-                    || settings.captureLastPinHotkey.compare(c, Qt::CaseInsensitive) == 0));
+            || settings.folderMenuHotkey.compare(c, Qt::CaseInsensitive) == 0;
         if (mine)
             own.append(c);
         else if (std::find(held.begin(), held.end(), n) != held.end())
@@ -1081,6 +1162,14 @@ void SettingsEditor::setFolderMenuExplorer(bool on)
     commit();
 }
 
+void SettingsEditor::setFolderMenuMiddle(bool on)
+{
+    if (m_settings.folderMenuMiddle == on)
+        return;
+    m_settings.folderMenuMiddle = on;
+    commit();
+}
+
 void SettingsEditor::setFolderMenuDesktop(bool on)
 {
     if (m_settings.folderMenuDesktop == on)
@@ -1140,278 +1229,6 @@ void SettingsEditor::setFolderMenuHotkeyError(const QString& error)
     emit hotkeyErrorChanged();
 }
 
-void SettingsEditor::setCaptureLastPinHotkey(const QString& value)
-{
-    const auto normal = value.trimmed();
-    if (m_settings.captureLastPinHotkey == normal)
-        return;
-    m_settings.captureLastPinHotkey = normal;
-    commit();
-    refreshNumberKeys();
-}
-
-void SettingsEditor::setCaptureSaveFolder(const QString& value)
-{
-    const auto normal = value.trimmed();
-    if (m_settings.captureSaveFolder == normal)
-        return;
-    m_settings.captureSaveFolder = normal;
-    commit();
-}
-
-void SettingsEditor::setCaptureRecordingFolder(const QString& value)
-{
-    const auto normal = value.trimmed();
-    if (m_settings.captureRecordingFolder == normal)
-        return;
-    m_settings.captureRecordingFolder = normal;
-    commit();
-}
-
-void SettingsEditor::setCaptureRecordingSystemAudio(bool value)
-{
-    const auto normal = value;
-    if (m_settings.captureRecordingSystemAudio == normal)
-        return;
-    m_settings.captureRecordingSystemAudio = normal;
-    commit();
-}
-
-void SettingsEditor::setCaptureRecordingMicrophone(bool value)
-{
-    const auto normal = value;
-    if (m_settings.captureRecordingMicrophone == normal)
-        return;
-    m_settings.captureRecordingMicrophone = normal;
-    commit();
-}
-
-void SettingsEditor::setCaptureRecordingQuality(int value)
-{
-    if (value < 0 || value > 2 || m_settings.captureRecordingQuality == value)
-        return;
-    m_settings.captureRecordingQuality = value;
-    commit();
-}
-
-void SettingsEditor::setCaptureRecordingCursor(bool value)
-{
-    if (m_settings.captureRecordingCursor == value)
-        return;
-    m_settings.captureRecordingCursor = value;
-    commit();
-}
-
-void SettingsEditor::setCaptureRecordingCountdown(bool value)
-{
-    if (m_settings.captureRecordingCountdown == value)
-        return;
-    m_settings.captureRecordingCountdown = value;
-    commit();
-}
-
-void SettingsEditor::setCaptureRecordingClicks(bool value)
-{
-    if (m_settings.captureRecordingClicks == value) return;
-    m_settings.captureRecordingClicks = value;
-    commit();
-}
-
-void SettingsEditor::setCaptureLastPinHotkeyError(const QString& error)
-{
-    if (m_captureLastPinHotkeyError == error)
-        return;
-    m_captureLastPinHotkeyError = error;
-    emit hotkeyErrorChanged();
-}
-
-void SettingsEditor::setCaptureEnabled(bool on)
-{
-    if (m_settings.captureEnabled == on)
-        return;
-    m_settings.captureEnabled = on;
-    commit(); // the app makes or lets go of the capture (App::applyCapture)
-}
-
-void SettingsEditor::setCaptureHotkey(const QString& hotkey)
-{
-    const QString value = hotkey.trimmed();
-    if (m_settings.captureHotkey == value)
-        return;
-    m_settings.captureHotkey = value;
-    commit(); // the app registers it and says whether that worked (setCaptureHotkeyError)
-    refreshNumberKeys(); // a Ctrl+digit of its own is struck through in the rows
-}
-
-void SettingsEditor::setCaptureHotkeyError(const QString& error)
-{
-    if (m_captureHotkeyError == error)
-        return;
-    m_captureHotkeyError = error;
-    emit hotkeyErrorChanged();
-}
-
-void SettingsEditor::setCapturePrintScreen(bool on)
-{
-    if (m_settings.capturePrintScreen == on)
-        return;
-    m_settings.capturePrintScreen = on;
-    commit();
-}
-
-void SettingsEditor::setCaptureCopyOnSelect(bool on)
-{
-    if (m_settings.captureCopyOnSelect == on)
-        return;
-    m_settings.captureCopyOnSelect = on;
-    commit();
-}
-
-void SettingsEditor::setCaptureMagnifier(bool on)
-{
-    if (m_settings.captureMagnifier == on)
-        return;
-    m_settings.captureMagnifier = on;
-    commit();
-}
-
-void SettingsEditor::setCapturePinOnCopy(bool on)
-{
-    if (m_settings.capturePinOnCopy == on)
-        return;
-    m_settings.capturePinOnCopy = on;
-    commit();
-}
-
-void SettingsEditor::setCaptureMouse(QString& field, const QString& action, bool allowBack)
-{
-    static const QStringList known {u"none"_s, u"copy"_s, u"copypin"_s, u"save"_s, u"pin"_s, u"ocr"_s, u"ocrcopy"_s,
-        u"ocrsearch"_s, u"ocrweb"_s, u"cancel"_s};
-    if (field == action || !(known.contains(action) || (allowBack && action == u"back")))
-        return;
-    field = action;
-    commit();
-}
-
-void SettingsEditor::setCaptureToolbarHidden(const QString& ids)
-{
-    const QString normal = Settings::normalizedToolbarHidden(ids);
-    if (m_settings.captureToolbarHidden == normal)
-        return;
-    m_settings.captureToolbarHidden = normal;
-    commit();
-}
-
-void SettingsEditor::setCaptureCursor(bool on)
-{
-    if (m_settings.captureCursor == on)
-        return;
-    m_settings.captureCursor = on;
-    commit();
-}
-
-void SettingsEditor::setCaptureHdrFile(bool on)
-{
-    if (m_settings.captureHdrFile == on)
-        return;
-    m_settings.captureHdrFile = on;
-    commit();
-}
-
-void SettingsEditor::setCaptureControlsUia(bool on)
-{
-    if (m_settings.captureControlsUia == on)
-        return;
-    m_settings.captureControlsUia = on;
-    commit();
-}
-
-void SettingsEditor::setCaptureDelay(int seconds)
-{
-    if ((seconds != 3 && seconds != 5 && seconds != 10) || m_settings.captureDelay == seconds)
-        return;
-    m_settings.captureDelay = seconds;
-    commit();
-}
-
-void SettingsEditor::setCapturePinDoubleClick(const QString& action)
-{
-    if ((action != u"reset" && action != u"close" && action != u"collapse" && action != u"none")
-        || m_settings.capturePinDoubleClick == action)
-        return;
-    m_settings.capturePinDoubleClick = action;
-    commit();
-}
-
-void SettingsEditor::setCapturePinsHotkey(const QString& hotkey)
-{
-    const QString value = hotkey.trimmed();
-    if (m_settings.capturePinsHotkey == value)
-        return;
-    m_settings.capturePinsHotkey = value;
-    commit(); // the app registers it and says whether that worked (setCapturePinsHotkeyError)
-}
-
-void SettingsEditor::setCapturePinsRestoreHotkey(const QString& hotkey)
-{
-    const QString value = hotkey.trimmed();
-    if (m_settings.capturePinsRestoreHotkey == value)
-        return;
-    m_settings.capturePinsRestoreHotkey = value;
-    commit();
-}
-
-void SettingsEditor::setCapturePinsHotkeyError(const QString& error)
-{
-    if (m_capturePinsHotkeyError == error)
-        return;
-    m_capturePinsHotkeyError = error;
-    emit hotkeyErrorChanged();
-}
-
-void SettingsEditor::setCapturePinsRestoreHotkeyError(const QString& error)
-{
-    if (m_capturePinsRestoreHotkeyError == error)
-        return;
-    m_capturePinsRestoreHotkeyError = error;
-    emit hotkeyErrorChanged();
-}
-
-void SettingsEditor::setCaptureSmartPrescan(bool on)
-{
-    if (m_settings.captureSmartPrescan == on)
-        return;
-    m_settings.captureSmartPrescan = on;
-    commit();
-}
-
-void SettingsEditor::setCaptureSmartIpMac(bool on)
-{
-    if (m_settings.captureSmartIpMac == on)
-        return;
-    m_settings.captureSmartIpMac = on;
-    commit();
-}
-
-void SettingsEditor::setCaptureSmartAllText(bool on)
-{
-    if (m_settings.captureSmartAllText == on)
-        return;
-    m_settings.captureSmartAllText = on;
-    commit();
-}
-
-// Words separated by commas (also the Chinese ones, semicolons, line breaks),
-// each trimmed, none empty, kept as one comma separated line.
-void SettingsEditor::setCaptureSmartWords(const QString& words)
-{
-    const QString normal = Settings::normalizedSmartWords(words).join(u',');
-    if (m_settings.captureSmartWords == normal)
-        return;
-    m_settings.captureSmartWords = normal;
-    commit();
-}
-
 void SettingsEditor::setPasteFileEnabled(bool on)
 {
     if (m_settings.pasteFileEnabled == on)
@@ -1437,14 +1254,6 @@ void SettingsEditor::setPasteFileMenu(bool on)
     commit();
 }
 
-void SettingsEditor::setCaptureNote(const QString& note)
-{
-    if (m_captureNote == note)
-        return;
-    m_captureNote = note;
-    emit hotkeyErrorChanged();
-}
-
 QString SettingsEditor::saveCaptureKeyword(const QString& keyword)
 {
     const QString word = keyword.trimmed();
@@ -1461,15 +1270,23 @@ QString SettingsEditor::saveCaptureKeyword(const QString& keyword)
     if (m_settings.captureKeyword == word)
         return {};
     m_settings.captureKeyword = word;
-    commit(); // the launcher and the plugins' keywords (App::applyCapture)
+    commit(); // the launcher and the plugins' keywords (App::applyScreenshots)
     return {};
+}
+
+void SettingsEditor::setScreenshotHistory(bool on)
+{
+    if (m_screenshotHistory == on)
+        return;
+    m_screenshotHistory = on;
+    emit screenshotHistoryChanged();
 }
 
 QString SettingsEditor::captureKeywordTaken(const QString& keyword) const
 {
-    if (!m_settings.captureEnabled || m_settings.captureKeyword.compare(keyword.trimmed(), Qt::CaseInsensitive) != 0)
+    if (!m_screenshotHistory || m_settings.captureKeyword.compare(keyword.trimmed(), Qt::CaseInsensitive) != 0)
         return {};
-    return tr("关键词“%1”已经给了截图历史（截图卡片上可以改）").arg(m_settings.captureKeyword);
+    return tr("关键词“%1”已经给了截图历史（剪贴板页上可以改）").arg(m_settings.captureKeyword);
 }
 
 void SettingsEditor::setAutoUpdate(bool on)
@@ -1679,6 +1496,22 @@ void SettingsEditor::setClipboardLargePictures(bool on)
     if (m_settings.clipboardLargePictures == on)
         return;
     m_settings.clipboardLargePictures = on;
+    commit();
+}
+
+void SettingsEditor::setClipboardAtPointer(bool on)
+{
+    if (m_settings.clipboardAtPointer == on)
+        return;
+    m_settings.clipboardAtPointer = on;
+    commit();
+}
+
+void SettingsEditor::setClipboardPauseInFullScreen(bool on)
+{
+    if (m_settings.clipboardPauseInFullScreen == on)
+        return;
+    m_settings.clipboardPauseInFullScreen = on;
     commit();
 }
 
@@ -1993,7 +1826,7 @@ QString SettingsEditor::saveWebShortcut(int index, const QString& keyword, const
     if (!isValidWebKeyword(shortcut.keyword))
         return tr("关键词里不能有空格或引号");
     const KeywordClaim claim = keywordClaim(shortcut.keyword, shortcuts, index,
-        m_settings.captureEnabled ? m_settings.captureKeyword : QString(),
+        m_screenshotHistory ? m_settings.captureKeyword : QString(),
         [this](const QString& keyword) { return m_favorites->keywordOwner(keyword); });
     if (claim.by == KeywordClaim::By::WebShortcut)
         return tr("关键词“%1”已经给了“%2”").arg(shortcut.keyword, claim.owner);
@@ -2302,6 +2135,8 @@ QString problemText(const ShareIndexer::Status& s)
 QString contentText(const remotecontent::ShareContent::Progress& p, const ShareIndexer::Status* share)
 {
     using State = ShareIndexer::State;
+    if (share && share->state == State::Paused)
+        return SettingsEditor::tr("等待扫描时段，已读取的内容照常能搜到");
     const bool online = share && share->state == State::Online;
     if (!p.known)
         return online ? SettingsEditor::tr("马上开始读取文件内容") : SettingsEditor::tr("连上后读取文件内容");
@@ -2369,6 +2204,13 @@ QVariantList SettingsEditor::shares() const
                 ? tr("正在检查 %1…").arg(QString::fromStdWString(std::wstring(distro)))
                 : tr("正在连接 %1…").arg(QString::fromStdWString(webdav::displayHost(unc::host(path))));
             switch (s.state) {
+            case State::Paused:
+                status = tr("等待扫描时段（每天 %1–%2）").arg(
+                    QTime(0, 0).addSecs(share.scan.fromMinute * 60).toString(u"HH:mm"_s),
+                    QTime(0, 0).addSecs(share.scan.untilMinute * 60).toString(u"HH:mm"_s));
+                if (s.items > 0)
+                    status += u'\n' + tr("已收录的 %1照常能搜到").arg(itemsText(s.items));
+                break;
             case State::Waiting:
                 if (s.lastVerified)
                     status = QStringList {itemsText(s.items), verified, tr("稍后连接")}.join(u" · "_s);
@@ -2476,6 +2318,10 @@ QVariantList SettingsEditor::shares() const
             {u"busy"_s, busy},
             {u"content"_s, share.content},
             {u"contentStatus"_s, contentStatus},
+            {u"scanScheduled"_s, share.scan.scheduled},
+            {u"scanFrom"_s, QTime(0, 0).addSecs(share.scan.fromMinute * 60).toString(u"HH:mm"_s)},
+            {u"scanUntil"_s, QTime(0, 0).addSecs(share.scan.untilMinute * 60).toString(u"HH:mm"_s)},
+            {u"scanDepth"_s, share.scan.maxDepth},
         });
     }
     return list;
@@ -2588,6 +2434,22 @@ void SettingsEditor::setShareContent(int index, bool on)
     if (index < 0 || index >= m_settings.shares.size() || m_settings.shares[index].content == on)
         return;
     m_settings.shares[index].content = on;
+    commit();
+    emit sharesChanged();
+}
+
+void SettingsEditor::setShareScan(int index, bool scheduled, const QString& from, const QString& until, int depth)
+{
+    if (index < 0 || index >= m_settings.shares.size() || depth < 0 || depth > 1024)
+        return;
+    const QTime start = QTime::fromString(from, u"HH:mm"_s);
+    const QTime end = QTime::fromString(until, u"HH:mm"_s);
+    if (!start.isValid() || !end.isValid())
+        return;
+    const ShareScan scan {scheduled, start.hour() * 60 + start.minute(), end.hour() * 60 + end.minute(), depth};
+    if (m_settings.shares[index].scan == scan)
+        return;
+    m_settings.shares[index].scan = scan;
     commit();
     emit sharesChanged();
 }
@@ -3428,11 +3290,38 @@ void SettingsEditor::setMcpStatus(const QString& status)
     emit mcpStatusChanged();
 }
 
+void SettingsEditor::setCliTally(const QString& tally)
+{
+    if (m_cliTally == tally)
+        return;
+    m_cliTally = tally;
+    emit cliTallyChanged();
+}
+
 void SettingsEditor::refreshMcpClients()
 {
     m_mcpClients = mcpclients::toVariant(mcpclients::detect());
     m_mcpRelayPath = mcpclients::relayPath();
     emit mcpClientsChanged();
+}
+
+void SettingsEditor::refreshSkillState()
+{
+    const QString file = mcpclients::skillPath();
+    const bool there = QFileInfo::exists(file);
+    bool changed = false;
+    for (QVariant& item : m_mcpClients) {
+        QVariantMap client = item.toMap();
+        if (client.value(u"id"_s).toString() != u"claude-code"
+            || (client.value(u"skillInstalled"_s).toBool() == there && client.value(u"skillPath"_s).toString() == file))
+            continue;
+        client.insert(u"skillInstalled"_s, there);
+        client.insert(u"skillPath"_s, file);
+        item = client;
+        changed = true;
+    }
+    if (changed)
+        emit mcpClientsChanged();
 }
 
 void SettingsEditor::connectMcpClient(const QString& id)
@@ -3453,6 +3342,21 @@ void SettingsEditor::copyMcpSnippet(const QString& id)
 {
     shell::copyText(mcpclients::snippet(id));
     setMcpMessage(id == u"claude-code" ? tr("已复制命令，在终端里运行它就行") : tr("已复制，粘贴到那个客户端的 MCP 配置文件里"));
+}
+
+void SettingsEditor::installMcpSkill(const QString& id)
+{
+    if (id != u"claude-code" || m_mcpSkillBusy)
+        return; // a second click while ws runs would start a second ws (the two meet over one file)
+    m_mcpSkillBusy = true;
+    setMcpMessage(tr("正在装 Skill…"));
+    emit mcpMessageChanged(); // the busy flag too, whether or not the text changed
+    mcpclients::installSkill(cli::wsExe(cli::binFolder()), this, [this](const mcpclients::Result& result) {
+        m_mcpSkillBusy = false;
+        setMcpMessage(result.message);
+        refreshMcpClients();
+        emit mcpMessageChanged();
+    });
 }
 
 void SettingsEditor::setMcpMessage(const QString& message)

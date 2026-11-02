@@ -53,6 +53,9 @@ public:
     Q_INVOKABLE void addDragArea(QQuickItem* item);
     // Inside a drag area, still the window's own (buttons, text fields).
     Q_INVOKABLE void addControl(QQuickItem* item);
+    // The native sizing border in logical pixels; controls beside it keep
+    // their hit areas inside this inset, including at fractional scale.
+    Q_INVOKABLE qreal resizeMargin(qreal devicePixelRatio) const;
     // Laid over the window while it is shown (an open menu: DropMenu.qml, the
     // editor's key list): the window's own, ahead of everything here (drag
     // areas, the maximise button, resizing edges), so a press on it is its
@@ -93,7 +96,11 @@ public:
     QPointF pointer() const { return m_pointer; }
     bool maximizeHovered() const { return m_maximizeHovered; }
     bool maximizePressed() const { return m_maximizePressed; }
-    QString icon() const;
+    QString icon() const { return s_icon; }
+    // The program's icon as an image URL, set once before any title bar is
+    // made: WinShun's from its file icon provider, the screen capture plugin's
+    // from its own (no file icons there).
+    static void setIcon(const QString& url) { s_icon = url; }
 
 signals:
     void pointerChanged();
@@ -105,6 +112,7 @@ signals:
     void sideDoubleClicked();
 
 private:
+    static inline QString s_icon;
     struct Hook; // the window procedure subclass
     friend struct Hook;
 

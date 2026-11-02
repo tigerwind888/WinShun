@@ -1,6 +1,5 @@
 #include "WindowFrame.h"
 
-#include "FileIconProvider.h"
 #include "platform/WindowEffects.h"
 
 #include <QCoreApplication>
@@ -26,6 +25,11 @@ namespace {
 // side sizing: the inset of the launcher's rows, whose highlight starts
 // there, so a click on a row never sizes the window instead.
 constexpr qreal kSideEdge = 6;
+
+int resizeEdge(UINT dpi)
+{
+    return ::GetSystemMetricsForDpi(SM_CXSIZEFRAME, dpi) + ::GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
+}
 
 bool covers(const QPointer<QQuickItem>& item, QPointF pos)
 {
@@ -127,6 +131,8 @@ struct WindowFrame::Hook {
             // moving it, the program behind keeps the front.
             if (wParam == HTCAPTION && self->m_noActivate)
                 return ::DefWindowProcW(hwnd, WM_SYSCOMMAND, SC_MOVE | HTCAPTION, lParam);
+            if (self->m_noActivate && self->m_resizable && wParam >= HTLEFT && wParam <= HTBOTTOMRIGHT)
+                return ::DefWindowProcW(hwnd, WM_SYSCOMMAND, SC_SIZE | (wParam - HTLEFT + WMSZ_LEFT), lParam);
             // A handle: dragged, it moves the window as the rest does; let go
             // before the pointer has gone the system's drag distance, a click.
             // Told apart here, before the move loop, which takes the release
@@ -305,13 +311,6 @@ bool WindowFrame::onHandle(int screenX, int screenY) const
     return anyCovers(m_handles, toWindow(screenX, screenY));
 }
 
-QString WindowFrame::icon() const
-{
-    // Native separators: the shell does not parse "F:/..." and the generic
-    // program icon would come back.
-    return FileIconProvider::iconUrl(QDir::toNativeSeparators(QCoreApplication::applicationFilePath()), false);
-}
-
 QPointF WindowFrame::toWindow(int screenX, int screenY) const
 {
     POINT point {screenX, screenY};
@@ -335,7 +334,7 @@ int WindowFrame::hitTest(int screenX, int screenY) const
         RECT client {};
         ::GetClientRect(hwnd, &client);
         const UINT dpi = ::GetDpiForWindow(hwnd);
-        const int edge = ::GetSystemMetricsForDpi(SM_CXSIZEFRAME, dpi) + ::GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
+        const int edge = resizeEdge(dpi);
         const bool top = point.y < edge;
         // Caption buttons reach the window's edge, as on the system's title
         // bar: beside them only the corner above resizes.
@@ -370,6 +369,13 @@ int WindowFrame::hitTest(int screenX, int screenY) const
     if (anyCovers(m_dragAreas, pos))
         return HTCAPTION;
     return HTCLIENT;
+}
+
+qreal WindowFrame::resizeMargin(qreal devicePixelRatio) const
+{
+    const qreal dpr = std::max(qreal(1), devicePixelRatio);
+    const UINT dpi = m_hwnd ? ::GetDpiForWindow(reinterpret_cast<HWND>(m_hwnd)) : ::GetDpiForSystem();
+    return std::max(kSideEdge, resizeEdge(dpi) / dpr);
 }
 
 void WindowFrame::setResizable(bool on)

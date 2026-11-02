@@ -9,6 +9,7 @@
 // worker thread, never the GUI's.
 
 #include <QString>
+#include "DocText.h"
 
 #include <cstdint>
 #include <functional>
@@ -42,18 +43,28 @@ struct Result {
     bool document = false;
     bool fromIndex = false; // the content index had it: no file was opened
     bool cut = false; // the file has more than was read (the text limit)
+    // The original locations for detail views. Ordinary text callers keep
+    // receiving the same flattened `text` as before.
+    std::shared_ptr<const doctext::DocText> structured;
 };
 
 struct Sources {
     std::shared_ptr<const FileIndex> index; // may be null
     std::shared_ptr<const ContentIndex> content; // may be null
     DocExtractor* extractor = nullptr; // null: documents the index has no text of are Unreadable
+    bool verifyFileVersion = false; // detail views need the opened file's exact cache stamp
+    bool preserveLocations = false; // return structured text without flattening its places
 };
 
 // `path`: full, native ("C:\dir\file.docx"). `maxBytes`: the largest file to
 // read (a document's extraction; a text file is read up to its first 16 MB
 // regardless).
 Result read(const std::wstring& path, const Sources& sources, std::int64_t maxBytes, const std::function<bool()>& cancelled);
+// The same for a file opened already, with any access (FILE_FLAG_BACKUP_
+// SEMANTICS lets a folder be one), whose final path is `path` (for the
+// content index and the kind): read through that handle, so what a caller
+// checked is what is read, whatever the path is made to lead to meanwhile.
+Result read(void* file, const std::wstring& path, const Sources& sources, std::int64_t maxBytes, const std::function<bool()>& cancelled);
 
 // The start of a text file, for looking at it (the launcher's preview): its
 // first `maxBytes` decoded as the content search decodes it (BOM, else valid

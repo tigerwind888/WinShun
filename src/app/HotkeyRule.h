@@ -1,6 +1,7 @@
 #pragma once
 
-#include "Settings.h"
+#include "platform/HotkeyText.h"
+#include "PreviewShortcut.h"
 
 #include <QObject>
 #include <QString>
@@ -8,7 +9,7 @@
 
 namespace ws {
 
-// Settings::hotkeyAllowed for the settings window's shortcut recorder, so
+// hotkeys::allowed (Settings::hotkeyAllowed) for the shortcut recorders, so
 // that what it takes and what AI may set are one rule.
 class HotkeyRule : public QObject {
     Q_OBJECT
@@ -21,7 +22,8 @@ public:
     {
     }
 
-    Q_INVOKABLE bool allowed(const QString& shortcut) const { return Settings::hotkeyAllowed(shortcut); }
+    Q_INVOKABLE bool allowed(const QString& shortcut) const { return hotkeys::allowed(shortcut); }
+    Q_INVOKABLE bool previewAllowed(const QString& shortcut) const { return previewkeys::allowed(shortcut); }
 };
 
 } // namespace ws

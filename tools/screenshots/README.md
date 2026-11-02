@@ -26,6 +26,19 @@ README 必须保持原有视觉格式：`square` 方形海报模板，保留 Win
 
 ## 只重新出图
 
+0.17.0 的补拍入口是 `release017.py`，继续使用这套方形品牌模板。`--work` 必须是新目录；`--capture-only` 先保留原图，检查后用 `--export-only` 输出。新版增加左侧编号、五标签内容详情、两页首次设置及文件夹菜单分页，更新剪贴板大小、录屏控制条和受影响设置页。目录内保存程序及截图插件 SHA256、原图、无损海报和来源清单。结果页的原生尺寸检查用 150%，其余离屏渲染用 200%；不改系统缩放。
+
+```powershell
+python tools/screenshots/release017.py --exe <独立部署目录>/WinShun.exe --capture <构建目录>/library-plugins/winshun.capture/WinShunCapture.exe --work <新的原图目录> --capture-only
+python tools/screenshots/release017.py --exe <独立部署目录>/WinShun.exe --work <原图目录> --export-only --onboarding <首次设置原图.png> --foldermenu <favorites-light.png>
+```
+
+首次设置原图由独立程序的 `--probe-runtime <新目录> --onboarding-probe apply --scale 2 --renderer d3d11` 导出 `onboarding.png`；此探针隔离配置、HKCU 和快捷键。文件夹菜单来自生产组件的 `tst_foldermenu`，设置 `WINSHUN_MENU_EVIDENCE=<新目录>`、`QT_ENABLE_HIGHDPI_SCALING=0`、`QT_SCALE_FACTOR=2` 后运行该项测试，取 `favorites-light.png`。海报裁取前八个演示收藏夹；后面的长名称及滚动压力数据不进入海报。不要以隐藏首窗的方式启动这个原生测试，否则窗口曝光检查会失败。
+
+组合结果探针在替换模型／图片时会记录 `PanelRow` 的空模型和 `ClipRow` 的 `undefined` 图片警告。入口保留日志，仅在三份行为报告全部通过且没有其他警告时接受这些已知绘制警告；不将其描述为整个预览零警告。其他模式及实际发布验证见对应版本验证记录。
+
+0.17.0 补拍更正：最初把 200% 的两项尺寸断言失败归因于原生 DPI 差异，后续几何日志排除了这个判断。根因是探针直接调用窗口的 `setPosition`，没有同步 `Placement.room`；第一次宽度拖动结束时自动行数从受限状态恢复，窗口高度随之增长。探针现改用生产 `Placement.attach` 布置足够空间，150% 和 200% 的 22 项检查均通过。验证可自动调整尺寸的窗口时，必须通过真实定位接口布置场景，避免用不同步控制器状态的裸窗口移动。
+
 0.15.0 的补拍入口是 `release015.py`。它启动已构建的真实程序，使用现有的 `--preview-*` 模式和临时配置，导出新版搜索面板、可调宽的剪贴板、外观预览、截图工具条及 MP4 / GIF 控制窗口，再交给同一个 `art.compose(..., "square", ...)` 模板。录屏验证会短暂显示它自己的演示窗口，只录这个窗口的客户区；不退出正在运行的 Win顺，不监听或改写系统剪贴板，不改系统主题和缩放。
 
 ```powershell
@@ -112,6 +125,7 @@ tools\screenshots\run.ps1 -Exe <要拍的 WinShun.exe，发布版，带拖放圆
 - 代理会丢掉参数开头的空格：要打“关键词 + 空格 + 文字”，先 `tap 23`（End）、`tap 20`（空格）再 `type`。
 - 开拍前系统剪贴板里要有东西（比如复制一段字）：场景开头按 Delete 删掉 Win顺 启动时记下的那一条，剪贴板是空的时它什么都没记，删掉的就是演示历史里最新的那张图片，剪贴板搜图里的字那张就没了。
 - Windows 11 的文本光标指示器（品红色）可能被抠进图里；演示配置只排除了各盘的文件夹，盘根目录下的文件仍能搜到，查询别碰上它们。
+- 截图 0.17 起是插件（GitHub #138）：`profile --capture` 把构建出的插件（`build\release\library-plugins\winshun.capture`，别处的用 `--capture-plugin <文件夹>`）复制进演示配置的 `plugins\`、打开它，快捷键写进它自己的 `capture.ini`；`release016.py` 拍截图工具条和录屏面板要 `--capture <WinShunCapture.exe>`，它用 `--exe` 那个文件夹里的 Qt。
 - `profile start` 现在会把 `demo/` 里新加的文件补进 `F:\Win顺演示`（只加不改不删）；新文件的修改时间写在 `stage.CHANGED` 里（要老，别让“最新的在前”那张图里冒出它们）。
 - 资源管理器里别连点同一行：第二下是改名，打进去的字就改了演示文件夹里的名字（`Esc` 取消）。用 `front` 把窗口放前面，只点一次没选过的行。
 - `profile stop` 现在用普通权限启动用户自己的那份（以前是提权的，要自己 `--quit` 再启动）；`QuitWs` 也会退掉 `dist` 里正在跑的那份，所以用 `-Exe` 拍别的构建时不用先退它。

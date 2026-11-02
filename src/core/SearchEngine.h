@@ -2,6 +2,7 @@
 
 #include "ContentIndex.h"
 #include "Favorites.h"
+#include "History.h"
 #include "SearchTypes.h"
 #include "WebShortcut.h"
 #include "WorkerPool.h"
@@ -40,6 +41,11 @@ bool rankedBefore(const SearchResult& a, const SearchResult& b, RankBy by) noexc
 // candidate (SearchEngine::contentLeftOut): the launcher offers each part
 // after the last row, to be searched this once (Request::contentSet).
 struct ContentLeftOut {
+    int unreadable = 0;
+    QStringList unreadableSamples; // bounded examples for the summary/report
+    int truncated = 0;
+    int indexExcluded = 0;
+    qint64 elapsedMs = 0;
     QStringList large; // over the size limit, by path (the content index knew some, the rest were opened)
     int lowPriority = 0; // of a listed type, in system, program and tool folders (not asked for: contentInLowPriority)
     int otherTypes = 0; // text of a kind not listed (OtherTextTypes)
@@ -47,6 +53,9 @@ struct ContentLeftOut {
     // Of a listed type, on a share or in WSL, the content index not having
     // read them: their share's contents are not indexed, or not yet (GitHub #114).
     int remote = 0;
+    // Automatic search leaves unindexed files, broad terms without grams,
+    // and unavailable document text for an explicit content search.
+    int deferred = 0;
     friend bool operator==(const ContentLeftOut&, const ContentLeftOut&) = default;
 };
 
@@ -164,6 +173,7 @@ public:
         // starts as the shorter one did, more after it; so do content matches.
         int limit = 100;
         QStringList history; // newest first
+        History::Affinities historyAffinity; // query-specific weights, copied on the GUI thread
         QStringList contentExtensions; // e.g. {"txt"}
         ContentSizeLimits contentSizeLimits; // by kind of file
         bool contentDocuments = true; // and Word, Excel, PowerPoint, PDF (documentExtensions())
@@ -171,8 +181,11 @@ public:
         // Also inside system, program and tool folders (EntryFlag::LowPriority).
         bool contentInLowPriority = false;
         // Files read at once (each open waits for the antivirus, so more
-        // than processors). Asked for (内容): many; 全部's own: a few.
+        // than processors). Asked for (内容): many; 全部's own: one.
         int contentThreads = 4;
+        // Automatic 全部 search: verify indexed candidates only, never launch
+        // document parsers. Explicit 内容 searches retain live file reads.
+        bool contentIndexedOnly = false;
         ContentSet contentSet = ContentSet::Listed;
         // ContentSet::Given: the files, by path (the ones a scan before left
         // out for being over the size limit, ContentLeftOut::large, asked for
@@ -194,11 +207,20 @@ public:
         // Listed first with nothing typed, the first few that match first
         // when typed, a favorite's keyword alone on top (after a web one).
         FavoriteList favorites;
+        bool favoritesOnStart = true; // visibility before typing; still searched by name/keyword
+        int recentItems = 5; // recently opened items before typing, bounded to 1..200
         // 全部, nothing typed: these places (as History has them,
         // placePath) listed first, above the favorites, marked statusRow:
         // a switch that is on and must be seen to be ended (keep awake).
         // Others in the start list: none, a switch is never listed there.
         QStringList pinnedPlaces;
+        // 全部 also finds apps, and Windows' settings pages, Control Panel
+        // items and switches ("关蓝牙"): typed, and in the start list. Off,
+        // names and content only (a favorite app or place stays).
+        bool apps = true;
+        bool places = true;
+        // Every term of `text` is a regex (parseQuery's regexTerms; names only).
+        bool regex = false;
     };
 
     explicit SearchEngine(

@@ -6,6 +6,7 @@
 #include "LauncherNavigation.h"
 #include "ResultModel.h"
 #include "PanelColumns.h"
+#include "ContentPane.h"
 #include "SearchEngine.h"
 #include "SearchTypes.h"
 #include "WebShortcut.h"
@@ -13,6 +14,7 @@
 
 #include <QElapsedTimer>
 #include <QObject>
+#include <QKeySequence>
 #include <QPointer>
 #include <QRectF>
 #include <QSet>
@@ -56,6 +58,7 @@ class Launcher : public QObject {
     Q_PROPERTY(Scope scope READ scope WRITE setScope NOTIFY scopeChanged FINAL)
     Q_PROPERTY(ws::ResultModel* results READ results CONSTANT FINAL)
     Q_PROPERTY(ws::PanelColumns* panelColumns READ panelColumns CONSTANT FINAL)
+    Q_PROPERTY(ws::ContentPane* contentPane READ contentPane CONSTANT FINAL)
     Q_PROPERTY(QString statusText READ statusText NOTIFY statusChanged FINAL)
     Q_PROPERTY(bool busy READ busy NOTIFY statusChanged FINAL)
     // Scrolled to the end, there is more to list (loadMore()): names beyond
@@ -111,6 +114,7 @@ class Launcher : public QObject {
     // or "" for none (Settings::numberKeys).
     Q_PROPERTY(QString numberKeys READ numberKeys NOTIFY resultOptionsChanged FINAL)
     Q_PROPERTY(QString numberHints READ numberHints NOTIFY resultOptionsChanged FINAL)
+    Q_PROPERTY(QString previewHotkey READ previewHotkey NOTIFY resultOptionsChanged FINAL)
     // Bits 1 << n of the digits n left to another program's global hotkey
     // (numberkeys::heldMask): their rows show the chord struck through.
     Q_PROPERTY(int numberKeysLeft READ numberKeysLeft NOTIFY resultOptionsChanged FINAL)
@@ -183,6 +187,10 @@ class Launcher : public QObject {
     // Ctrl while it is in front) hides it. Kept while hidden, until turned
     // off or the program restarts. The app does the rest (App.cpp).
     Q_PROPERTY(bool pinned READ pinned WRITE setPinned NOTIFY pinnedChanged FINAL)
+    // Regex mode (Ctrl+R, as Everything's): every word typed is a regular
+    // expression on names (parseQuery's regexTerms), in 全部 and 文件; 内容
+    // is as ever. Kept in the settings (regexModeChanged).
+    Q_PROPERTY(bool regexMode READ regexMode WRITE setRegexMode NOTIFY regexModeChanged FINAL)
     // Its filters, applied in the panel alone (the box is the plain quick
     // search): when written (dateChoice: 0 不限, 1 今天, 2 最近 7 天, 3 最近
     // 30 天, 4 今年, 5 自定义 with dateFrom and dateTo as "yyyy-MM-dd", either
@@ -307,6 +315,9 @@ public:
     };
     // `keyword` empty: no keyword (the capture off, or the word another's).
     void setScreenshots(const QString& keyword, ScreenshotHooks hooks);
+    // Whether a plugin pins and edits pictures (App::picturePlugin): 贴到屏幕
+    // and 编辑 on pictures only then.
+    void setPictureVerbs(bool pin, bool edit) { m_pictureVerbs = {pin, edit}; }
     QString screenshotKeyword() const { return m_shotKeyword; }
     bool screenshotMode() const;
     void refreshScreenshots(); // the history changed: listed again while shown
@@ -389,11 +400,12 @@ public:
     bool searchesContent() const { return m_scope == Content || m_withContent; }
     bool contentEnabled() const { return m_contentEnabled; }
     bool contentIndex() const { return m_contentIndex; }
+    ContentPane* contentPane() { return m_contentPane.get(); }
     void setContentIndex(bool on);
     // The strip's switch: contentIndexRequested, the app changes the setting.
     Q_INVOKABLE void requestContentIndex(bool on) { emit contentIndexRequested(on); }
 
-    void setWindow(QWindow* window) { m_window = window; }
+    void setWindow(QWindow* window) { m_window = window; if (m_contentPane) m_contentPane->setWindow(window); }
     // `enabled` false: no 内容, and 全部 finds names only; a launcher in 内容 goes to 全部.
     void setContentOptions(bool enabled, QStringList extensions, const ContentSizeLimits& sizeLimits,
         bool inLowPriority, bool documents);
@@ -419,6 +431,7 @@ public:
     void setSort(Sort sort);
     StartList startList() const { return m_startList; }
     void setStartList(StartList list);
+    void setStartOptions(int recentItems, bool favorites);
     // Ctrl+S: with nothing typed, the other start list; else the next order
     // (best match, newest, oldest).
     Q_INVOKABLE void switchOrder();
@@ -429,6 +442,9 @@ public:
     void setTabEntersFavoriteFolder(bool on);
     QString numberKeys() const { return m_numberKeys; }
     QString numberHints() const { return m_numberHints; }
+    QString previewHotkey() const { return m_previewHotkey; }
+    void setPreviewHotkey(const QString& shortcut);
+    Q_INVOKABLE bool isPreviewKey(int key, int modifiers) const;
     void setNumberHints(const QString& hints);
     int numberKeysLeft() const { return static_cast<int>(m_numberKeysLeft); }
     void setNumberKeysLeft(unsigned digits);
@@ -476,6 +492,9 @@ public:
     // notification (Host::toastRequested), held to its permissions as an
     // action's are.
     void applyPluginEffects(const QString& pluginId, const QList<ws::plugin::Effect>& effects) { applyEffects(pluginId, effects); }
+    // An explicit selection from another Win顺 view; no system clipboard write.
+    void runPluginCommand(const QString& pluginId, const QString& commandId, const QString& actionId,
+        const QString& text, const QStringList& files);
     // Its list is opening from a click on that plugin's notification: for a
     // moment (kToastOpenMs) a row coming in on top under the keyboard's first
     // row keeps the keyboard there, once (followCurrentRow): it is what the
@@ -548,6 +567,8 @@ public:
     void setFileTypes(const FileTypes& types); // named (Settings::namedFileTypes)
     void setFolderKeyword(const QString& keyword);
     QString folderKeyword() const { return m_folderKeyword; }
+    // 全部 also finds apps, and Windows' settings and switches (Request::apps, places).
+    void setSearchKinds(bool apps, bool places);
     // A chip of the strip: kFoldersChip (文件夹), -1 (不限), or a kind
     // (fileTypes); in 文件 (or 文件夹) from any scope.
     static constexpr int kFoldersChip = -2;
@@ -609,6 +630,9 @@ public:
     bool pinned() const { return m_pinned; }
     void setPinned(bool on);
     Q_INVOKABLE void togglePin() { setPinned(!m_pinned); } // Ctrl+T
+    bool regexMode() const { return m_regexMode; }
+    void setRegexMode(bool on);
+    Q_INVOKABLE void toggleRegexMode(); // Ctrl+R: says so in the footer
     // The search icon clicked (not dragged, WindowFrame::handleClicked):
     // the settings window (settingsRequested).
     Q_INVOKABLE void openSettings() { emit settingsRequested(); }
@@ -670,6 +694,7 @@ signals:
     void keyHintsChanged();
     void sortChanged();
     void startListChanged();
+    void regexModeChanged();
     void resultOptionsChanged();
     void inTaskbarBoxChanged();
     void fieldReported(const QString& text, int cursor, int selectionStart, int selectionEnd, const QString& composition);
@@ -787,6 +812,8 @@ private:
     QString contentNeedle() const;
     QString shownExtensions() const;
     void startContentSearch();
+    SearchEngine::Request contentRequest() const;
+    void syncContentPane();
     void showRows(SearchResults rows, QStringList highlights);
     // Web suggestions (WebSuggester). Part of search(): the site's asked for
     // the words typed after its keyword, or the rows go (another site, no
@@ -885,6 +912,7 @@ private:
     SearchEngine* m_engine;
     History* m_history;
     ResultModel m_results;
+    std::unique_ptr<ContentPane> m_contentPane;
     QPointer<QWindow> m_window;
     std::function<bool(const QString& folder)> m_folderOpener; // setFolderOpener
     std::function<bool(const QString& path)> m_revealer; // setRevealer
@@ -996,6 +1024,12 @@ private:
     QVariantMap m_keyHints; // see keyHints
     FileTypes m_fileTypes;
     QString m_folderKeyword = QStringLiteral("folder");
+    bool m_searchApps = true;
+    bool m_searchPlaces = true;
+    bool m_regexMode = false;
+    bool m_shownRegex = false; // of the rows on screen, as m_shownText
+    // What is typed is parsed as regexes (regexMode, and not 内容).
+    bool regexTerms() const { return m_regexMode && m_scope != Content; }
     struct PrefixScope { Scope scope; QStringList typeKeys; bool folders; };
     std::optional<PrefixScope> m_filePrefix;
     QString m_prefixWords;
@@ -1043,12 +1077,16 @@ private:
     QStringList m_excludedFileNames; // ... nor so named (Settings::excludedFileNames)
     Sort m_sort = BestMatch;
     StartList m_startList = RecentlyOpened;
+    int m_recentItems = 5;
+    bool m_favoritesOnStart = true;
     bool m_showModified = true;
     bool m_showFileSize = false;
     bool m_doubleClickToOpen = false;
     bool m_tabEntersFavoriteFolder = false;
     QString m_numberKeys = QStringLiteral("ctrl");
-    QString m_numberHints = QStringLiteral("held");
+    QString m_numberHints = QStringLiteral("always");
+    QString m_previewHotkey = QStringLiteral("Alt+P");
+    QKeySequence m_previewSequence {QStringLiteral("Alt+P")};
     unsigned m_numberKeysLeft = 0;
     bool m_inTaskbarBox = false;
     bool m_systemMenuOpen = false; // the shell's menu is up (its loop runs inside runSystemMenu)
@@ -1103,6 +1141,7 @@ private:
     std::optional<KeywordMode> m_keyword;
     QString m_shotKeyword; // setScreenshots
     ScreenshotHooks m_shotHooks;
+    struct { bool pin = false; bool edit = false; } m_pictureVerbs;
     QSet<QString> m_pluginPending; // answering the current query
     QElapsedTimer m_pluginTimer; // since they were asked
     qint64 m_pluginElapsedUs = 0; // keyword mode: until the answer

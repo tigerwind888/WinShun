@@ -7,6 +7,7 @@
     ./scripts/build.ps1 -Config Debug
     ./scripts/build.ps1 -Deploy              # also produce dist/WinShun with all Qt DLLs
     ./scripts/build.ps1 -DeployDir F:\wsstage\WinShun   # the same, into that folder (dist\WinShun untouched)
+    ./scripts/build.ps1 -BuildDir F:\wsstage\build -DeployDir F:\wsstage\WinShun
     ./scripts/build.ps1 -QtDir C:\Qt\6.12.0\msvc2022_64
 #>
 param(
@@ -16,7 +17,9 @@ param(
     # Where to deploy (implies -Deploy); default dist\WinShun. For a staged
     # copy to compare with, or test from, while the deployed one is running.
     [string] $DeployDir,
-    [switch] $SkipTests
+    [string] $BuildDir, # optional isolated CMake binary directory; defaults to build/<config>
+    [switch] $SkipTests,
+    [switch] $IncludeOcr # full offline deployment; the standard package downloads enhanced OCR on demand
 )
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
@@ -51,39 +54,61 @@ if (-not (Get-Command cl.exe -ErrorAction SilentlyContinue)) {
 }
 
 $preset = $Config.ToLower()
+$binary = if ($BuildDir) { [IO.Path]::GetFullPath($BuildDir) } else { Join-Path $root "build\$preset" }
+$dist = if ($DeployDir) { [IO.Path]::GetFullPath($DeployDir) } else { Join-Path $root 'dist\WinShun' }
+function Assert-DeploymentTarget {
+    $target = $dist.TrimEnd('\', '/')
+    foreach ($protected in @([IO.Path]::GetPathRoot($target), $root, $binary)) {
+        $protected = $protected.TrimEnd('\', '/')
+        if ($protected.Equals($target, [StringComparison]::OrdinalIgnoreCase) -or
+            $protected.StartsWith($target + '\', [StringComparison]::OrdinalIgnoreCase)) {
+            throw "Deployment would replace a drive, source or build directory: $dist"
+        }
+    }
+    if (Test-Path -LiteralPath (Join-Path $dist 'data')) { throw "User data exists in $dist; choose a fresh -DeployDir." }
+    $running = Get-Process WinShun -ErrorAction SilentlyContinue | Where-Object {
+        $_.Path -and [IO.Path]::GetFullPath($_.Path).StartsWith($target + '\', [StringComparison]::OrdinalIgnoreCase)
+    }
+    if ($running) { throw "The copy in $dist is running; choose a fresh -DeployDir." }
+}
+if ($Deploy) { Assert-DeploymentTarget }
 Push-Location $root
 try {
-    cmake --preset $preset
+    cmake --preset $preset -B $binary
     if ($LASTEXITCODE) { throw 'configure failed' }
-    cmake --build --preset $preset
+    cmake --build $binary --config $Config
     if ($LASTEXITCODE) { throw 'build failed' }
     if (-not $SkipTests) {
-        ctest --preset $preset --output-on-failure
+        ctest --test-dir $binary -C $Config --output-on-failure
         if ($LASTEXITCODE) { throw 'tests failed' }
     }
     if ($Deploy) {
-        $dist = if ($DeployDir) { [IO.Path]::GetFullPath($DeployDir) } else { Join-Path $root 'dist\WinShun' }
-        if (Test-Path $dist) { Remove-Item $dist -Recurse -Force }
+        Assert-DeploymentTarget # a running copy or data may have appeared during the build
+        if (Test-Path -LiteralPath $dist) { Remove-Item -LiteralPath $dist -Recurse -Force }
         New-Item -ItemType Directory -Force $dist | Out-Null
-        Copy-Item "$root\build\$preset\WinShun.exe" $dist
-        Copy-Item "$root\build\$preset\fonts" $dist -Recurse # UI font (see main.cpp)
+        Copy-Item "$binary\WinShun.exe" $dist
+        New-Item -ItemType Directory -Force "$dist\fonts" | Out-Null
+        Copy-Item "$binary\fonts\AlibabaPuHuiTi-3-55-Regular.ttf" "$dist\fonts"
         # The button users pin to the taskbar (src/stub).
-        Copy-Item "$root\build\$preset\WinShunSearch.exe" $dist
+        Copy-Item "$binary\WinShunSearch.exe" $dist
         # The MCP server AI clients start (src/mcp); it relays to WinShun over a pipe.
-        Copy-Item "$root\build\$preset\WinShunMcp.exe" $dist
+        Copy-Item "$binary\WinShunMcp.exe" $dist
+        # The command line ws.exe (src/cli), alone in bin\: that folder goes on PATH, never one with Qt's DLLs.
+        New-Item -ItemType Directory -Force "$dist\bin" | Out-Null
+        Copy-Item "$binary\bin\ws.exe" "$dist\bin"
         # Plugin processes are started by WinShunPluginHost.exe (src/plugin/runner), with the user's normal rights.
-        Copy-Item "$root\build\$preset\WinShunPluginHost.exe" $dist
+        Copy-Item "$binary\WinShunPluginHost.exe" $dist
         # The index service (src/service): reads the MFT and change journals for a Win顺 with normal rights.
-        Copy-Item "$root\build\$preset\WinShunService.exe" $dist
+        Copy-Item "$binary\WinShunService.exe" $dist
         # The in-app update's helper (src/updater): swaps a portable copy's files while Win顺 is closed.
-        Copy-Item "$root\build\$preset\WinShunUpdate.exe" $dist
+        Copy-Item "$binary\WinShunUpdate.exe" $dist
         # The plugins that come with Win顺 (plugins\, staged by the build with
         # their SDK files and WinShunTools.exe): installed off by default.
-        Copy-Item "$root\build\$preset\plugins" "$dist\plugins" -Recurse
+        Copy-Item "$binary\plugins" "$dist\plugins" -Recurse
         # Documents are read by WinShunExtract.exe (src/extract), PDFs with
         # PDFium; their licenses go along.
-        Copy-Item "$root\build\$preset\WinShunExtract.exe", "$root\build\$preset\pdfium.dll" $dist
-        $pdfium = Get-ChildItem "$root\build\$preset\_deps" -Directory -Filter 'pdfium-*' | Sort-Object Name | Select-Object -Last 1
+        Copy-Item "$binary\WinShunExtract.exe", "$binary\pdfium.dll" $dist
+        $pdfium = Get-ChildItem "$binary\_deps" -Directory -Filter 'pdfium-*' | Sort-Object Name | Select-Object -Last 1
         New-Item -ItemType Directory -Force "$dist\licenses\pdfium" | Out-Null
         Copy-Item "$($pdfium.FullName)\LICENSE" "$dist\licenses\pdfium\LICENSE.txt"
         Copy-Item "$($pdfium.FullName)\licenses\*" "$dist\licenses\pdfium"
@@ -92,19 +117,21 @@ try {
         Copy-Item "$root\third_party\phosphor\LICENSE" "$dist\licenses\phosphor.txt"
         # The words in pictures (platform/PaddleOcr): ONNX Runtime and the
         # PP-OCRv6 tiny models, with their licenses.
-        Copy-Item "$root\build\$preset\onnxruntime.dll" $dist
-        Copy-Item "$root\build\$preset\ocr" "$dist\ocr" -Recurse
-        $ort = Get-ChildItem "$root\build\$preset\_deps" -Directory -Filter 'onnxruntime-win-x64-*' | Sort-Object Name | Select-Object -Last 1
+        if ($IncludeOcr) {
+            Copy-Item "$binary\onnxruntime.dll" $dist
+            Copy-Item "$binary\ocr" "$dist\ocr" -Recurse
+        }
+        $ort = Get-ChildItem "$binary\_deps" -Directory -Filter 'onnxruntime-win-x64-*' | Sort-Object Name | Select-Object -Last 1
         New-Item -ItemType Directory -Force "$dist\licenses\onnxruntime" | Out-Null
         Copy-Item "$($ort.FullName)\LICENSE" "$dist\licenses\onnxruntime\LICENSE.txt"
         Copy-Item "$($ort.FullName)\ThirdPartyNotices.txt" "$dist\licenses\onnxruntime"
         Copy-Item "$root\third_party\ppocr\LICENSE" "$dist\licenses\paddleocr.txt"
-        # QR codes (capture/QrCode): zxing-cpp, Apache-2.0, compiled into WinShun.exe.
-        Copy-Item "$root\third_party\zxing-cpp\LICENSE" "$dist\licenses\zxing-cpp.txt"
+        Copy-Item "$root\resources\fonts\LICENSE.txt" "$dist\licenses\alibaba-font.txt"
         # Only what the app uses: no shader compilers (software renderer), no
         # QML debugger, network, TLS or SVG plugins, and of the database
         # drivers only SQLite (the clipboard history).
-        & "$QtDir\bin\windeployqt.exe" --qmldir "$root\src\app\qml" --no-translations --no-system-d3d-compiler `
+        # The library plugins share the host's Qt, including their QML imports.
+        & "$QtDir\bin\windeployqt.exe" --qmldir "$root\src" --no-translations --no-system-d3d-compiler `
             --no-system-dxc-compiler --no-opengl-sw --no-compiler-runtime `
             --skip-plugin-types qmltooling,generic,networkinformation,tls,iconengines,imageformats `
             --exclude-plugins qsqlibase,qsqlmimer,qsqloci,qsqlodbc,qsqlpsql `

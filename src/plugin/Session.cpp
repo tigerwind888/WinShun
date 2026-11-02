@@ -90,6 +90,24 @@ void Session::receive(const QByteArray& line)
         } else if (method == u"winshun/refresh") {
             if (m_handlers.refresh)
                 m_handlers.refresh();
+        } else if (method == u"winshun/hotkeys") {
+            if (m_handlers.hotkeys) {
+                QStringList keys;
+                for (const QJsonValue& key : message->params.value(u"keys"_s).toArray()) {
+                    if (key.isString() && keys.size() < 32)
+                        keys.append(key.toString().left(64));
+                }
+                m_handlers.hotkeys(keys);
+            }
+        }
+        else if (method == u"systemSwitches/changed" && m_handlers.systemSwitchesChanged) {
+            QStringList ids;
+            for (const QJsonValue& id : message->params.value(u"ids"_s).toArray()) {
+                if (id.isString() && id.toString().size() <= 32 && ids.size() < 7)
+                    ids.append(id.toString());
+            }
+            if (!ids.isEmpty())
+                m_handlers.systemSwitchesChanged(ids);
         }
         // Others: nothing to do.
         return;

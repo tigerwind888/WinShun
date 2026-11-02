@@ -52,6 +52,7 @@ struct NetworkShare {
     QString path; // "\\host\share", or a folder in it (unc::normalize)
     QString name; // shown instead of the path; empty: the path
     bool content = false; // its files' contents indexed too ([Shares] N\Content; GitHub #114)
+    ShareScan scan;
 
     bool operator==(const NetworkShare&) const = default;
 };
@@ -78,6 +79,10 @@ struct PluginConfig {
 // (%APPDATA%\WinShun\WinShun.ini). Missing keys are written back with
 // their defaults so every option is discoverable in the file.
 struct Settings {
+    // Existing profiles and deliberately prepared profiles skip the welcome
+    // screen. load() marks an empty profile incomplete before writing defaults.
+    bool onboardingComplete = true;
+    bool onboardingCapturePending = false;
     // [Launcher]
     bool doubleCtrl = true; // a double tap opens the launcher: of Ctrl, Alt or Shift (doubleTapKey)
     QString doubleTapKey = QStringLiteral("ctrl"); // ctrl | alt | shift
@@ -135,6 +140,7 @@ struct Settings {
     // does the same. Off for new installs, like dialogBar; turned on, auto.
     // An ini from before without the key has auto.
     QString folderMenu = QStringLiteral("off");
+    bool folderMenuMiddle = false; // also open it with the middle button on blank space (#137)
     bool folderMenuExplorer = true; // in File Explorer's folders
     bool folderMenuDesktop = true; // on the desktop
     // Which groups the menu lists (GitHub #51). All on is what it always
@@ -175,6 +181,11 @@ struct Settings {
     // Opt in to the former behavior: in 全部, Tab browses a favorite folder.
     bool tabEntersFavoriteFolder = false;
     bool thumbnails = true; // a picture, video, PDF found shows its thumbnail for an icon
+    // 全部 also finds apps, and Windows' settings pages, Control Panel items
+    // and switches; off, it finds names and content only (SearchEngine::Request).
+    bool searchApps = true;
+    bool searchSystem = true;
+    bool regexMode = false; // the search box's (Launcher::regexMode, Ctrl+R)
     // match | newest | oldest | name | folder | type | largest | smallest
     // (kSortNames): how 文件 and 文件夹 order what they find, by best match,
     // by when last written, or (#44) by name, folder, type or size (the
@@ -184,6 +195,8 @@ struct Settings {
     // the files written last (the footer's switch, remembered), or nothing
     // but the favorites (GitHub #24: nothing of what was done shows).
     QString startList = QStringLiteral("opened");
+    int recentItems = 5; // how many recently opened items to list, 1..200 (GitHub #119)
+    bool favoritesOnStart = true; // show favorites before typing; keywords always work (#135)
     // Each time the launcher opens, nothing is typed and the scope is 全部, as
     // at its first opening (GitHub #24); else it keeps the words, selected.
     bool clearOnOpen = false;
@@ -191,11 +204,12 @@ struct Settings {
     // the bar by file dialogs (other programs' hotkeys stay theirs, see numberkeys).
     QString numberKeys = QStringLiteral("ctrl");
     // held | always | off: shared by the launcher's and clipboard's row hints.
-    QString numberHints = QStringLiteral("held");
+    QString numberHints = QStringLiteral("always");
     // auto | builtin: what Alt+P on a row shows the file with. auto: QuickLook
     // or Seer when one is running in the background (FilePreview), else
     // Win顺's own preview window; builtin: always that.
     QString previewWith = QStringLiteral("auto");
+    QString previewHotkey = QStringLiteral("Alt+P"); // local; empty disables keyboard preview
 
     // [FileTypes]: what 文件 can be narrowed to, in the strip under the
     // search box (图片: jpg, png…), in its user's order. Written as an
@@ -223,13 +237,6 @@ struct Settings {
     // lower case, aliases folded ("Control" and "Meta" as ctrl and win); empty
     // for what is not a modifier or two and one key.
     static QString normalizedHotkey(const QString& shortcut);
-    // The ids of the capture toolbar's action buttons, in its order.
-    static QStringList captureToolbarButtonIds();
-    // `text` (comma separated ids) cut to the known ones: each once, in the toolbar's order.
-    static QString normalizedToolbarHidden(const QString& text);
-    // The user's words to hide, from one line or several, separated by commas,
-    // semicolons or line breaks (Chinese ones too); trimmed, none empty or twice.
-    static QStringList normalizedSmartWords(const QString& text);
     // The rule for a shortcut a person (settings window) or AI sets: Ctrl, Alt
     // or Win held with its key, or a function key (F1 to F24) alone or with
     // Shift. A bare letter, Enter, Space, PrintScreen or Shift+letter would
@@ -343,6 +350,8 @@ struct Settings {
     bool clipboardClickToPaste = false; // a click pastes the row (Windows' way); off: picks it, a double click pastes
     bool clipboardLargePictures = false; // pictures on taller rows, thumbnails large enough to make out
     bool clipboardKeepPlace = false; // pasting from the history leaves the entry where it is (GitHub #122); off: it moves to the top
+    bool clipboardAtPointer = false; // always open beside the mouse, including over our own fields (GitHub #105)
+    bool clipboardPauseInFullScreen = false; // only global opening hotkeys, not recording or menu actions (#121)
     // Opened over the caret (or a search box; Placement::above), the window
     // turned upside down: the newest entry by the caret, older ones upwards.
     bool clipboardFlipAbove = true;
@@ -359,78 +368,20 @@ struct Settings {
     bool taskbarSearchBox = false; // Win顺's own search box on the taskbar (taskbar::SearchBox)
     QString taskbarSearchBoxStyle = QStringLiteral("box"); // box | label | icon: the widest form it takes, as Windows' own
 
-    // [Capture]: the screen capture (src/capture), shown as a card on the
-    // 插件 page. Off until turned on; nothing of it is made while off.
+    // [Capture]: the screenshot is a plugin of the plugin library since
+    // 0.17 (winshun.capture, GitHub #138), with its settings in its own
+    // capture.ini. What Win顺 keeps of the group: Enabled, read only, which
+    // MovedPlugins acts on (the plugin installed and the group moved to it);
+    // PrintScreenBefore (what PrintScreenKeyForSnippingEnabled was before an
+    // older Win顺 took PrtScn: "absent" or the number), put back while the
+    // plugin is not there to keep it (App::restorePrintScreen); Keyword,
+    // typed first in the search box with a space after it: the screenshot
+    // history (jt) of the clipboard history's screenshots, while the plugin
+    // is on. Plugins' keywords alike give way to it; a web search's or a
+    // favorite's alike is refused when set.
     bool captureEnabled = false;
-    QString captureHotkey; // no default (PixPin and Snipaste have the usual ones): the user records one
-    bool capturePrintScreen = false; // PrtScn captures too, taken from the Snipping Tool (printscreen::)
-    // What PrintScreenKeyForSnippingEnabled was before PrtScn was taken
-    // ("absent" or the number), to put back when given up; empty while not taken.
     QString capturePrintScreenBefore;
-    bool captureCopyOnSelect = false; // letting go of a drag or a click on a window copies at once
-    bool captureMagnifier = true; // the magnifier with the colour beside the pointer while picking an area
-    bool capturePinOnCopy = false; // copying a screenshot also pins it (#59)
-    // What a mouse button does once a selection is there (and no annotation
-    // tool, stroke or text is under way): none | copy | copypin | save | pin | ocr |
-    // ocrcopy | ocrsearch | ocrweb | cancel, the right button also back (Esc's
-    // step back). Issue #46; the ocr... ones (#57) read the picture and go on
-    // at once: to the clipboard, the search box, the web search.
-    QString captureMouseDoubleLeft = QStringLiteral("copy");
-    QString captureMouseRight = QStringLiteral("back");
-    QString captureMouseMiddle = QStringLiteral("none");
-    QString captureMouseBack = QStringLiteral("none"); // the side button toward the user (X1)
-    QString captureMouseForward = QStringLiteral("none"); // X2
-    // The capture toolbar's action buttons left off it (#57), comma separated:
-    // undo, redo, copy, save, pin, ocr, long, cancel (captureToolbarButtonIds); empty
-    // shows them all. Their keys work all the same.
-    QString captureToolbarHidden;
-    // Keyword=: typed first in the search box with a space after it, the
-    // screenshot history (the launcher's jt). Plugins' keywords alike give
-    // way to it; a web search's or a favorite's alike is refused when set.
     QString captureKeyword = QStringLiteral("jt");
-    // What each annotation tool remembers (width, colour, ...), as JSON in
-    // logical units (annot::StyleMemory); empty until a tool's style changes.
-    QString captureAnnotateStyles;
-    // Smart redaction (docs/design-capture-roadmap.md, 4.1): look for what to
-    // hide as soon as a selection has held still (SmartPrescan), also hide IP
-    // and MAC addresses, hide every word, and the user's own words to hide
-    // (comma separated, whole words).
-    bool captureSmartPrescan = true;
-    bool captureSmartIpMac = false;
-    bool captureSmartAllText = false;
-    QString captureSmartWords;
-    // Stage 7. The mouse cursor drawn into the frozen picture (IncludeCursor);
-    // UI Automation for the controls of WinUI and the like, never Chromium's (ControlsUia);
-    // the delayed capture's seconds, 3 | 5 | 10 (DelaySeconds); the colour
-    // format the magnifier writes, hex | rgb | hsl (ColorFormat, changed with
-    // Shift alone); the hotkeys that hide / show every pin and that give click-through
-    // pins the mouse back (PinsHotkey, PinsRestoreHotkey: recorded, none by default).
-    bool captureCursor = false;
-    // Saving a capture from an HDR monitor writes an HDR file (.jxr) beside
-    // the PNG too (HdrFile, GitHub #133). Off: the frames stay 8-bit.
-    bool captureHdrFile = false;
-    bool captureControlsUia = true;
-    int captureDelay = 5;
-    QString captureColorFormat = QStringLiteral("hex");
-    QString capturePinsHotkey;
-    QString capturePinsRestoreHotkey;
-    QString captureLastPinHotkey;
-    QString captureSaveFolder;
-    QString captureRecordingFolder;
-    bool captureRecordingSystemAudio = false;
-    bool captureRecordingMicrophone = false;
-    int captureRecordingQuality = 1; // 0: smaller file, 1: standard, 2: higher quality
-    bool captureRecordingCursor = true;
-    bool captureRecordingCountdown = true;
-    bool captureRecordingClicks = false;
-    int captureRecordingFormat = 0; // 0: MP4, 1: GIF
-    // GitHub #98: the keys pressed shown in recordings: off | shortcuts
-    // (Ctrl/Alt/Win combinations and Esc, Enter, F1…; never typing) | all.
-    QString captureRecordingKeys = QStringLiteral("off");
-    bool captureRecordingMouseButtons = false; // which mouse button, shown in recordings
-    // What a double click on a pin does: reset (back to 100%) | close |
-    // collapse (to a tile) | none (PinDoubleClick).
-    QString capturePinDoubleClick = QStringLiteral("reset");
 
     // [PasteFile]: 粘贴为文件 (the PasteEx request): the words or the
     // picture on the clipboard made a file in the folder shown, selected for
@@ -502,6 +453,7 @@ struct Settings {
 
     void load();
     void save() const;
+    bool saveChecked() const; // sync to disk; the welcome screen must not continue after a failed save
 
     bool operator==(const Settings&) const = default;
 

@@ -31,8 +31,8 @@ namespace ws {
 // The window is dragged by its header and footer (WindowFrame), in the
 // system's own move loop: the window follows the pointer exactly, crosses
 // monitors, and Esc puts it back. The loop is shaped on the way (WM_MOVING):
-// the window, as tall as it is now, stays on the work area of the monitor
-// under the pointer. Let go near the centre line or the home height, it
+// the window, as tall as it is now, stays within the outer desktop bounds
+// and may span monitors. Let go near the centre line or the home height, it
 // glides onto them; let go so low that a few rows would not fit below, it
 // glides up until they do. While moving it follows the pointer and nothing
 // else. The list shows as many rows as fit below where the window settles
@@ -53,7 +53,7 @@ namespace ws {
 //
 // Opening and closing are animated (slideIn, slideOut) unless the system's
 // animation effects are off: it fades in coming a little from the taskbar's
-// side (elsewhere: rising), and fades out sinking a little. By the taskbar it
+// side (elsewhere: rising), and fades out where it is. By the taskbar it
 // stays over it all the while, moving no further than the gap between them:
 // a see-through taskbar (TranslucentTB) showed a window that slid behind it,
 // and kept the last of it in its blur once the window was hidden. The window
@@ -100,6 +100,7 @@ class Placement : public QObject {
     Q_PROPERTY(int boxWidth READ boxWidth NOTIFY boxWidthChanged FINAL)
     // Its edge held, widening it (beginSizing).
     Q_PROPERTY(bool sizing READ sizing NOTIFY sizingChanged FINAL)
+    Q_PROPERTY(bool windowSizing READ windowSizing NOTIFY windowSizingChanged FINAL)
     // The content's logical size, independent of unsolicited native resizes.
     Q_PROPERTY(QSize contentSize READ contentSize WRITE setContentSize NOTIFY contentSizeChanged FINAL)
 
@@ -113,6 +114,8 @@ public:
     QSize contentSize() const { return m_contentSize; }
     void setContentSize(QSize size);
     void placeOn(QScreen* screen); // before showing the window there, at its spot
+    // A temporary spot beside the file manager typed in; never saved as home.
+    void avoidNative(const QRect& window, QScreen* screen);
     // Before showing it, by `box` (logical pixels, on `screen`; none: the
     // screen at the box's centre).
     void attach(const QRect& box, QScreen* screen = nullptr);
@@ -175,6 +178,9 @@ public:
     void rememberWidth(int defaultWidth, int minimumWidth);
     int boxWidth() const { return m_boxWidth; }
     bool sizing() const { return m_sizing; }
+    // Native resizing on all edges, separate from the launcher's centred width grip.
+    void enableWindowSizing() { m_windowSizingEnabled = true; }
+    bool windowSizing() const { return m_windowSizing; }
     bool customWidth() const { return m_defaultWidth > 0 && m_wantedWidth != m_defaultWidth; }
     // A press on its left or right edge (WindowFrame::sideGrabbed): the
     // window follows the pointer until the button is let go; Esc puts it back.
@@ -197,6 +203,9 @@ signals:
     void sizingChanged();
     void widthReset(); // resetWidth() changed it
     void contentSizeChanged();
+    void windowSizingChanged();
+    void windowResized(QSize previousSize, QSize size);
+    void sizeResetRequested();
 
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
@@ -229,7 +238,8 @@ private:
     // Physical pixels wide, centred on `centre` (physical), within the work area.
     void applyWidth(int width, qreal centre);
     void keepWidth(); // as it is now: remembered, and m_left (dropped) where it went
-    QPoint settleOn(QScreen* screen); // where the window goes there; sets room
+    QPoint settleOn(QScreen* screen, bool updateRoom = true); // where the window goes there; sets room
+    QPoint settleAvoiding(QScreen* screen);
     void attachBy(const QRect& box, QScreen* screen, int gap); // attach, this far off the box
     QPoint settleBy(QScreen* screen); // ... by the box; sets room, and with it the height (QML)
     QPoint settleByTaskbar(QScreen* screen); // ... over the taskbar; likewise
@@ -266,6 +276,7 @@ private:
     QPointF m_anchor; // centre across, top down; fractions of the work area
     int m_anchorWidth = 0;
     std::optional<QRect> m_box; // attached to it
+    std::optional<QRect> m_avoid; // native bounds of the file manager typed in
     int m_boxGap = 0; // ... this far off it, logical pixels
     std::optional<TaskbarBox> m_taskbar; // over it
     std::optional<taskbar::Spot> m_taskbarSpot; // ... as attachTaskbar was given it
@@ -298,6 +309,9 @@ private:
     int m_wantedWidth = 0; // its user's
     int m_boxWidth = 0; // ... within the work area it is on
     bool m_sizing = false;
+    bool m_windowSizingEnabled = false;
+    bool m_windowSizing = false;
+    QSize m_resizeStart;
     bool m_sizeLeft = false;
     RECT m_sizeStart {}; // the window as the edge was grabbed, physical pixels
     POINT m_sizeFrom {}; // ... and the pointer
