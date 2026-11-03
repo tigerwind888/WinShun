@@ -72,6 +72,7 @@ class SettingsEditor : public QObject {
     Q_PROPERTY(bool explorerMenu READ explorerMenu WRITE setExplorerMenu NOTIFY changed FINAL)
     Q_PROPERTY(bool explorerTyping READ explorerTyping WRITE setExplorerTyping NOTIFY changed FINAL)
     Q_PROPERTY(bool opusTyping READ opusTyping WRITE setOpusTyping NOTIFY changed FINAL)
+    Q_PROPERTY(QString opusTypingScope READ opusTypingScope WRITE setOpusTypingScope NOTIFY changed FINAL) // folder | all (GitHub #82)
     Q_PROPERTY(QString folderTyping READ folderTyping WRITE setFolderTyping NOTIFY changed FINAL) // first | only (GitHub #110)
     // The folder menu on a double click (Settings::folderMenu: on unless "off").
     Q_PROPERTY(bool folderMenu READ folderMenu WRITE setFolderMenu NOTIFY changed FINAL)
@@ -98,8 +99,10 @@ class SettingsEditor : public QObject {
     Q_PROPERTY(QString folderMenuHotkeyError READ folderMenuHotkeyError NOTIFY hotkeyErrorChanged FINAL)
     // The screenshot history's keyword (jt): set through saveCaptureKeyword.
     Q_PROPERTY(QString captureKeyword READ captureKeyword NOTIFY changed FINAL)
-    // Whether it works now: the screenshot plugin installed and on (App).
-    Q_PROPERTY(bool screenshotHistory READ screenshotHistory NOTIFY screenshotHistoryChanged FINAL)
+    // The screenshot plugin, as App reads it: installed, on (the history works), and the shortcuts it holds.
+    Q_PROPERTY(bool screenshotInstalled READ screenshotInstalled NOTIFY screenshotPluginChanged FINAL)
+    Q_PROPERTY(bool screenshotHistory READ screenshotHistory NOTIFY screenshotPluginChanged FINAL)
+    Q_PROPERTY(QStringList screenshotHotkeys READ screenshotHotkeys NOTIFY screenshotPluginChanged FINAL)
     // 粘贴为文件's card on the 插件 page ([PasteFile]): its switch, Ctrl+V in
     // Explorer and on the desktop, the right-click menu's verb.
     Q_PROPERTY(bool pasteFileEnabled READ pasteFileEnabled WRITE setPasteFileEnabled NOTIFY changed FINAL)
@@ -201,6 +204,7 @@ class SettingsEditor : public QObject {
     Q_PROPERTY(QString clipboardMissingFiles READ clipboardMissingFiles WRITE setClipboardMissingFiles NOTIFY changed FINAL) // keep | hide | clean
     Q_PROPERTY(bool clipboardImages READ clipboardImages WRITE setClipboardImages NOTIFY changed FINAL)
     Q_PROPERTY(bool clipboardClickToPaste READ clipboardClickToPaste WRITE setClipboardClickToPaste NOTIFY changed FINAL)
+    Q_PROPERTY(QString clipboardUiSize READ clipboardUiSize WRITE setClipboardUiSize NOTIFY changed FINAL) // follow | dense | compact | standard | roomy
     Q_PROPERTY(bool clipboardLargePictures READ clipboardLargePictures WRITE setClipboardLargePictures NOTIFY changed FINAL)
     Q_PROPERTY(bool clipboardKeepPlace READ clipboardKeepPlace WRITE setClipboardKeepPlace NOTIFY changed FINAL)
     Q_PROPERTY(bool clipboardAtPointer READ clipboardAtPointer WRITE setClipboardAtPointer NOTIFY changed FINAL)
@@ -259,7 +263,6 @@ class SettingsEditor : public QObject {
     Q_PROPERTY(QString language READ language WRITE setLanguage NOTIFY changed FINAL)
     Q_PROPERTY(QString transparency READ transparency WRITE setTransparency NOTIFY changed FINAL)
     Q_PROPERTY(QString taskbarIcon READ taskbarIcon WRITE setTaskbarIcon NOTIFY changed FINAL) // color | mono
-    Q_PROPERTY(bool searchLogo READ searchLogo WRITE setSearchLogo NOTIFY changed FINAL)
     Q_PROPERTY(QString uiSize READ uiSize WRITE setUiSize NOTIFY changed FINAL) // compact | standard | roomy
     Q_PROPERTY(QString corners READ corners WRITE setCorners NOTIFY changed FINAL) // round | square
     Q_PROPERTY(bool autoUpdate READ autoUpdate WRITE setAutoUpdate NOTIFY changed FINAL)
@@ -366,6 +369,8 @@ public:
     void setExplorerTyping(bool on);
     bool opusTyping() const { return m_settings.opusTyping; }
     void setOpusTyping(bool on);
+    QString opusTypingScope() const { return m_settings.opusTypingScope; }
+    void setOpusTypingScope(const QString& scope);
     QString folderTyping() const { return m_settings.folderTyping; }
     void setFolderTyping(const QString& how);
     bool folderMenu() const { return m_settings.folderMenu != u"off"; }
@@ -389,8 +394,10 @@ public:
     QString folderMenuHotkeyError() const { return m_folderMenuHotkeyError; }
     void setFolderMenuHotkeyError(const QString& error);
     QString captureKeyword() const { return m_settings.captureKeyword; }
+    bool screenshotInstalled() const { return m_screenshotInstalled; }
     bool screenshotHistory() const { return m_screenshotHistory; }
-    void setScreenshotHistory(bool on);
+    QStringList screenshotHotkeys() const { return m_screenshotHotkeys; }
+    void setScreenshotPlugin(bool installed, bool on, const QStringList& hotkeys);
     bool pasteFileEnabled() const { return m_settings.pasteFileEnabled; }
     void setPasteFileEnabled(bool on);
     bool pasteFileCtrlV() const { return m_settings.pasteFileCtrlV; }
@@ -525,8 +532,6 @@ public:
     void setTransparency(const QString& transparency);
     QString taskbarIcon() const { return m_settings.taskbarIcon; }
     void setTaskbarIcon(const QString& style);
-    bool searchLogo() const { return m_settings.searchLogo; }
-    void setSearchLogo(bool on);
     QString uiSize() const { return m_settings.uiSize; }
     void setUiSize(const QString& size);
     QString corners() const { return m_settings.corners; }
@@ -580,6 +585,8 @@ public:
     void setClipboardImages(bool on);
     bool clipboardClickToPaste() const { return m_settings.clipboardClickToPaste; }
     void setClipboardClickToPaste(bool on);
+    QString clipboardUiSize() const { return m_settings.clipboardUiSize; }
+    void setClipboardUiSize(const QString& size);
     bool clipboardLargePictures() const { return m_settings.clipboardLargePictures; }
     void setClipboardLargePictures(bool on);
     bool clipboardKeepPlace() const { return m_settings.clipboardKeepPlace; }
@@ -862,7 +869,7 @@ public:
     FavoritesSettings* favorites() const { return m_favorites; }
 
 signals:
-    void screenshotHistoryChanged();
+    void screenshotPluginChanged();
     void diagnosticsChanged();
     void diagnosticsExportRequested();
     void historyCountChanged();
@@ -934,7 +941,9 @@ private:
     QString m_clipboardQuickPasteError;
     QString m_doubleCtrlClash;
     QString m_folderMenuHotkeyError;
+    bool m_screenshotInstalled = false;
     bool m_screenshotHistory = false;
+    QStringList m_screenshotHotkeys;
     QString m_opusFolderMenu = QStringLiteral("manual");
     QString m_opusFolderMenuTaken;
     QString m_opusFolderMenuProblem;

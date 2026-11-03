@@ -129,9 +129,12 @@ struct Settings {
     // letters: off unless asked for, so that an upgrade changes nothing.
     bool explorerTyping = false;
     bool opusTyping = false; // opt in per manager: typing in an Opus file display (GitHub #82)
+    // folder | all: typed in Opus, the launcher opens on that tab's folder, or
+    // with nothing before the words, to search the whole PC.
+    QString opusTypingScope = QStringLiteral("folder");
     // first | only: typed in such a window, what is found in its folder
     // first, then the rest of the index under a caption, as Listary lists it
-    // (GitHub #110); or that folder alone, as it searched before. Ctrl+D
+    // (GitHub #110); or that folder alone, as it searched before. Ctrl+Shift+D
     // switches it for the time. An ini without the key (from before): first.
     QString folderTyping = QStringLiteral("first");
     // auto | on | off: a double click on the blank space of a File Explorer
@@ -248,7 +251,6 @@ struct Settings {
     QString language = QStringLiteral("system"); // system | zh | en
     QString transparency; // off | on: Mica behind the windows, where Windows 11 has it; defaults() picks by memory
     QString taskbarIcon = QStringLiteral("color"); // color | mono: the tray's and the taskbar box's icon (monologo)
-    bool searchLogo = true; // the logo peeking out behind the launcher, the clipboard and the dialog bar (GitHub #109)
     QString uiSize = QStringLiteral("standard"); // compact | standard | roomy: type and row heights (uisize::)
     QString corners; // round | square: defaults() picks by Windows version
 
@@ -348,6 +350,7 @@ struct Settings {
     QString clipboardNumberKeys = QStringLiteral("alt"); // alt | ctrl | off: Alt+1…9 pastes the nth row
     QString clipboardQuickPaste = QStringLiteral("off"); // off | ctrl | alt: the first nine of All, without opening the window
     bool clipboardClickToPaste = false; // a click pastes the row (Windows' way); off: picks it, a double click pastes
+    QString clipboardUiSize = QStringLiteral("follow"); // follow (界面大小) | dense | compact | standard | roomy: its own type and row heights
     bool clipboardLargePictures = false; // pictures on taller rows, thumbnails large enough to make out
     bool clipboardKeepPlace = false; // pasting from the history leaves the entry where it is (GitHub #122); off: it moves to the top
     bool clipboardAtPointer = false; // always open beside the mouse, including over our own fields (GitHub #105)
@@ -394,7 +397,9 @@ struct Settings {
     bool pasteFileCtrlV = true;
     bool pasteFileMenu = true; // "粘贴为文件" in the right-click menu of a folder's empty space (shellmenu::)
 
-    // [WebSearch]: keywords the user gives web pages ("gh" opens GitHub, "gh
+    // The web plugin's editable data, kept in [Plugin.winshun.web] Setting.*.
+    // Loaded regardless of enabled/installed state, so disabling loses no data.
+    // Keywords the user gives web pages ("gh" opens GitHub, "gh
     // WinShun" searches it; see WebShortcut). At first just one, "winshun".
     // Written as an array: size=, 1\Keyword=, 1\Name=, 1\Url=, 1\Home=,
     // 1\Icon=, 1\Suggest= (written even empty: an entry without it is one
@@ -447,6 +452,7 @@ struct Settings {
     QList<PluginConfig> plugins;
     const PluginConfig* plugin(QStringView id) const; // nothing when the user set nothing for it
     PluginConfig& pluginConfig(const QString& id); // the section, made when there is none
+    const WebShortcuts& webShortcutsInUse() const; // Disabled plugin data reserves no keywords.
 
     static Settings defaults();
     static bool exists(); // false on the very first run

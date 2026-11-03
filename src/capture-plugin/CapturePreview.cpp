@@ -22,6 +22,8 @@
 #include <QFileInfo>
 #include <QGuiApplication>
 #include <QImage>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QKeyEvent>
 #include <QLocale>
 #include <QMouseEvent>
@@ -38,12 +40,15 @@
 #include <QTranslator>
 
 #include <windows.h>
+#include <psapi.h>
 
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <functional>
 #include <memory>
+#include <mutex>
+#include <numbers>
 
 using namespace Qt::StringLiterals;
 
@@ -277,9 +282,151 @@ int runOcr(const QStringList& args)
     return finish(window, saved);
 }
 
+// Paced input in a visible production overlay. Unlike the snapshot preview,
+// this lets the normal event loop and D3D11 presentation run between samples.
+int runBrushPerformance(QQuickWindow* window, capture::CaptureSession& session, const QDir& out,
+    const std::function<void(QEvent::Type, QPointF, Qt::MouseButton, Qt::MouseButtons)>& send, bool busy)
+{
+    using namespace capture;
+    auto* model = session.annotation();
+    const qreal dpr = window->devicePixelRatio();
+    const auto tool = [&](annot::Kind kind) {
+        for (qsizetype i = 0; i < annot::tools().size(); ++i) {
+            if (annot::tools()[i].kind == kind) model->setTool(int(i));
+        }
+    };
+    if (busy) {
+        const auto box = [&](QPoint from, QPoint to) {
+            from = QPoint(qRound(from.x() * dpr), qRound(from.y() * dpr));
+            to = QPoint(qRound(to.x() * dpr), qRound(to.y() * dpr));
+            if (!model->pressFirst(from, {})) model->pressSecond(from, {});
+            model->move(to, {});
+            model->release(to);
+        };
+        tool(annot::Kind::Rect);
+        for (int i = 0; i < 50; ++i) {
+            const QPoint at(180 + (i % 10) * 70, 150 + (i / 10) * 65);
+            box(at, at + QPoint(42, 28));
+        }
+        tool(annot::Kind::Redact);
+        for (int i = 0; i < 5; ++i)
+            box(QPoint(200 + i * 130, 425), QPoint(290 + i * 130, 470));
+        tool(annot::Kind::Pen);
+    }
+    settle(window);
+    const auto rest = [](int ms) {
+        QEventLoop loop;
+        QTimer::singleShot(ms, &loop, &QEventLoop::quit);
+        loop.exec();
+    };
+    struct Usage { double cpuMs = 0; qint64 privateBytes = 0; qint64 workingBytes = 0; bool valid = false; };
+    const auto usage = [] {
+        Usage u;
+        FILETIME created {}, exited {}, kernel {}, user {};
+        PROCESS_MEMORY_COUNTERS_EX memory {};
+        memory.cb = sizeof(memory);
+        u.valid = ::GetProcessTimes(::GetCurrentProcess(), &created, &exited, &kernel, &user)
+            && ::K32GetProcessMemoryInfo(::GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&memory), sizeof(memory));
+        const auto ticks = [](FILETIME value) { return (quint64(value.dwHighDateTime) << 32) | value.dwLowDateTime; };
+        u.cpuMs = (ticks(kernel) + ticks(user)) / 10000.0;
+        u.privateBytes = qint64(memory.PrivateUsage);
+        u.workingBytes = qint64(memory.WorkingSetSize);
+        return u;
+    };
+    rest(700); // settle toolbar feedback before measuring idle CPU
+    const Usage idleStart = usage();
+    QElapsedTimer idleClock;
+    idleClock.start();
+    rest(1500);
+    const Usage before = usage();
+    const double idleCpu = (before.cpuMs - idleStart.cpuMs) / idleClock.elapsed() * 100;
+    Usage peak = before;
+    QTimer memoryTimer;
+    memoryTimer.setInterval(100);
+    QObject::connect(&memoryTimer, &QTimer::timeout, &memoryTimer, [&] {
+        const Usage u = usage();
+        peak.privateBytes = std::max(peak.privateBytes, u.privateBytes);
+        peak.workingBytes = std::max(peak.workingBytes, u.workingBytes);
+    });
+    QElapsedTimer clock;
+    clock.start();
+    std::mutex frameMutex;
+    QList<qint64> frames;
+    bool recordingFrames = true;
+    frames.reserve(5000);
+    const auto connection = QObject::connect(window, &QQuickWindow::frameSwapped, window, [&] {
+        const qint64 now = clock.nsecsElapsed();
+        const std::lock_guard guard(frameMutex);
+        if (recordingFrames) frames.append(now);
+    }, Qt::DirectConnection);
+    QEventLoop loop;
+    QTimer input;
+    input.setTimerType(Qt::PreciseTimer);
+    input.setInterval(2); // up to 500 Hz; actual delivered samples are recorded
+    int samples = 0;
+    QPointF last(520, 310);
+    send(QEvent::MouseButtonPress, last, Qt::LeftButton, Qt::LeftButton);
+    QObject::connect(&input, &QTimer::timeout, &loop, [&] {
+        const double t = clock.nsecsElapsed() / 1e9;
+        if (t >= 12.0) { loop.quit(); return; }
+        last = QPointF(520 + 300 * std::sin(t * std::numbers::pi / 4),
+            310 + 105 * std::sin(t * std::numbers::pi / 2) + 1.5 * std::sin(t * 150 * std::numbers::pi));
+        send(QEvent::MouseMove, last, Qt::NoButton, Qt::LeftButton);
+        ++samples;
+    });
+    memoryTimer.start();
+    input.start();
+    loop.exec();
+    input.stop();
+    memoryTimer.stop();
+    {
+        const std::lock_guard guard(frameMutex);
+        recordingFrames = false; // an in-flight render callback can no longer append
+    }
+    QObject::disconnect(connection);
+    const double elapsed = clock.nsecsElapsed() / 1e6;
+    const Usage after = usage();
+    send(QEvent::MouseButtonRelease, last, Qt::LeftButton, Qt::NoButton);
+    QList<double> intervals;
+    {
+        const std::lock_guard guard(frameMutex);
+        for (qsizetype i = 1; i < frames.size(); ++i)
+            intervals.append((frames[i] - frames[i - 1]) / 1e6);
+    }
+    std::sort(intervals.begin(), intervals.end());
+    const auto quantile = [&](qreal q) { return intervals.isEmpty() ? 0.0 : intervals[qsizetype(q * (intervals.size() - 1))]; };
+    const int points = model->document().items.isEmpty() ? 0 : int(model->document().items.last().points.size());
+    QJsonObject result {{u"durationMs"_s, elapsed}, {u"samples"_s, samples}, {u"storedPoints"_s, points},
+        {u"busy"_s, busy}, {u"dpr"_s, dpr}, {u"refreshHz"_s, window->screen()->refreshRate()},
+        {u"frames"_s, frames.size()}, {u"frameP50Ms"_s, quantile(0.5)}, {u"frameP95Ms"_s, quantile(0.95)},
+        {u"frameP99Ms"_s, quantile(0.99)}, {u"frameMaxMs"_s, quantile(1)},
+        {u"framesOver33Ms"_s, std::count_if(intervals.cbegin(), intervals.cend(), [](double v) { return v > 33.34; })},
+        {u"cpuOneCorePercent"_s, (after.cpuMs - before.cpuMs) / elapsed * 100},
+        {u"idleCpuOneCorePercent"_s, idleCpu}, {u"privateBeforeMiB"_s, before.privateBytes / 1048576.0},
+        {u"privatePeakMiB"_s, std::max(peak.privateBytes, after.privateBytes) / 1048576.0},
+        {u"workingPeakMiB"_s, std::max(peak.workingBytes, after.workingBytes) / 1048576.0},
+        {u"compositorCacheMiB"_s, model->compositor().cacheBytes() / 1048576.0}};
+    rest(700);
+    const Usage idleAfterStart = usage();
+    idleClock.restart();
+    rest(1500);
+    result[u"idleAfterCpuOneCorePercent"_s] = (usage().cpuMs - idleAfterStart.cpuMs) / idleClock.elapsed() * 100;
+    QFile metrics(out.filePath(u"performance.json"_s));
+    const bool measured = before.valid && after.valid && intervals.size() >= 120 && samples >= 1000;
+    const bool saved = metrics.open(QIODevice::WriteOnly) && metrics.write(QJsonDocument(result).toJson()) > 0;
+    say(QString::fromUtf8(QJsonDocument(result).toJson(QJsonDocument::Compact)));
+    model->setTool(0);
+    send(QEvent::MouseMove, QPointF(30, 30), Qt::NoButton, Qt::NoButton);
+    settle(window);
+    const bool picture = saveGrab(window, out.filePath(u"performance-overlay.png"_s));
+    return finish(window, measured && saved && picture);
+}
+
 int runToolbarDrag(const QStringList& args)
 {
     using namespace capture;
+    const bool performance = args.contains(u"--brush-performance"_s);
+    const bool brush = args.contains(u"--brush"_s) || performance;
     const QDir out(valueAfter(args, kCaptureToolsFlag));
     QDir().mkpath(out.path());
     QTranslator translator;
@@ -297,8 +444,10 @@ int runToolbarDrag(const QStringList& args)
         painter.scale(dpr, dpr);
         painter.setPen(QColor(35, 40, 45));
         painter.setFont(QFont(QGuiApplication::font().family(), 14));
-        painter.drawText(40, 55, u"截图工具条 · 按住左侧三个圆点拖动 / Drag the three dots"_s);
-        painter.drawText(180, 190, u"移动工具条不会移动选区，也不会在图片上留下标注。"_s);
+        painter.drawText(40, 55, brush ? u"截图画笔 · 实时防抖 / Stabilized freehand"_s
+                                     : u"截图工具条 · 按住左侧三个圆点拖动 / Drag the three dots"_s);
+        if (!brush)
+            painter.drawText(180, 190, u"移动工具条不会移动选区，也不会在图片上留下标注。"_s);
     }
     screen.setImage(image);
     CaptureSession session;
@@ -311,16 +460,16 @@ int runToolbarDrag(const QStringList& args)
         session.pointerMove(0, to);
         session.pointerRelease(0, to, Qt::LeftButton);
     };
-    select(QRect(160, 130, 760, 230));
+    select(QRect(160, 130, 760, brush ? 370 : 230));
     QQmlApplicationEngine engine;
     QQmlComponent component(&engine, u"WinShun"_s, u"CaptureOverlay"_s);
     auto* window = qobject_cast<QQuickWindow*>(component.createWithInitialProperties({
         {u"session"_s, QVariant::fromValue(&session)}, {u"screenModel"_s, QVariant::fromValue(&screen)}}));
     if (!window) { say(component.errorString()); return 3; }
     window->resize(logical);
-    window->setTitle(u"WinShun toolbar drag test"_s);
+    window->setTitle(brush ? u"WinShun brush test"_s : u"WinShun toolbar drag test"_s);
     window->setFlags(Qt::Window | Qt::WindowStaysOnTopHint);
-    if (args.contains(u"--interactive"_s)) {
+    if (args.contains(u"--interactive"_s) || performance) {
         window->setPosition(40, 40);
         window->show();
     } else {
@@ -339,6 +488,13 @@ int runToolbarDrag(const QStringList& args)
         settle(window);
         ok = saveGrab(window, out.filePath(name.toString() + u".png"_s)) && ok;
     };
+    if (brush) {
+        for (qsizetype i = 0; i < annot::tools().size(); ++i) {
+            if (annot::tools()[i].kind == annot::Kind::Pen)
+                session.annotation()->setTool(int(i));
+        }
+        session.annotation()->setPanel({{u"color"_s, u"#8E24AA"_s}, {u"width"_s, 4}});
+    }
     grab(u"toolbar-before");
     if (args.contains(u"--interactive"_s)) {
         struct PointerTrace : QObject {
@@ -359,17 +515,92 @@ int runToolbarDrag(const QStringList& args)
         window->installEventFilter(&trace);
         QEventLoop loop;
         QObject::connect(&session, &CaptureSession::finished, &loop, &QEventLoop::quit);
-        QTimer::singleShot(180000, &loop, &QEventLoop::quit);
+        QTimer::singleShot(brush ? 45000 : 180000, &loop, &QEventLoop::quit);
         loop.exec();
-        grab(u"toolbar-after");
+        if (brush) {
+            check(session.annotation()->itemCount() >= 2, "native mouse input did not create two strokes");
+            ok = session.annotation()->composed().save(out.filePath(u"brush-native-export.png"_s)) && ok;
+            say(u"native mouse brush objects: %1"_s.arg(session.annotation()->itemCount()));
+        }
+        grab(brush ? u"brush-native" : u"toolbar-after");
         return finish(window, ok);
     }
     const auto send = [&](QEvent::Type type, QPointF at, Qt::MouseButton button, Qt::MouseButtons buttons) {
         const QPointF global = window->mapToGlobal(at.toPoint());
         QMouseEvent event(type, at, global, button, buttons, Qt::NoModifier);
         QCoreApplication::sendEvent(window, &event);
-        QCoreApplication::processEvents();
+        if (!performance) QCoreApplication::processEvents();
     };
+    if (brush) {
+        if (performance)
+            return runBrushPerformance(window, session, out, send, args.contains(u"--busy"_s));
+        // Real Qt mouse events -> production CaptureOverlay MouseArea ->
+        // CaptureSession -> AnnotationModel -> canvas, using a synthetic base.
+        auto* model = session.annotation();
+        QList<QList<QPointF>> rawStrokes;
+        QList<qint64> eventTimes;
+        for (int row = 0; row < 3; ++row) {
+            const QPointF from(210, 200 + row * 105);
+            QList<QPointF> raw {annot::pixelCentre(from * dpr)};
+            send(QEvent::MouseButtonPress, from, Qt::LeftButton, Qt::LeftButton);
+            for (int i = 1; i <= 620; ++i) {
+                const qreal curve = row == 0 ? i * 0.06 : row == 1 ? 26 * std::sin(i / 95.0) : 0;
+                const QPointF at = from + QPointF(i, curve + ((i / 2) % 2 ? 2 : -2));
+                raw.append(annot::pixelCentre(at * dpr));
+                QElapsedTimer timer;
+                timer.start();
+                send(QEvent::MouseMove, at, Qt::NoButton, Qt::LeftButton);
+                eventTimes.append(timer.nsecsElapsed());
+            }
+            const QPointF end = from + QPointF(621, row == 0 ? 621 * 0.06 : row == 1 ? 26 * std::sin(621 / 95.0) : 0);
+            raw.append(annot::pixelCentre(end * dpr));
+            rawStrokes.append(raw);
+            send(QEvent::MouseMove, end, Qt::NoButton, Qt::LeftButton);
+            const auto draft = model->document().items;
+            send(QEvent::MouseButtonRelease, end, Qt::LeftButton, Qt::NoButton);
+            check(model->document().items == draft, "releasing changed the live stroke");
+        }
+        check(model->itemCount() == 3, "QML pointer routing did not create three strokes");
+        model->setTool(0); // let go of the pen's selection outline
+        send(QEvent::MouseMove, QPointF(30, 30), Qt::NoButton, Qt::NoButton);
+        grab(u"brush-overlay");
+        const QImage exported = model->composed();
+        ok = exported.save(out.filePath(u"brush-export.png"_s)) && ok;
+        // Same events through the previous brush's release simplification,
+        // with both images drawn by the production compositor.
+        annot::Document previous = model->document();
+        for (qsizetype i = 0; i < previous.items.size() && i < rawStrokes.size(); ++i)
+            previous.items[i].points = annot::simplifyStroke(rawStrokes[i]);
+        annot::Compositor oldCompositor;
+        const QImage oldImage = oldCompositor.exportImage(previous, model->base(), model->sampleBounds());
+        const int caption = qRound(50 * dpr);
+        QImage comparison(QSize(exported.width() * 2, exported.height() + caption), QImage::Format_RGB32);
+        comparison.fill(Qt::white);
+        {
+            QPainter painter(&comparison);
+            QFont font = QGuiApplication::font();
+            font.setPixelSize(qRound(20 * dpr));
+            painter.setFont(font);
+            painter.setPen(QColor(35, 40, 45));
+            painter.drawText(qRound(20 * dpr), qRound(32 * dpr), u"改进前 · 同一段输入"_s);
+            painter.drawText(exported.width() + qRound(20 * dpr), qRound(32 * dpr), u"改进后 · 实时防抖"_s);
+            painter.drawImage(0, caption, oldImage);
+            painter.drawImage(exported.width(), caption, exported);
+        }
+        ok = comparison.save(out.filePath(u"brush-comparison.png"_s)) && ok;
+        std::sort(eventTimes.begin(), eventTimes.end());
+        say(u"QML move event handling p95: %1 ms (%2 events; not a display frame-rate measurement)"_s
+            .arg(eventTimes[eventTimes.size() * 95 / 100] / 1e6, 0, 'f', 3).arg(eventTimes.size()));
+        const QImage visible = window->grabWindow();
+        const QRect area(qRound(190 * dpr), qRound(170 * dpr), qRound(660 * dpr), qRound(300 * dpr));
+        QImage expected;
+        annot::Compositor fresh;
+        fresh.render(model->document(), model->base(), model->sampleBounds(), area, &expected);
+        const QImage got = visible.copy(area).convertToFormat(QImage::Format_RGB32);
+        check(got == expected, "visible brush pixels differ from the export compositor");
+        say(u"brush QML input, release stability and visible/export pixel checks: %1"_s.arg(ok ? u"passed"_s : u"failed"_s));
+        return finish(window, ok);
+    }
     const auto drag = [&](QPointF delta, int steps = 12) {
         const QPointF from = grip->mapToScene(QPointF(grip->width() / 2, grip->height() / 2));
         send(QEvent::MouseButtonPress, from, Qt::LeftButton, Qt::LeftButton);
@@ -437,9 +668,175 @@ int runToolbarDrag(const QStringList& args)
     return finish(window, ok);
 }
 
+int runSelectionKeys(const QStringList& args)
+{
+    using namespace capture;
+    const QDir out(valueAfter(args, kCaptureToolsFlag));
+    QDir().mkpath(out.path());
+    QTranslator translator;
+    if (args.contains(u"--english"_s) && translator.load(u":/i18n/capture_en.qm"_s))
+        QCoreApplication::installTranslator(&translator);
+    QQmlApplicationEngine engine;
+    QQmlComponent fixtureComponent(&engine);
+    fixtureComponent.setData(R"(
+        import QtQuick
+        Window {
+            property int generation: 0
+            color: generation % 2 ? "#e6ecff" : "#f4f6f8"
+            flags: Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
+            Text {
+                x: 80; y: 48
+                text: "截图精调验证 / Capture keyboard verification · " + generation
+                color: "#253047"; font.pixelSize: 24
+            }
+        }
+    )", QUrl(u"qrc:/selection-keys-fixture.qml"_s));
+    std::unique_ptr<QQuickWindow> fixture(qobject_cast<QQuickWindow*>(fixtureComponent.create()));
+    if (!fixture) { say(fixtureComponent.errorString()); return 3; }
+    fixture->showFullScreen();
+    settle(fixture.get());
+    QImage copied;
+    int copies = 0;
+    Capture::Callbacks callbacks;
+    callbacks.copy = [&](const QImage& image, const QByteArray&, const QString&) { copied = image; ++copies; };
+    Capture capture(&engine, std::move(callbacks));
+    QQuickWindow* overlay = nullptr;
+    CaptureSession* session = nullptr;
+    CaptureScreen* screen = nullptr;
+    bool ok = true;
+    const auto check = [&](bool passed, const char* what) {
+        say(u"%1: %2"_s.arg(passed ? u"PASS"_s : u"FAIL"_s, QString::fromUtf8(what)));
+        ok = passed && ok;
+    };
+    const auto waitFor = [&](const std::function<bool()>& ready) {
+        QElapsedTimer clock;
+        clock.start();
+        while (!ready() && clock.elapsed() < 8000)
+            pump(20);
+        return ready();
+    };
+    const auto begin = [&] {
+        capture.trigger();
+        return waitFor([&] {
+            for (QWindow* window : QGuiApplication::topLevelWindows()) {
+                auto* model = window->property("screenModel").value<CaptureScreen*>();
+                auto* state = window->property("session").value<CaptureSession*>();
+                if (model && state && model->hasImage() && state->active() && window->isVisible()
+                    && window->isActive() && window->screen() == fixture->screen()) {
+                    overlay = qobject_cast<QQuickWindow*>(window);
+                    session = state;
+                    screen = model;
+                    return overlay && overlay->activeFocusItem();
+                }
+            }
+            return false;
+        });
+    };
+    const auto key = [&](int code, Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
+        QKeyEvent press(QEvent::KeyPress, code, modifiers);
+        QCoreApplication::sendEvent(overlay, &press);
+        QKeyEvent release(QEvent::KeyRelease, code, modifiers);
+        QCoreApplication::sendEvent(overlay, &release);
+        pump(20);
+    };
+    const auto mouse = [&](QEvent::Type type, QPoint at, Qt::MouseButton button, Qt::MouseButtons buttons) {
+        const QPointF logical(at.x() / screen->dpr(), at.y() / screen->dpr());
+        QMouseEvent event(type, logical, overlay->mapToGlobal(logical.toPoint()), button, buttons, Qt::NoModifier);
+        QCoreApplication::sendEvent(overlay, &event);
+        pump(20);
+    };
+    // The production Capture controller freezes the real fixture with Grabber.
+    // Copy is intercepted here, so these runs never write the user's clipboard.
+    for (int i = 0; i < 12; ++i) {
+        fixture->setProperty("generation", i);
+        settle(fixture.get());
+        if (!begin()) { check(false, "real capture overlay appeared"); return 4; }
+        if (i == 0) {
+            key(Qt::Key_R);
+            check(!session->hasSelection() && !screen->notice().isEmpty(), "R with no history gives feedback");
+        }
+        const QRect area(180 + i * 4, 200, 320, 160);
+        mouse(QEvent::MouseButtonPress, area.topLeft(), Qt::LeftButton, Qt::LeftButton);
+        mouse(QEvent::MouseMove, area.bottomRight(), Qt::NoButton, Qt::LeftButton);
+        mouse(QEvent::MouseButtonRelease, area.bottomRight(), Qt::LeftButton, Qt::NoButton);
+        check(session->selectionRect() == area, "real QML mouse routing selected exact physical pixels");
+        const QImage expected = screen->image().copy(area);
+        key(Qt::Key_Return);
+        check(waitFor([&] { return !capture.busy(); }) && copies == i + 1 && copied == expected,
+            "Enter exported the frozen pixels through Capture");
+    }
+    const QRgb previousColor = copied.pixel(0, 0);
+    fixture->setProperty("generation", 12);
+    settle(fixture.get());
+    if (!begin()) { check(false, "capture reopened for region recall"); return 4; }
+    check(session->selectionHistoryCount() == 10, "only ten unique completed regions retained");
+    for (int i = 0; i < 10; ++i) {
+        key(Qt::Key_R);
+        check(session->selectionRect() == QRect(180 + (11 - i) * 4, 200, 320, 160), "R cycles regions newest first");
+    }
+    key(Qt::Key_R);
+    check(session->recalledSelection() == 0, "R wraps to the newest region");
+    key(Qt::Key_R, Qt::ShiftModifier);
+    check(session->recalledSelection() == 9, "Shift+R cycles in reverse");
+    key(Qt::Key_R);
+    const QRect recalled = session->selectionRect();
+    key(Qt::Key_A);
+    key(Qt::Key_W);
+    check(session->selectionRect() == recalled.translated(-1, -1), "WASD moved by one physical pixel");
+    key(Qt::Key_D, Qt::ShiftModifier);
+    key(Qt::Key_S, Qt::ShiftModifier);
+    const QRect adjusted(recalled.topLeft() - QPoint(1, 1), recalled.size() + QSize(1, 1));
+    check(session->selectionRect() == adjusted && session->annotation()->tool() < 0,
+        "Shift+WASD resized by one pixel without selecting a tool or starting a countdown");
+    const QImage expected = screen->image().copy(adjusted);
+    check(expected.pixel(0, 0) != previousColor, "R uses the newly frozen picture");
+    settle(overlay);
+    check(saveGrab(overlay, out.filePath(u"selection-keyboard.png"_s)), "saved actual overlay for visual inspection");
+    key(Qt::Key_Return);
+    check(waitFor([&] { return !capture.busy(); }) && copies == 13 && copied == expected,
+        "recalled and adjusted region exports exact current pixels");
+    check(copied.save(out.filePath(u"selection-export.png"_s)), "saved exported pixels");
+    if (!begin()) { check(false, "capture reopened for text input"); return 4; }
+    key(Qt::Key_R);
+    const QRect beforeText = session->selectionRect();
+    key(Qt::Key_1);
+    check(session->annotation()->tool() == 0, "1 still selects the rectangle tool");
+    key(Qt::Key_1);
+    key(Qt::Key_3);
+    check(session->annotation()->tool() == 2, "3 still selects the arrow tool");
+    key(Qt::Key_3);
+    key(Qt::Key_T);
+    mouse(QEvent::MouseButtonPress, beforeText.center(), Qt::LeftButton, Qt::LeftButton);
+    mouse(QEvent::MouseButtonRelease, beforeText.center(), Qt::LeftButton, Qt::NoButton);
+    check(session->annotation()->editingText(), "text annotation accepts keyboard focus");
+    for (const QChar letter : u"wasdr"_s) {
+        QKeyEvent press(QEvent::KeyPress, letter.toUpper().unicode(), Qt::NoModifier, QString(letter));
+        QCoreApplication::sendEvent(overlay, &press);
+        QKeyEvent release(QEvent::KeyRelease, letter.toUpper().unicode(), Qt::NoModifier);
+        QCoreApplication::sendEvent(overlay, &release);
+        pump(20);
+    }
+    check(session->annotation()->editing().value(u"text"_s).toString() == u"wasdr"
+        && session->selectionRect() == beforeText, "typing WASDR edits text without moving or restoring the area");
+    key(Qt::Key_Return, Qt::ControlModifier);
+    check(copies == 13 && session->hasAnnotations(), "Ctrl+Enter commits text without copying the screenshot");
+    key(Qt::Key_R);
+    check(session->hasAnnotations() && session->selectionRect() == beforeText, "R protects existing annotations");
+    capture.trigger();
+    check(waitFor([&] { return !capture.busy(); }), "cancel closes only the isolated capture");
+    fixture->hide();
+    say(u"selection keyboard checks: %1; %2 warning(s)"_s.arg(ok ? u"passed"_s : u"failed"_s).arg(g_warnings));
+    return ok && g_warnings == 0 ? 0 : 4;
+}
+
 int runCaptureTools(const QStringList& args)
 {
-    if (args.contains(u"--toolbar-drag"_s)) return runToolbarDrag(args);
+    if (args.contains(u"--save-options"_s))
+        return runCaptureSave(args) + g_warnings;
+    if (args.contains(u"--selection-keys"_s))
+        return runSelectionKeys(args);
+    if (args.contains(u"--toolbar-drag"_s) || args.contains(u"--brush"_s) || args.contains(u"--brush-performance"_s))
+        return runToolbarDrag(args);
     using namespace capture;
     using namespace capture::annot;
     const QDir out(valueAfter(args, kCaptureToolsFlag));
@@ -572,14 +969,27 @@ int runRecording(const QStringList& args)
     )", QUrl(u"qrc:/recording-fixture.qml"_s));
     std::unique_ptr<QQuickWindow> fixture(qobject_cast<QQuickWindow*>(fixtureComponent.create()));
     if (!fixture) { say(fixtureComponent.errorString()); return 3; }
-    fixture->show();
+    const int screenIndex = valueAfter(args, u"--screen-index", u"0"_s).toInt();
+    const auto screens = QGuiApplication::screens();
+    if (screenIndex < 0 || screenIndex >= screens.size()) { say(u"recording test screen is unavailable"_s); return 3; }
+    fixture->setScreen(screens[screenIndex]);
+    fixture->setPosition(screens[screenIndex]->geometry().topLeft() + QPoint(80, 80));
+    const bool fullScreenRecording = args.contains(u"--full-screen"_s);
+    // A full-screen recording must contain only this test's generated content.
+    if (fullScreenRecording) {
+        fixture->setFlags(Qt::Window | Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint);
+        fixture->showFullScreen();
+    } else fixture->show();
     settle(fixture.get());
     const HWND hwnd = reinterpret_cast<HWND>(fixture->winId());
     RECT client {};
     ::GetClientRect(hwnd, &client);
     POINT at {0, 0};
     ::ClientToScreen(hwnd, &at);
-    const QRect region(at.x, at.y, client.right, client.bottom);
+    const QRect fixtureRegion(at.x, at.y, client.right, client.bottom);
+    const QRect region = fullScreenRecording
+        ? QRect(fixtureRegion.topLeft() + QPoint(40, 40), QSize(std::min(800, int(client.right) - 80), std::min(460, int(client.bottom) - 80)))
+        : fixtureRegion;
     const auto quality = args.contains(u"--small-file"_s) ? Recorder::SmallFile
         : args.contains(u"--high-quality"_s) ? Recorder::HighQuality : Recorder::Standard;
     Recorder::Preferences preferences {out.absolutePath(), args.contains(u"--system-audio"_s), false, quality,
@@ -623,6 +1033,11 @@ int runRecording(const QStringList& args)
             panel = qobject_cast<QQuickWindow*>(window);
     if (!recorder || !panel) { say(u"no recording panel"_s); return 3; }
     settle(panel);
+    const int compactWidth = valueAfter(args, u"--compact-width").toInt();
+    if (compactWidth > 0) {
+        panel->setWidth(compactWidth);
+        settle(panel);
+    }
     bool saved = saveGrab(panel, out.filePath(u"ready.png"_s)) && saveGrab(fixture.get(), out.filePath(u"source.png"_s));
     if (!args.contains(u"--auto"_s)) {
         QTimer::singleShot(10 * 60 * 1000, qApp, &QCoreApplication::quit);
@@ -682,6 +1097,55 @@ int runRecording(const QStringList& args)
         QCoreApplication::sendEvent(panel, &release);
         pump(20);
     };
+    if (compactWidth > 0) {
+        qreal right = 0;
+        bool usable = true;
+        for (const auto* name : {"recordingArea", "recordingFullScreen", "recordingMp4", "recordingGif",
+                 "recordingSystemAudio", "recordingMicrophone", "recordingOptions", "recordingStart", "recordingClose"}) {
+            auto* item = panel->findChild<QQuickItem*>(QString::fromLatin1(name));
+            if (!item) { usable = false; break; }
+            const auto box = item->mapRectToScene(item->boundingRect());
+            usable = usable && box.left() >= right && box.right() <= panel->width() - 10 && box.width() >= 24;
+            right = box.right();
+        }
+        say(u"recording controls fit compact width %1 without overlap: %2"_s.arg(panel->width()).arg(usable));
+        saved = usable && saved;
+    }
+    MONITORINFO recordingMonitor {sizeof recordingMonitor};
+    const auto monitor = ::MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+    if (!::GetMonitorInfoW(monitor, &recordingMonitor)) return 3;
+    const QRect wholeScreen(recordingMonitor.rcMonitor.left, recordingMonitor.rcMonitor.top,
+        recordingMonitor.rcMonitor.right - recordingMonitor.rcMonitor.left, recordingMonitor.rcMonitor.bottom - recordingMonitor.rcMonitor.top);
+    const auto recordingChoicesMatch = [&](bool fullScreen) {
+        auto* area = panel->findChild<QQuickItem*>(u"recordingArea"_s);
+        auto* full = panel->findChild<QQuickItem*>(u"recordingFullScreen"_s);
+        return area && full && area->property("checked").toBool() == !fullScreen && full->property("checked").toBool() == fullScreen;
+    };
+    const auto initialFormat = recorder->format();
+    const auto initialQuality = recorder->quality();
+    const bool initialSystemAudio = recorder->systemAudio(), initialMicrophone = recorder->microphone();
+    click("recordingFullScreen");
+    click("recordingFullScreen"); // clicking the active choice keeps it selected
+    settle(panel);
+    bool areaPassed = recorder->fullScreen() && recorder->region() == wholeScreen && recordingChoicesMatch(true);
+    say(u"full-screen uses source monitor (physical %1,%2 %3x%4): %5"_s
+        .arg(wholeScreen.x()).arg(wholeScreen.y()).arg(wholeScreen.width()).arg(wholeScreen.height()).arg(areaPassed));
+    saved = areaPassed && saveGrab(panel, out.filePath(u"ready-full-screen.png"_s)) && saved;
+    click("recordingArea");
+    areaPassed = !recorder->fullScreen() && recorder->region() == region && recordingChoicesMatch(false);
+    say(u"area choice restores original selection: %1"_s.arg(areaPassed));
+    saved = areaPassed && saved;
+    auto* fullScreenButton = panel->findChild<QQuickItem*>(u"recordingFullScreen"_s);
+    if (!fullScreenButton) return 3;
+    fullScreenButton->forceActiveFocus(Qt::TabFocusReason);
+    key(Qt::Key_Space);
+    areaPassed = recorder->fullScreen() && recorder->region() == wholeScreen && recordingChoicesMatch(true);
+    saved = areaPassed && saved;
+    click("recordingArea");
+    areaPassed = areaPassed && recorder->region() == region && recorder->format() == initialFormat
+        && recorder->quality() == initialQuality && recorder->systemAudio() == initialSystemAudio && recorder->microphone() == initialMicrophone;
+    say(u"keyboard selects full-screen; switching preserves recording preferences: %1"_s.arg(areaPassed));
+    saved = areaPassed && saved;
     auto* optionsButton = panel->findChild<QQuickItem*>(u"recordingOptions"_s);
     if (optionsButton) {
         optionsButton->forceActiveFocus(Qt::TabFocusReason);
@@ -820,14 +1284,19 @@ int runRecording(const QStringList& args)
         recorder->close();
         return saved ? 0 : 4;
     }
+    if (fullScreenRecording) click("recordingFullScreen");
     if (originalCountdown) {
         click("recordingStart");
         saved = recorder->stage() == Recorder::Counting && saved;
+        const QRect frozen = recorder->region();
+        recorder->setFullScreen(!recorder->fullScreen());
+        saved = recorder->region() == frozen && recorder->fullScreen() == fullScreenRecording && saved;
         settle(panel);
         saved = saveGrab(panel, out.filePath(u"counting.png"_s)) && saved;
         click("recordingClose");
         saved = !recorder->active() && !panel->isVisible() && saved;
         recorder->prepare(region, ::MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), fixture->devicePixelRatio());
+        if (fullScreenRecording) click("recordingFullScreen");
         settle(panel);
     }
     QEventLoop loop;
@@ -839,6 +1308,12 @@ int runRecording(const QStringList& args)
     QObject::connect(recorder, &Recorder::changed, &loop, [&] {
         if (recorder->stage() == Recorder::Recording && !started) {
             started = true;
+            const QRect expectedRegion = fullScreenRecording ? wholeScreen : region;
+            const bool expectedMode = recorder->fullScreen();
+            recorder->setFullScreen(!expectedMode);
+            const bool frozen = recorder->region() == expectedRegion && recorder->fullScreen() == expectedMode;
+            say(u"recording range is locked after start: %1"_s.arg(frozen));
+            saved = frozen && saved;
             if (completed) {
                 QTimer::singleShot(700, &loop, [&] { click("recordingStart"); });
                 return;
@@ -869,6 +1344,10 @@ int runRecording(const QStringList& args)
                     saved = recorder->stage() == Recorder::Ready && recorder->quality() == quality
                         && recorder->cursor() == originalCursor && recorder->countdown() == originalCountdown
                         && recorder->clickHighlights() == originalClicks && saved;
+                    const bool sameArea = recorder->fullScreen() == fullScreenRecording
+                        && recorder->region() == (fullScreenRecording ? wholeScreen : region) && recordingChoicesMatch(fullScreenRecording);
+                    say(u"another take keeps recording mode and range: %1"_s.arg(sameArea));
+                    saved = sameArea && saved;
                     settle(panel);
                     saved = saveGrab(panel, out.filePath(u"again.png"_s)) && saved;
                     if (recorder->countdown()) {

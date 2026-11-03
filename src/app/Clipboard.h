@@ -83,13 +83,16 @@ class Clipboard : public QObject {
     // for none (Settings::clipboardNumberKeys).
     Q_PROPERTY(QString numberKeys READ numberKeys NOTIFY numberKeysChanged FINAL)
     Q_PROPERTY(QString numberHints READ numberHints NOTIFY numberKeysChanged FINAL)
-    // Bits 1 << n of the digits n left to another program's global hotkey
-    // (numberkeys::heldMask): their rows show the chord struck through.
+    // Bits 1 << n of the digits n left to one of Win顺's own shortcuts
+    // (App::ownNumberDigits): their rows show the chord struck through.
     Q_PROPERTY(int numberKeysLeft READ numberKeysLeft NOTIFY numberKeysChanged FINAL)
     // A click pastes the row, as Windows' own history does (forum #137: the
     // PC driven from a phone, where a double click is hard to hit); off, it
     // picks the row and a double click pastes (Settings::clipboardClickToPaste).
     Q_PROPERTY(bool clickToPaste READ clickToPaste NOTIFY rowOptionsChanged FINAL)
+    // The type and row heights the window is drawn in: dense | compact |
+    // standard | roomy (Settings::clipboardUiSize, else the interface size).
+    Q_PROPERTY(QString uiSize READ uiSize NOTIFY rowOptionsChanged FINAL)
     // Pictures on taller rows, their thumbnails large enough to make out
     // (Settings::clipboardLargePictures).
     Q_PROPERTY(bool largePictures READ largePictures NOTIFY rowOptionsChanged FINAL)
@@ -169,7 +172,8 @@ public:
     void setNumberKeysLeft(unsigned digits);
     bool clickToPaste() const { return m_clickToPaste; }
     bool largePictures() const { return m_largePictures; }
-    void setRowOptions(bool clickToPaste, bool largePictures);
+    QString uiSize() const { return m_uiSize; }
+    void setRowOptions(bool clickToPaste, bool largePictures, const QString& uiSize);
     bool flipAbove() const { return m_flipAbove; }
     bool searchFar() const { return m_searchFar; }
     void setLayoutOptions(bool flipAbove, bool searchFar);
@@ -236,7 +240,7 @@ public:
 
     // On a row; on all of them, when it is one of several picked.
     Q_INVOKABLE void paste(int row, bool plainText);
-    Q_INVOKABLE void quickPaste(int number, bool plainText); // Alt+1 ... Alt+9: the nth row
+    Q_INVOKABLE void quickPaste(int row, bool plainText); // Alt+1 ... Alt+9: that row alone, as shown numbered (ShownRows.qml)
     Q_INVOKABLE void copy(int row);
     // Dragged out as files (clipfiles::plan): pictures as they were copied,
     // words made files, files and folders as they are. The entries stay.
@@ -296,6 +300,7 @@ public:
     Q_INVOKABLE void dismiss(); // Esc, Win+V again: back to the field it came from, or closed (pinned: the keys given back)
     Q_INVOKABLE void wantKeys() { emit keysWanted(); } // the search field clicked: acquire or refresh routing
     Q_INVOKABLE void turnOn(); // the history, from the window's button
+    Q_INVOKABLE void openShortcutSettings() { emit shortcutSettingsRequested(); } // the shortcut panel's last row
 
     // The preview of a row: {kind, text, more, files, thumbnail, image,
     // width, height, swatch, colors, source, sourceIcon, time, size,
@@ -313,6 +318,7 @@ public:
 signals:
     void lanSendRequested(const QString& text, const QStringList& files);
     void lanSendSetupRequested(bool update);
+    void shortcutSettingsRequested(); // the settings' overview of all shortcuts
     void quickPasteFailed(const QString& message); // no panel to show a failure in: App's notification
     void saveProblem(const QString& message); // saveAsFiles, the panel gone: App's notification
     void numberKeysChanged();
@@ -436,6 +442,7 @@ private:
     unsigned m_numberKeysLeft = 0;
     bool m_clickToPaste = false;
     bool m_largePictures = false;
+    QString m_uiSize = QStringLiteral("standard");
     bool m_flipAbove = true;
     bool m_searchFar = false;
     bool m_holdToStep = false;

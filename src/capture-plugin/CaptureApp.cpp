@@ -9,6 +9,7 @@
 #include "Geometry.h"
 #include "HotkeyText.h"
 #include "IdleTrim.h"
+#include "IdleGraphics.h"
 #include "ImageOrigin.h"
 #include "Keycaps.h"
 #include "PictureFile.h"
@@ -20,6 +21,7 @@
 #include "RecordingPointer.h"
 #include "SavedFile.h"
 #include "SystemTheme.h"
+#include "TrayMenu.h"
 #include "WindowFrame.h"
 #include "platform/WindowEffects.h"
 #include "platform/Foreground.h"
@@ -254,8 +256,9 @@ CaptureApp::~CaptureApp()
         ::DestroyWindow(m_window);
 }
 
-void CaptureApp::start(const QJsonObject& appearance)
+void CaptureApp::start(const QJsonObject& appearance, bool hostHotkeys)
 {
+    m_hostHotkeys = hostHotkeys;
     applyAppearance(appearance);
     m_started = true;
     apply();
@@ -346,7 +349,19 @@ void CaptureApp::requested(const QJsonValue& id, const QString& method, const QJ
 
 void CaptureApp::notified(const QString& method, const QJsonObject& params)
 {
-    if (method == u"menu")
+    if (method == u"hotkey" && m_hostHotkeys && !m_settings.recordingHotkey()) {
+        const QString key = hotkeys::normalized(params.value(u"key"_s).toString());
+        const auto& o = m_settings.options();
+        const std::pair<int, QString> shortcuts[] {{CaptureKey, o.hotkey}, {PinsKey, o.pinsHotkey},
+            {PinsRestoreKey, o.pinsRestoreHotkey}, {LastPinKey, o.lastPinHotkey},
+            {PrintScreenKey, o.printScreen ? u"PrintScreen"_s : QString()}};
+        for (const auto& [id, shortcut] : shortcuts) {
+            if (!key.isEmpty() && key == hotkeys::normalized(shortcut)) {
+                hotkey(id);
+                break;
+            }
+        }
+    } else if (method == u"menu")
         menuChosen(params.value(u"id"_s).toString());
     else if (method == u"appearance")
         applyAppearance(params);
@@ -356,6 +371,9 @@ void CaptureApp::notified(const QString& method, const QJsonObject& params)
 // next start), the hotkeys and the pins go with the process.
 void CaptureApp::shutdown()
 {
+    ++m_hotkeyRevision;
+    if (m_hostHotkeys)
+        m_protocol.tool(u"register_hotkeys"_s, {{u"keys"_s, QJsonArray()}});
     for (int id = CaptureKey; id <= LastPinKey; ++id)
         ::UnregisterHotKey(m_window, id);
     const QString before = m_settings.options().printScreenBefore;
@@ -502,10 +520,14 @@ void CaptureApp::apply()
 
 void CaptureApp::applyHotkeys()
 {
+    const quint64 revision = ++m_hotkeyRevision;
     for (int id = CaptureKey; id <= LastPinKey; ++id)
         ::UnregisterHotKey(m_window, id);
-    if (m_settings.recordingHotkey())
+    if (m_settings.recordingHotkey()) {
+        if (m_hostHotkeys)
+            m_protocol.tool(u"register_hotkeys"_s, {{u"keys"_s, QJsonArray()}});
         return; // the keys being pressed must reach the settings window (Win顺 is told nothing: a moment)
+    }
     QStringList wanted;
     bool failed = false;
     CaptureSettings::Problems problems;
@@ -519,7 +541,7 @@ void CaptureApp::applyHotkeys()
             const bool valid = hotkeys::parse(hotkey, &modifiers, &vk);
             if (valid)
                 wanted.append(hotkey);
-            if (valid && ::RegisterHotKey(m_window, id, modifiers, vk))
+            if (valid && (m_hostHotkeys || ::RegisterHotKey(m_window, id, modifiers, vk)))
                 return {};
             failed = true;
             return hotkeyProblem(hotkey);
@@ -545,6 +567,44 @@ void CaptureApp::applyHotkeys()
             return;
         }
     }
+    if (m_hostHotkeys) {
+        m_protocol.tool(u"register_hotkeys"_s, {{u"keys"_s, QJsonArray::fromStringList(wanted)}},
+            [this, revision, problems](const QJsonValue& result, const QString& error) mutable {
+                if (revision != m_hotkeyRevision)
+                    return; // a recording, edit or shutdown overtook this reply
+                const auto errors = result.toObject().value(u"errors"_s).toObject();
+                const auto& o = m_settings.options();
+                // A key set twice: the later row is the one without it, as
+                // when the plugin registers them itself.
+                QStringList taken;
+                if (o.printScreen)
+                    taken.append(hotkeys::normalized(u"PrintScreen"_s));
+                const auto problem = [&](const QString& key) {
+                    const QString normal = hotkeys::normalized(key);
+                    const bool again = !normal.isEmpty() && taken.contains(normal);
+                    taken.append(normal);
+                    if (errors.value(key).toInt() == ERROR_INVALID_PARAMETER) // parses, but not a shortcut Win顺 takes
+                        return QCoreApplication::translate("ws::captureplugin::CaptureApp", "无法识别“%1”，请重新设置。").arg(key);
+                    return key.isEmpty() || (!normal.isEmpty() && !again && error.isEmpty() && !errors.contains(key))
+                        ? QString()
+                        : hotkeyProblem(key);
+                };
+                problems.hotkey = problem(o.hotkey);
+                problems.pinsHotkey = problem(o.pinsHotkey);
+                problems.pinsRestoreHotkey = problem(o.pinsRestoreHotkey);
+                problems.lastPinHotkey = problem(o.lastPinHotkey);
+                if (o.printScreen && (!error.isEmpty() || errors.contains(u"PrintScreen"_s)))
+                    problems.note = hotkeyProblem(u"PrintScreen"_s);
+                m_settings.setProblems(problems);
+                reportHotkeyProblems(problems);
+            });
+        return;
+    }
+    reportHotkeyProblems(problems);
+}
+
+void CaptureApp::reportHotkeyProblems(const CaptureSettings::Problems& problems)
+{
     if (!m_capture)
         return;
     if (!(m_settingsWindow && m_settingsWindow->isVisible())) {
@@ -649,6 +709,7 @@ capture::SmartHooks CaptureApp::smartHooks()
 
 void CaptureApp::prepareWindow(QQuickWindow* window, bool backdrop)
 {
+    capture::releaseIdleGraphics(window);
     if (backdrop)
         prepareBackdrop(window);
     window->create();
@@ -798,6 +859,10 @@ capture::PinManager& CaptureApp::pins()
         callbacks.closed = [this] { m_idleTrim->poke(); }; // its pixels can go back to Windows
         callbacks.dark = [] { return isDarkMode(); };
         callbacks.accent = [] { return SystemTheme::accentColor(); };
+        callbacks.popupMenu = [this](HWND owner, const std::vector<shell::MenuItem>& items, POINT at) {
+            QObject* theme = m_qml.singletonInstance<QObject*>(u"WinShun"_s, u"Theme"_s);
+            return traymenu::popup(owner, items, at, theme);
+        };
         callbacks.copyText = [this](const QString& text) {
             if (!text.isEmpty())
                 copyText(text);
@@ -836,6 +901,7 @@ capture::CaptureEditor* CaptureApp::editor()
         capture::saveImage(m_pinSaver, this, image, path,
             [this](const QString& saved, const QString& error) { notifySaved(saved, error); }, m_settings.options().saveFolder);
     };
+    hooks.chooseSavePath = capture::chooseScreenshotSavePath;
     hooks.pin = [this](const QImage& image, const QByteArray& project, QPoint origin) { pins().pin(image, origin, true, project); };
     hooks.ocr = [this](const QImage& image, double dpr, const QRect& where) { showCaptureOcr(image, dpr, where); };
     hooks.smart = smartHooks();

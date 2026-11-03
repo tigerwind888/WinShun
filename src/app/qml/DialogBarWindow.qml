@@ -121,8 +121,8 @@ Window {
         showNumbers = false
     }
     readonly property string numberModifier: numberKey === Qt.Key_Alt ? "Alt" : "Ctrl"
-    // As the launcher's (Main.qml): a digit another program holds is its,
-    // its row's chord struck through.
+    // As the launcher's (Main.qml): a chord that is one of Win顺's own
+    // shortcuts stays that, its row's chord struck through.
     function numberUsable(number) {
         return number >= 1 && (bar.numberKeysLeft & (1 << number)) === 0
     }
@@ -181,7 +181,8 @@ Window {
         const ctrl = (event.modifiers & Qt.ControlModifier) !== 0
         const shift = (event.modifiers & Qt.ShiftModifier) !== 0
         const row = list.count > 0 ? list.currentIndex : -1
-        switch (event.key) {
+        const key = SearchKeys.navigationKey(event.key, event.modifiers, input.preeditText.length > 0)
+        switch (key) {
         case Qt.Key_Down: move(1); break
         case Qt.Key_Up: move(-1); break
         case Qt.Key_PageDown: move(Math.max(1, window.bar.rows)); break
@@ -265,20 +266,26 @@ Window {
         width: window.width
         height: window.bar.barHeight
 
-        Glyph {
+        Image {
             id: searchIcon
+            objectName: "dialogSearchLogo"
             anchors.left: parent.left
-            anchors.leftMargin: 14
+            anchors.leftMargin: 12
             anchors.verticalCenter: parent.verticalCenter
-            glyph: "" // Search
-            size: 16
+            width: 20
+            height: width
+            source: "qrc:/branding/logo.svg"
+            sourceSize.width: width
+            sourceSize.height: height
+            smooth: false
+            Accessible.ignored: true
         }
 
         TextInput {
             id: input
             objectName: "dialogSearchField"
             anchors.left: searchIcon.right
-            anchors.leftMargin: 10
+            anchors.leftMargin: 8
             anchors.right: trailing.left
             anchors.rightMargin: 10
             anchors.verticalCenter: parent.verticalCenter
@@ -301,7 +308,7 @@ Window {
                 anchors.fill: parent
                 verticalAlignment: Text.AlignVCenter
                 text: window.bar.pathCopied ? qsTr("路径已复制，请粘贴到对话框的路径输入框")
-                      : window.bar.copyOnly ? (window.bar.copyOnlyHint === "installed" ? qsTr("管理员窗口：搜索后复制路径再手动粘贴（安装版才能直接跳转）")
+                      : window.bar.copyOnly ? (window.bar.copyOnlyHint === "other" ? qsTr("管理员窗口：搜索后复制路径再手动粘贴（服务属于另一份 Win顺）")
                                                : window.bar.copyOnlyHint === "service" ? qsTr("管理员窗口：搜索后复制路径再手动粘贴（装 Win顺 服务可直接跳转）")
                                                : qsTr("管理员窗口：搜索后复制路径再手动粘贴"))
                       : window.bar.elevatedJump ? qsTr("管理员窗口：直接跳转到文件夹")

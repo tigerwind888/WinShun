@@ -40,6 +40,9 @@ qt_add_executable(WinShun WIN32
     DropPieHelper.cpp DropPieHelper.h
     AiSettings.cpp AiSettings.h
     App.cpp App.h
+    platform/PluginHotkeys.cpp platform/PluginHotkeys.h
+    ClipboardDisplay.cpp ClipboardDisplay.h ClipboardDisplayProtocol.h
+    ClipboardDisplayReplica.cpp ClipboardDisplayReplica.h
     CommandLine.cpp CommandLine.h
     ColorText.cpp ColorText.h
     platform/ContentOpen.cpp platform/ContentOpen.h
@@ -68,7 +71,6 @@ qt_add_executable(WinShun WIN32
     TriggerJournal.cpp TriggerJournal.h
     TrayMenu.cpp TrayMenu.h
     WebSuggester.cpp WebSuggester.h
-    WindowLogo.cpp WindowLogo.h
     platform/ClipboardWatcher.cpp platform/ClipboardWatcher.h
     platform/ComWorker.cpp platform/ComWorker.h
     platform/Credentials.cpp platform/Credentials.h
@@ -94,7 +96,6 @@ qt_add_executable(WinShun WIN32
     platform/NetworkNotifier.cpp platform/NetworkNotifier.h
     platform/NumberKeys.cpp platform/NumberKeys.h
     platform/Paster.cpp platform/Paster.h
-    platform/PeekingLogo.cpp platform/PeekingLogo.h
     platform/PointerWatch.cpp platform/PointerWatch.h
     platform/PreviewHost.cpp platform/PreviewHost.h
     platform/Shell.cpp platform/Shell.h platform/ShellDialogs.cpp
@@ -120,7 +121,9 @@ qt_add_executable(WinShun WIN32
 
 set(qml_files
     qml/Main.qml
+    qml/SearchKeys.qml
     qml/Theme.qml
+    qml/UiScale.qml
     qml/WindowEdge.qml
     qml/SearchBar.qml
     qml/ScopeTabs.qml
@@ -158,6 +161,7 @@ set(qml_files
     qml/PreviewWindow.qml
     qml/HoverTip.qml
     qml/ShortcutTip.qml
+    qml/Shortcuts.qml
     qml/NameTip.qml
     qml/DropMenu.qml
     qml/Footer.qml
@@ -178,6 +182,7 @@ set(qml_files
     qml/SwitchLevel.qml
     qml/FlatButton.qml
     qml/InputBox.qml
+    qml/WebSearchOptions.qml
     qml/WebShortcutForm.qml
     qml/FavoritesSection.qml
     qml/FavoriteForm.qml
@@ -186,6 +191,7 @@ set(qml_files
     qml/CenteredNumber.qml
     qml/IconNumber.qml
     qml/NumberHints.qml
+    qml/ShownRows.qml
     qml/ShortcutsButton.qml
     qml/KeyCap.qml
     qml/Chip.qml
@@ -215,7 +221,7 @@ set(qml_files
     qml/SettingsConfirm.qml
     qml/SettingsNotice.qml
 )
-set_source_files_properties(qml/Theme.qml qml/Gleaning.qml qml/WarmPalette.qml qml/AuthorClock.qml
+set_source_files_properties(qml/Theme.qml qml/Gleaning.qml qml/WarmPalette.qml qml/AuthorClock.qml qml/SearchKeys.qml qml/Shortcuts.qml
     PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
 # Serve every QML file from the module root (":/qt/qml/WinShun/Main.qml").
 foreach(file IN LISTS qml_files)
@@ -282,6 +288,7 @@ qt_add_qml_module(WinShun
         Placement.cpp Placement.h
         PluginGallery.cpp PluginGallery.h
         PluginSettings.cpp PluginSettings.h
+        PluginUpdates.cpp PluginUpdates.h # the installed plugins kept up to date in the background
         MovedPlugins.cpp MovedPlugins.h # the plugins that came with 0.16.0, from the library now (GitHub #138)
         platform/OcrPackage.cpp platform/OcrPackage.h
         ResultModel.cpp ResultModel.h
@@ -342,6 +349,10 @@ set_source_files_properties("${PROJECT_SOURCE_DIR}/resources/ocr/package.json" P
 qt_add_resources(WinShun "ocr_component"
     PREFIX /components
     FILES "${PROJECT_SOURCE_DIR}/resources/ocr/package.json")
+qt_add_resources(WinShun "branding"
+    PREFIX /branding
+    BASE "${PROJECT_SOURCE_DIR}/resources"
+    FILES "${PROJECT_SOURCE_DIR}/resources/logo.svg")
 # The icons: Phosphor Icons 2.1.2 (MIT), Regular and Fill (see Phosphor.h).
 qt_add_resources(WinShun "phosphor"
     PREFIX /fonts
@@ -353,7 +364,7 @@ target_include_directories(WinShun PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(WinShun PRIVATE
     wscore wsmcp wsplugin
     wscapture # the screen capture (src/capture)
-    Qt6::Gui Qt6::Qml Qt6::Quick
+    Qt6::Gui Qt6::Qml Qt6::Quick Qt6::Network
     Qt6::Svg # SvgIcon: web shortcuts' SVG icons, drawn once into the PNG kept
     comctl32 d2d1 dwmapi dwrite dxgi imm32 oleacc oleaut32 shcore shell32 shlwapi ole32 user32 uxtheme version winhttp winmm
     credui iphlpapi mpr psapi userenv windowscodecs

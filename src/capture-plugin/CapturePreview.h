@@ -10,6 +10,14 @@
 //     synthetic document. --toolbar-drag: the capture toolbar's grip
 //     dragged over a made-up screen (--interactive: on the screen, for a
 //     real mouse).
+//     --brush: real overlay mouse routing, stabilized traces and pixel equality
+//     with the export compositor; --interactive accepts the real mouse instead.
+//     --brush-performance: visible 12-second, up-to-500-Hz stroke; records
+//     actual presentation intervals, process CPU and memory. --busy seeds
+//     50 rectangles and five cached mosaic redactions before the stroke.
+//     --selection-keys: native Grabber -> overlay mouse/keyboard events -> Capture export;
+//     WASD, ten completed regions, R/Shift+R, current pixels and an isolated copy callback.
+//     --save-options: real native Save As, cancellation, overwrite, split menu and old-folder save.
 //   --preview-capture-settings <folder> [--english] [--dark] [--scale 1.5]
 //     Real settings QML at minimum width; checks the full-screen toggle,
 //     binding and persistence in a temporary profile. Registers no hotkeys.
@@ -46,5 +54,6 @@ void prepare(const QStringList& args); // before QGuiApplication
 void note(const QString& line); // a line into the log, from the start on
 int run(const QStringList& args); // after it; the exit code
 int runLongCapture(const QStringList& args); // generated scroll fixture through real WGC (LongCapturePreview.cpp)
+int runCaptureSave(const QStringList& args); // isolated native save and QML menu checks
 
 } // namespace ws::captureplugin::preview

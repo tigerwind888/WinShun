@@ -461,6 +461,7 @@ Window {
     onClipboardBelowChanged: closeContextMenu()
 
     function moveSelection(delta) {
+        selectionMoved()
         if (hintIndex >= 0) { // on the hints after the last row: ↓ ↑ along them, ↑ from the first back to the last row
             if (delta > 0)
                 hintIndex = Math.min(hints.length - 1, hintIndex + 1)
@@ -497,15 +498,22 @@ Window {
         window.launcher.selectRange(selectionAnchor, index, add)
         view.currentIndex = index
     }
+    // The keys moved it: Space previews from here (spaceTogglesPreview), and a
+    // hover still waiting does not take the preview off the current row.
+    function selectionMoved() {
+        spaceTogglesPreview = true
+        previewHoverTimer.stop()
+    }
     function extendSelection(delta) {
+        selectionMoved()
         if (view.count > 0)
             selectTo(Math.max(0, Math.min(view.count - 1, view.currentIndex + delta)), false)
     }
 
     // Ctrl+1… (or Alt+1…, Launcher.numberKeys) opens the nth row shown,
     // counted from the first one at least half in view. The keys come here as
-    // the window's own (no hook: GitHub #10); a digit another program holds
-    // as a global hotkey stays its (numberkeys::heldMask).
+    // the window's own, also a digit another program holds as a global hotkey
+    // (numberkeys::Hook, GitHub #175).
     readonly property int numberKey: launcher.numberKeys === "ctrl" ? Qt.Key_Control
                                    : launcher.numberKeys === "alt" ? Qt.Key_Alt : -1
     readonly property int firstShownRow: Math.max(0, rowAtY(view.contentY + viewRowHeight / 2, true) * gridColumns)
@@ -523,8 +531,8 @@ Window {
         function onKeyReleased(event) { numberHints.release(event) }
     }
     onActiveFocusItemChanged: numberHints.reset()
-    // A digit another program holds as a global hotkey is its (Launcher.numberKeysLeft):
-    // the row still shows the chord, struck through (ResultRow.hintTaken).
+    // A chord that is one of Win顺's own shortcuts stays that (Launcher.numberKeysLeft):
+    // the row still shows it, struck through (ResultRow.hintTaken).
     function numberUsable(number) {
         return number >= 1 && (launcher.numberKeysLeft & (1 << number)) === 0
     }
@@ -640,6 +648,17 @@ Window {
         host: window.launcher
     }
 
+    // Space types a space until the selection was moved or the preview
+    // opened, when Space is the preview key; typing brings the space back.
+    property bool spaceTogglesPreview: false
+    Connections {
+        target: window.searchBar
+        function onTyped() {
+            window.spaceTogglesPreview = false
+            previewHoverTimer.stop()
+        }
+    }
+
     Connections {
         target: window.searchBar
         function onCompositionChanged() {
@@ -685,7 +704,7 @@ Window {
             return
         }
         if (searchBar.composition.length === 0 && window.launcher.isPreviewKey(event.key, event.modifiers)
-                && homeIndex < 0 && hintIndex < 0 && (view.currentIndex >= 0 || event.key !== Qt.Key_Space)) {
+                && homeIndex < 0 && hintIndex < 0 && (event.key !== Qt.Key_Space || (spaceTogglesPreview && view.currentIndex >= 0))) {
             if (!event.isAutoRepeat)
                 togglePreview()
             event.accepted = true
@@ -693,6 +712,14 @@ Window {
         }
         const ctrl = (event.modifiers & Qt.ControlModifier) !== 0
         const shift = (event.modifiers & Qt.ShiftModifier) !== 0
+        if (event.key === Qt.Key_Comma && (event.modifiers & ~Qt.KeypadModifier) === Qt.ControlModifier
+                && searchBar.composition.length === 0) {
+            if (!event.isAutoRepeat)
+                window.launcher.openSettings()
+            event.accepted = true
+            return
+        }
+        const key = SearchKeys.navigationKey(event.key, event.modifiers, searchBar.composition.length > 0)
         // Ctrl+T: pinned, or not (the pin at the box's corner; Lertaro's key,
         // linux.do #157). From the row of apps too.
         if (event.key === Qt.Key_T && ctrl && !shift && (event.modifiers & Qt.AltModifier) === 0) {
@@ -707,7 +734,7 @@ Window {
             return
         }
         if (homeIndex >= 0) { // on the row of apps (nothing typed, so ← → move nothing else)
-            switch (event.key) {
+            switch (key) {
             case Qt.Key_Left: homeIndex = Math.max(0, homeIndex - 1); break
             case Qt.Key_Right: homeIndex = Math.min(launcher.frequentApps.length - 1, homeIndex + 1); break
             case Qt.Key_Down: leaveHome(); break
@@ -720,12 +747,12 @@ Window {
             event.accepted = true
             return
         }
-        if (event.key === Qt.Key_Down || event.key === Qt.Key_Up || event.key === Qt.Key_PageDown || event.key === Qt.Key_PageUp) {
+        if (key === Qt.Key_Down || key === Qt.Key_Up || key === Qt.Key_PageDown || key === Qt.Key_PageUp) {
             window.launcher.keyboardMoved() // Alt+P is for this row now, not the one under a pointer left where it was
             if (panel && launcher.gallery && searchBar.composition.length === 0)
                 galleryNavigation = true
         }
-        switch (event.key) {
+        switch (key) {
         case Qt.Key_Down: shift ? extendSelection(gridColumns) : moveSelection(gridColumns); break
         case Qt.Key_Up:
             if (!shift && showHome && view.currentIndex <= 0)
@@ -809,8 +836,9 @@ Window {
                 return
             window.launcher.togglePanel()
             break
-        case Qt.Key_D: // typed in a folder's window: its rows first, or there alone (GitHub #110)
-            if (!ctrl || shift || !window.launcher.switchTypingFolder())
+        case Qt.Key_D: // Ctrl+Shift+D: current folder first, or alone; Ctrl+D pages down.
+            if ((event.modifiers & ~Qt.KeypadModifier) !== (Qt.ControlModifier | Qt.ShiftModifier)
+                    || searchBar.composition.length > 0 || !window.launcher.switchTypingFolder())
                 return
             break
         case Qt.Key_O:
@@ -854,6 +882,8 @@ Window {
                 detailEdit.copy()
                 break
             }
+            if (!shift && window.launcher.copyPreviewSelection()) // picked in the preview's text
+                break
             act(shift ? Launcher.CopyPath : Launcher.CopyItem)
             break
         default:
@@ -869,6 +899,7 @@ Window {
     function togglePreview() {
         if (homeIndex >= 0 || hintIndex >= 0)
             return
+        spaceTogglesPreview = true
         const pointer = window.launcher.pointerIfMoved()
         if (pointer !== undefined && view.count > 0) {
             const p = view.mapFromGlobal(pointer.x, pointer.y)
@@ -965,7 +996,14 @@ Window {
     Connections {
         target: window.frame
         function onDoubleClicked() { window.placement.moveHome() } // on the header or footer
-        function onHandleClicked() { window.launcher.openSettings() } // the search icon (SearchBar.qml)
+        function onHandleClicked(button) {
+            if (button === Qt.MiddleButton)
+                window.launcher.togglePin()
+            else if (button === Qt.RightButton)
+                window.placement.centerOnScreen()
+            else if (button === Qt.LeftButton)
+                window.launcher.openSettings()
+        }
     }
     Connections {
         target: window.placement
@@ -1002,6 +1040,8 @@ Window {
         onRowDoubleClicked: (index, modifiers) => window.rowDoubleClicked(index, modifiers)
         onRowMenuRequested: (index, globalPos, modifiers) => window.rowMenuRequested(index, globalPos, modifiers)
         onRowDragRequested: (index) => window.launcher.dragOut(index)
+        onRowPreviewRequested: (index) => window.rowPreviewRequested(index)
+        onRowHoverMoved: (index, globalPos) => window.rowHoverMoved(index, globalPos)
         nameTip: nameTip
     }
 
@@ -1009,6 +1049,7 @@ Window {
     // selection, Shift takes the rows up to it, plain opens it; the right
     // button with Shift the system's menu, else Win顺's.
     function rowClicked(index, modifiers) {
+        spaceTogglesPreview = true
         const ctrl = (modifiers & Qt.ControlModifier) !== 0
         if (modifiers & Qt.ShiftModifier) {
             selectTo(index, ctrl)
@@ -1035,6 +1076,37 @@ Window {
             return
         view.currentIndex = index
         launcher.clickRow(index)
+    }
+    // A middle click: that row's preview (as Alt+P on it), the file stays shut.
+    function rowPreviewRequested(index) {
+        selectionMoved()
+        if (panel && launcher.gallery)
+            galleryNavigation = true
+        window.launcher.clearSelection()
+        view.currentIndex = index
+        window.launcher.keyboardMoved() // the pointer is on this row, as on the keyboard's
+        window.launcher.togglePreview(index)
+    }
+    // An open preview shows the row the mouse rests on for a moment (as the
+    // clipboard's, GitHub #47 and #186), the current row stays where it is.
+    // It never opens or closes the preview. Moving the selection brings the
+    // preview back to the current row (Launcher.followPreview).
+    property point previewHoverPos: Qt.point(-1, -1) // the last real mouse move, global
+    property int previewHoverRow: -1
+    function rowHoverMoved(index, globalPos) {
+        // A wheel moving rows under a still mouse sends the same position.
+        if (globalPos.x === previewHoverPos.x && globalPos.y === previewHoverPos.y)
+            return
+        previewHoverPos = globalPos
+        if (Qt.application.keyboardModifiers & (Qt.ControlModifier | Qt.ShiftModifier))
+            return
+        previewHoverRow = index
+        previewHoverTimer.restart()
+    }
+    Timer {
+        id: previewHoverTimer
+        interval: 100
+        onTriggered: window.launcher.previewHover(window.previewHoverRow)
     }
     // A click on a system switch's own switch: it toggles, whatever the row asks.
     function rowSwitchClicked(index) {
@@ -1241,7 +1313,7 @@ Window {
                 }
                 // Typed in a folder's window, its own rows first (GitHub #110):
                 // the rows found elsewhere under a caption, the way to the
-                // folder alone at its end (as Ctrl+D).
+                // folder alone at its end (as Ctrl+Shift+D).
                 section.property: "elsewhere"
                 section.delegate: ElsewhereCaption {
                     id: caption
@@ -1406,6 +1478,8 @@ Window {
                     }
                     onMenuRequested: (index, globalPos, modifiers) => window.rowMenuRequested(index, globalPos, modifiers)
                     onDragRequested: (index) => window.launcher.dragOut(index)
+                    onPreviewRequested: (index) => window.rowPreviewRequested(index)
+                    onHoverMoved: (index, globalPos) => window.rowHoverMoved(index, globalPos)
                 }
             }
 

@@ -6,7 +6,7 @@ import WinShun
 // (or where the query matched), where it came from and when. A click
 // shows it in the preview; its paste button or a double click pastes it
 // (ClipboardPage.qml). With clickToPaste a click pastes it, as in Windows'
-// own history, and that button shows the preview instead. The first nine show on the icon the number that
+// own history, and that button shows the preview instead. The first nine have a separate number column that
 // pastes them (Alt+1…); picked rows show the order they will be pasted in;
 // the current and the hovered row show buttons: paste, pin, delete.
 Item {
@@ -28,15 +28,18 @@ Item {
     required property bool afterPinned // the first after those in "固定" listed first
     required property bool screenshot // a picture Win顺's capture took: tagged 截图 (when in no group)
     required property bool pasted // pasted from the list before, with 粘贴后保持位置 on (else the last pasted is on top): a check mark
-    property int hint: 0 // the number that pastes this row (Alt+1...), on its icon; 0 for none
+    property int hint: 0 // the number that pastes this row (Alt+1...); 0 for none
+    property bool reserveHintSpace: false // keep icons aligned when hints fade or a row has no number
     property string hintModifier: "Alt" // ... with this held
-    property bool hintTaken: false // another program holds that chord as a global hotkey: shown struck through
+    property bool hintTaken: false // one of Win顺's own shortcuts has that chord: shown struck through
     property real hintOpacity: 1
     property string pasteTip: qsTr("粘贴") // where the paste button pastes ("粘贴到搜索框")
     property bool clickToPaste: false // a click pastes (Clipboard::clickToPaste)
     property bool largePictures: false // a picture's thumbnail larger (Clipboard::largePictures)
+    property UiScale metrics: Theme.metrics
 
     // Thumbnail layout is independent of the clipboard kind (and its paste/drag actions).
+    readonly property int iconSize: metrics.dense ? 24 : 32 // 密集: one line, a smaller icon
     readonly property bool picture: kind === 4 || image.length > 0
     readonly property bool current: ListView.isCurrentItem
     readonly property int selectedCount: ListView.view ? ListView.view.model.selectedCount : 0
@@ -51,7 +54,7 @@ Item {
 
     signal clicked(int index, int modifiers)
     signal pasteRequested(int index) // its paste button, a double click
-    signal previewRequested(int index) // that button, with clickToPaste
+    signal previewRequested(int index) // that button, with clickToPaste; a middle click
     signal dragRequested(int index)
     signal moveRequested(int from, int to) // its handle dragged over row `to`
     signal moveHeld(bool held) // its handle pressed, let go
@@ -97,13 +100,14 @@ Item {
 
     Item {
         id: iconSlot
-        x: 16
+        objectName: "clipboardIconSlot"
+        x: 16 + (row.reserveHintSpace ? 28 : 0)
         anchors.verticalCenter: parent.verticalCenter
         // Pictures larger, on a taller row (ClipboardPage.pictureRowHeight):
         // what is in them shows (GitHub #9); 108 x 68 holds a 16:10 screen whole,
         // 208 x 130 (largePictures) its details too (forum #137).
-        width: !row.picture ? 32 : row.largePictures ? 208 : 108
-        height: !row.picture ? 32 : row.largePictures ? 130 : 68
+        width: !row.picture ? row.iconSize : row.largePictures ? 208 : 108
+        height: !row.picture ? row.iconSize : row.largePictures ? 130 : 68
 
         Rectangle { // text and links: a sign on a soft tile
             anchors.fill: parent
@@ -135,7 +139,7 @@ Item {
             objectName: "clipboardFileIcon"
 
             readonly property real dpr: Screen.devicePixelRatio
-            readonly property int pixels: Math.round(32 * dpr)
+            readonly property int pixels: Math.round(row.iconSize * dpr)
 
             visible: (row.kind === 2 || row.kind === 3) && !thumbnail.ready
             x: Math.round((parent.width - width) / 2 * dpr) / dpr + 1 / 64
@@ -250,17 +254,18 @@ Item {
             elide: Text.ElideRight
             maximumLineCount: 1
             color: row.missing ? Theme.subtext : Theme.text
-            font.pixelSize: Theme.uiTitle
+            font.pixelSize: row.metrics.uiTitle
         }
 
         Text {
+            visible: !row.metrics.dense
             width: parent.width
             text: row.detail
             textFormat: Text.PlainText
             elide: Text.ElideRight
             maximumLineCount: 1
             color: Theme.subtext
-            font.pixelSize: Theme.uiCaption
+            font.pixelSize: row.metrics.uiCaption
         }
     }
 
@@ -271,7 +276,7 @@ Item {
         anchors.rightMargin: 16
         anchors.verticalCenter: parent.verticalCenter
         width: badgeRow.implicitWidth + 16
-        height: Theme.badgeHeight
+        height: row.metrics.badgeHeight
         radius: Theme.pillRadius(height)
         color: Theme.badge
 
@@ -294,21 +299,29 @@ Item {
                 elide: Text.ElideRight
                 width: Math.min(implicitWidth, 96)
                 color: row.groupName.length > 0 ? Theme.accent : Theme.subtext
-                font.pixelSize: Theme.uiCaption
+                font.pixelSize: row.metrics.uiCaption
             }
         }
     }
 
-    IconNumber { // "Alt+1" (or "Ctrl+1"): pastes this row
-        id: iconNumber
+    Item {
+        id: numberSlot
+        objectName: "clipboardNumberSlot"
+        visible: row.reserveHintSpace && row.hint > 0
         opacity: row.hintOpacity
-        // From the top left corner of the icon, or of the picture as drawn
-        // (narrower or flatter than its slot), rightwards, as in the launcher.
-        readonly property bool picture: row.picture && thumbnail.ready
-        keys: row.hint > 0 ? row.hintModifier + "+" + row.hint : ""
-        taken: row.hintTaken
-        x: row.onPixel(iconSlot.x + (picture ? thumbnail.x : fileIcon.visible ? fileIcon.x : 0) - 5)
-        y: row.onPixel(iconSlot.y + (picture ? thumbnail.y : fileIcon.visible ? fileIcon.y : 0) - 4)
+        x: row.onPixel(14)
+        width: 24
+        height: row.height
+
+        CenteredNumber {
+            objectName: "clipboardNumber"
+            text: row.hint > 0 ? String(row.hint) : ""
+            font.pixelSize: row.metrics.uiTitle
+            font.weight: Font.Medium
+            font.strikeout: row.hintTaken
+            color: row.hintTaken ? Theme.faint : row.current ? Theme.accent : Theme.subtext
+            Accessible.ignored: true
+        }
     }
 
     MouseArea {
@@ -318,7 +331,7 @@ Item {
         property bool draggedOut: false
         anchors.fill: parent
         hoverEnabled: true
-        acceptedButtons: Qt.LeftButton | Qt.RightButton
+        acceptedButtons: Qt.LeftButton | Qt.MiddleButton | Qt.RightButton
         onPressed: (mouse) => {
             draggedOut = false
             pressedAt = Qt.point(mouse.x, mouse.y)
@@ -340,6 +353,8 @@ Item {
                 return
             if (mouse.button === Qt.RightButton)
                 row.menuRequested(row.index, area.mapToGlobal(mouse.x, mouse.y))
+            else if (mouse.button === Qt.MiddleButton)
+                row.previewRequested(row.index)
             else
                 row.clicked(row.index, mouse.modifiers)
         }
@@ -350,6 +365,8 @@ Item {
             if (mouse.button === Qt.LeftButton && (mouse.modifiers & (Qt.ControlModifier | Qt.ShiftModifier)) === 0
                 && !row.clickToPaste)
                 row.pasteRequested(row.index)
+            else if (mouse.button === Qt.MiddleButton)
+                row.previewRequested(row.index)
         }
 
         Row {
@@ -362,6 +379,7 @@ Item {
 
             RowAction { // dragged up or down: to another place in its group
                 id: moveAction
+                small: row.metrics.dense
                 visible: row.movable
                 draggable: true
                 glyph: "" // GripperBarHorizontal
@@ -385,6 +403,7 @@ Item {
             }
             RowAction { // a click pastes already (clickToPaste): the preview here instead
                 id: pasteAction
+                small: row.metrics.dense
                 glyph: row.clickToPaste ? "" : "" // View, Paste
                 tip: row.clickToPaste ? qsTr("预览") : row.pasteTip
                 tipShortcut: row.clickToPaste ? "Alt+P" : "Enter"
@@ -392,6 +411,7 @@ Item {
             }
             RowAction {
                 id: pinAction
+                small: row.metrics.dense
                 glyph: row.pinned ? "" : "" // Unpin, Pin
                 tip: row.pinned ? qsTr("取消固定") : qsTr("固定（不会过期）")
                 tipShortcut: "Ctrl+P"
@@ -399,6 +419,7 @@ Item {
             }
             RowAction {
                 id: removeAction
+                small: row.metrics.dense
                 glyph: "" // Delete
                 tip: qsTr("删除")
                 tipShortcut: "Delete"
@@ -412,15 +433,15 @@ Item {
                                            : pasteAction.tipWanted ? pasteAction
                                            : pinAction.tipWanted ? pinAction
                                            : removeAction.tipWanted ? removeAction : null
-        readonly property bool onKeys: !hovered && iconNumber.visible && iconNumber.taken && area.containsMouse // (a hover handler under the area gets no hover)
-                                          && iconNumber.contains(iconNumber.mapFromItem(area, area.mouseX, area.mouseY))
+        readonly property bool onKeys: !hovered && numberSlot.visible && numberSlot.opacity > 0 && row.hintTaken && area.containsMouse // (a hover handler under the area gets no hover)
+                                          && numberSlot.contains(numberSlot.mapFromItem(area, area.mouseX, area.mouseY))
         readonly property bool onMark: !hovered && !onKeys && pastedMark.visible && area.containsMouse
                                        && pastedMark.contains(pastedMark.mapFromItem(area, area.mouseX, area.mouseY))
-        target: hovered ? hovered : onKeys ? iconNumber : onMark ? pastedMark : null
+        target: hovered ? hovered : onKeys ? numberSlot : onMark ? pastedMark : null
         text: hovered ? hovered.tip
             : onMark ? qsTr("已粘贴过")
-            : onKeys ? qsTr("%1 被别的程序占用了，在这里按也会交给那个程序。可在设置里改用 %2")
-                       .arg(iconNumber.keys).arg(row.hintModifier === "Alt" ? "Ctrl" : "Alt")
+            : onKeys ? qsTr("%1 是你给 Win顺 设的快捷键，在这里按也是那个快捷键。可在设置里改用 %2")
+                       .arg(row.hintModifier + "+" + row.hint).arg(row.hintModifier === "Alt" ? "Ctrl" : "Alt")
             : ""
         shortcut: hovered ? hovered.tipShortcut : ""
     }

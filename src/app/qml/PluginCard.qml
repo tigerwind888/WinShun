@@ -15,6 +15,13 @@ import WinShun
 Rectangle {
     id: card
 
+    property SettingsEditor editor: null
+    required property bool webSearch
+    readonly property real dpr: Screen.devicePixelRatio // one Screen attached object for all its items (GitHub #111)
+    readonly property Item webOptions: detailsLoader.item ? detailsLoader.item.webOptions : null
+    readonly property bool detailsSettled: !expanded || (detailsLoader.item !== null
+        && Math.abs(details.height - detailsLoader.item.implicitHeight) < 0.5)
+    signal editWebShortcut(int index, Item button)
     required property PluginSettings plugins
     required property string pluginId
     required property string name
@@ -47,7 +54,7 @@ Rectangle {
     property string pendingFocus // the command whose keyword box takes the focus once made
 
     // Anything to unfold: a plugin that cannot be used has none.
-    readonly property bool hasDetails: keywords.length > 0 || aiExpose || permissions.length > 0 || settings.length > 0
+    readonly property bool hasDetails: webSearch || keywords.length > 0 || aiExpose || permissions.length > 0 || settings.length > 0
     readonly property color toneColor: tone === "ok" ? Theme.success
                                      : tone === "busy" ? Theme.accent
                                      : tone === "warn" ? Theme.caution
@@ -64,7 +71,7 @@ Rectangle {
         pendingFocus = command
     }
 
-    function onPixel(v) { return Math.round(v * Screen.devicePixelRatio) / Screen.devicePixelRatio }
+    function onPixel(v) { return Math.round(v * card.dpr) / card.dpr }
 
     onExpandedChanged: if (expanded) loadedOnce = true
     Component.onCompleted: if (expanded) loadedOnce = true
@@ -113,7 +120,7 @@ Rectangle {
                 y: 2
 
                 Image { // whole device pixels, unsmoothed (see ResultRow)
-                    readonly property real dpr: Screen.devicePixelRatio
+                    readonly property real dpr: card.dpr
                     readonly property int pixels: Math.round(32 * dpr)
 
                     x: 1 / 64
@@ -330,13 +337,24 @@ Rectangle {
         id: detailsComponent
 
         Column {
+            property alias webOptions: webOptionsLoader.item
             width: detailsLoader.width
             spacing: 12
 
             Rectangle {
                 width: parent.width
-                height: Theme.edge(Screen.devicePixelRatio)
+                height: Theme.edge(card.dpr)
                 color: Theme.divider
+            }
+
+            Loader {
+                id: webOptionsLoader
+                width: parent.width
+                active: card.webSearch && card.expanded && card.pluginEnabled && card.editor !== null
+                sourceComponent: WebSearchOptions {
+                    editor: card.editor
+                    onEditRequested: (index, button) => card.editWebShortcut(index, button)
+                }
             }
 
             Column { // the keywords: two to a line where they fit
@@ -557,7 +575,7 @@ Rectangle {
 
                 Rectangle {
                     width: parent.width
-                    height: Theme.edge(Screen.devicePixelRatio)
+                    height: Theme.edge(card.dpr)
                     color: Theme.divider
                 }
 

@@ -23,7 +23,8 @@ import WinShun
 Item {
     id: page
 
-    required property Clipboard clipboard
+    required property var clipboard
+    property bool controllerEventsEnabled: true
     required property WindowFrame frame
     property int rows: 8 // the list shows this many (ClipboardWindow.qml: what fits below)
     property int listWidth: width // the list's part; the preview takes the rest
@@ -38,7 +39,8 @@ Item {
     signal previewResized() // ... let go
     signal previewWidthReset() // ... double clicked: the default
 
-    readonly property int rowHeight: Theme.rowHeight // what the window's height is counted in
+    readonly property UiScale metrics: UiScale { size: page.clipboard.uiSize } // its own 界面大小 (Settings 剪贴板大小)
+    readonly property int rowHeight: page.metrics.rowHeight // what the window's height is counted in
     // A picture's row: its thumbnail larger (ClipRow), larger still with largePictures.
     readonly property int pictureRowHeight: clipboard.largePictures ? 142 : 80
     // Opened from a field of Win顺's own: Enter pastes there, Esc goes back.
@@ -126,8 +128,9 @@ Item {
         if (list.count > 0)
             selectTo(Math.max(0, Math.min(list.count - 1, list.currentIndex + delta)), false)
     }
-    // The number keys (Clipboard.numberKeys): Alt+1... pastes the first nine
-    // rows; showing their hints never changes which keys paste them.
+    // The number keys (Clipboard.numberKeys): Alt+1... pastes the rows shown,
+    // counted from the first one at least half in view (ShownRows); showing
+    // their hints never changes which keys paste them.
     readonly property int numberKey: clipboard.numberKeys === "alt" ? Qt.Key_Alt
                                    : clipboard.numberKeys === "ctrl" ? Qt.Key_Control : -1
     NumberHints {
@@ -137,8 +140,12 @@ Item {
         // Over another app the existing KeyRouter delivers modifier keys too.
         listening: page.visible && (page.Window.active || page.clipboard.keysRouted) && !page.menuOpen
     }
-    // A digit another program holds as a global hotkey is its (Clipboard.numberKeysLeft):
-    // the row still shows the chord, struck through (ClipRow.hintTaken).
+    ShownRows {
+        id: shownRows
+        view: list
+    }
+    // A chord that is one of Win顺's own shortcuts stays that (Clipboard.numberKeysLeft):
+    // the row still shows it, struck through (ClipRow.hintTaken).
     function numberUsable(number) {
         return (clipboard.numberKeysLeft & (1 << number)) === 0
     }
@@ -327,8 +334,11 @@ Item {
         }
         const others = (event.modifiers & ~(Qt.ShiftModifier | Qt.KeypadModifier)) !== numberModifier
         if (numberModifier >= 0 && !others && event.key >= Qt.Key_1 && event.key <= Qt.Key_9) {
-            if (numberUsable(event.key - Qt.Key_0))
-                clipboard.quickPaste(event.key - Qt.Key_0, shift)
+            const row = shownRows.rowOf(event.key - Qt.Key_0)
+            if (row >= 0 && numberUsable(event.key - Qt.Key_0)) {
+                list.currentIndex = row
+                clipboard.quickPaste(row, shift)
+            }
             event.accepted = true
             return
         }
@@ -459,6 +469,7 @@ Item {
 
     Connections {
         target: page.clipboard
+        enabled: page.controllerEventsEnabled
         function onShown() {
             input.text = ""
             page.pinyinHint = false
@@ -530,7 +541,7 @@ Item {
             id: header
             y: page.placed(page.headerFrom, height)
             width: parent.width
-            height: Theme.headerHeight
+            height: page.metrics.headerHeight
 
             Component.onCompleted: {
                 page.frame.addDragArea(header)
@@ -539,17 +550,24 @@ Item {
                 page.frame.addControl(eyeButton)
             }
 
-            Glyph {
+            Image {
                 id: icon
+                objectName: "clipboardSearchLogo"
                 anchors.left: parent.left
                 anchors.leftMargin: 20
                 anchors.verticalCenter: parent.verticalCenter
-                glyph: "" // Paste
-                size: Theme.searchIconSize
+                width: page.metrics.searchIconSize
+                height: width
+                source: "qrc:/branding/logo.svg"
+                sourceSize.width: width
+                sourceSize.height: height
+                smooth: false
+                Accessible.ignored: true
             }
 
             TextInput {
                 id: input
+                objectName: "clipboardSearchField"
                 anchors.left: icon.right
                 anchors.leftMargin: 14
                 anchors.right: pausedTag.visible ? pausedTag.left : eyeButton.left
@@ -561,7 +579,7 @@ Item {
                 cursorVisible: activeFocus || page.clipboard.keysRouted
                 clip: true
                 color: Theme.text
-                font.pixelSize: Theme.uiSearch
+                font.pixelSize: page.metrics.uiSearch
                 selectByMouse: true
                 selectionColor: Theme.textSelection
                 selectedTextColor: Theme.text
@@ -606,6 +624,7 @@ Item {
             // (Clipboard.pinned). Not while pasting into a field of Win顺's.
             RowAction {
                 id: pinButton
+                small: page.metrics.dense
                 visible: !page.intoField
                 anchors.right: parent.right
                 anchors.rightMargin: 14
@@ -623,6 +642,7 @@ Item {
             // (clipboard.previewOpen); it only makes it visible and clickable.
             RowAction {
                 id: eyeButton
+                small: page.metrics.dense
                 anchors.right: pinButton.visible ? pinButton.left : parent.right
                 anchors.rightMargin: pinButton.visible ? 4 : 14
                 anchors.verticalCenter: parent.verticalCenter
@@ -648,13 +668,14 @@ Item {
                     anchors.centerIn: parent
                     text: qsTr("已暂停记录")
                     color: Theme.accent
-                    font.pixelSize: Theme.uiCaption
+                    font.pixelSize: page.metrics.uiCaption
                 }
             }
         }
 
         ClipTabs {
             id: tabs
+            metrics: page.metrics
             y: page.placed(page.tabsFrom, height)
             width: parent.width
             parentLeft: page.x
@@ -770,13 +791,15 @@ Item {
                         objectName: "clipboardRow-" + index
                         width: list.width
                         height: clipRow.picture ? page.pictureRowHeight : page.rowHeight
-                        hint: page.numberKey >= 0 && index < 9 ? index + 1 : 0
+                        hint: page.numberKey >= 0 ? shownRows.numberOf(index) : 0
+                        reserveHintSpace: page.numberKey >= 0 && page.clipboard.numberHints !== "off"
                         hintOpacity: numberHints.hintOpacity
                         hintModifier: page.numberKey === Qt.Key_Control ? "Ctrl" : "Alt"
                         hintTaken: clipRow.hint > 0 && !page.numberUsable(clipRow.hint)
                         pasteTip: page.pasteLabel
                         clickToPaste: page.clipboard.clickToPaste
                         largePictures: page.clipboard.largePictures
+                        metrics: page.metrics
                         onDragRequested: (index) => page.clipboard.dragOut(index)
                         onMoveHeld: (held) => {
                             list.rowDragging = held
@@ -859,7 +882,7 @@ Item {
                         textFormat: Text.PlainText
                         elide: Text.ElideMiddle // a long query keeps its end and the quotes
                         color: Theme.subtext
-                        font.pixelSize: Theme.uiTitle
+                        font.pixelSize: page.metrics.uiTitle
                     }
                     Text {
                         width: parent.width
@@ -872,7 +895,7 @@ Item {
                             : (parent.category.group ?? 0) > 0 ? qsTr("在条目上点右键，选“移到…”放进来；放进分组的内容不会过期")
                             : qsTr("按 Tab 看看别的分类")
                         color: Theme.faint
-                        font.pixelSize: Theme.uiBody
+                        font.pixelSize: page.metrics.uiBody
                     }
                     Item {
                         width: 1
@@ -899,6 +922,7 @@ Item {
 
             ClipPreview {
                 id: preview
+                metrics: page.metrics
                 visible: page.previewOpen
                 onCopyRequested: (text, remember) => page.clipboard.copyText(text, remember)
                 x: listArea.width + 1
@@ -965,7 +989,7 @@ Item {
             id: footer
             y: page.placed(page.footerFrom, height)
             width: parent.width
-            implicitHeight: Theme.footerHeight
+            implicitHeight: page.metrics.footerHeight
             height: implicitHeight
 
             Component.onCompleted: {
@@ -995,7 +1019,7 @@ Item {
                 text: page.clipboard.statusText
                 textFormat: Text.PlainText
                 color: Theme.subtext
-                font.pixelSize: Theme.uiBody
+                font.pixelSize: page.metrics.uiBody
                 elide: Text.ElideRight
             }
 
@@ -1011,7 +1035,7 @@ Item {
                     text: page.selectedCount === 1 ? qsTr("已选 1 条，Esc 取消选择")
                                                    : qsTr("已选 %Ln 条，合在一起，用", "", page.selectedCount)
                     color: Theme.subtext
-                    font.pixelSize: Theme.uiBody
+                    font.pixelSize: page.metrics.uiBody
                 }
                 Rectangle {
                     id: separatorChip
@@ -1029,7 +1053,7 @@ Item {
                         anchors.centerIn: parent
                         text: page.clipboard.separatorName
                         color: Theme.text
-                        font.pixelSize: Theme.uiCaption
+                        font.pixelSize: page.metrics.uiCaption
                     }
                     MouseArea {
                         id: separatorArea
@@ -1044,7 +1068,7 @@ Item {
                     anchors.verticalCenter: parent.verticalCenter
                     text: qsTr("隔开")
                     color: Theme.subtext
-                    font.pixelSize: Theme.uiBody
+                    font.pixelSize: page.metrics.uiBody
                 }
             }
 
@@ -1081,11 +1105,12 @@ Item {
                 readonly property bool previewFits: page.selectedCount === 0
                     && (tabFits ? spacing + tabHint.fullWidth : 0) + spacing + previewHint.fullWidth <= free
 
-                KeyHint { id: enterHint; keys: "Enter"; label: page.pasteLabel }
-                KeyHint { id: backHint; keys: "Esc"; label: qsTr("返回"); visible: page.intoField && hints.roomy }
-                KeyHint { id: tabHint; keys: "Tab"; label: qsTr("分类"); visible: hints.tabFits }
+                KeyHint { id: enterHint; metrics: page.metrics; keys: "Enter"; label: page.pasteLabel }
+                KeyHint { id: backHint; metrics: page.metrics; keys: "Esc"; label: qsTr("返回"); visible: page.intoField && hints.roomy }
+                KeyHint { id: tabHint; metrics: page.metrics; keys: "Tab"; label: qsTr("分类"); visible: hints.tabFits }
                 KeyHint {
                     id: previewHint
+                    metrics: page.metrics
                     keys: "→"
                     label: page.previewOpen ? qsTr("关闭预览") : qsTr("预览")
                     visible: hints.previewFits
@@ -1109,7 +1134,7 @@ Item {
                 text: page.pinyinHintText
                 textFormat: Text.PlainText
                 color: Theme.faint
-                font.pixelSize: Theme.uiBody
+                font.pixelSize: page.metrics.uiBody
                 elide: Text.ElideRight
             }
 
@@ -1130,13 +1155,14 @@ Item {
                 visible: opacity > 0
                 Behavior on opacity { enabled: SystemTheme.animations; NumberAnimation { id: holdFade; duration: 150 } }
 
-                KeyHint { id: holdReleaseHint; keys: page.clipboard.holdKeys; label: qsTr("松开粘贴") }
-                KeyHint { id: holdEscHint; keys: "Esc"; label: qsTr("取消"); visible: holdNote.escFits }
+                KeyHint { id: holdReleaseHint; metrics: page.metrics; keys: page.clipboard.holdKeys; label: qsTr("松开粘贴") }
+                KeyHint { id: holdEscHint; metrics: page.metrics; keys: "Esc"; label: qsTr("取消"); visible: holdNote.escFits }
             }
 
-            // The other keys, while the mouse rests on it.
+            // The other keys, when it is clicked.
             ShortcutsButton {
                 id: infoButton
+                objectName: "shortcutsButton"
 
                 readonly property string modifier: page.numberKey === Qt.Key_Alt ? "Alt" : "Ctrl"
 
@@ -1145,24 +1171,12 @@ Item {
                 anchors.right: parent.right
                 anchors.rightMargin: 6
                 anchors.verticalCenter: parent.verticalCenter
-                shortcuts: (page.numberKey < 0 ? [] : [[modifier + "+1…9", qsTr("粘贴第几条")]]) // the numbers on the rows' icons
-                    .concat(page.intoField ? [] : [["Shift+Enter", qsTr("粘贴为纯文本")]])
-                    .concat(page.numberKey < 0 ? []
-                            : [[modifier + "+Shift+1…9", qsTr("第几条粘贴为纯文本")]])
-                    // Only where it works: a hotkey with something to hold (a lone F9 has not), over another program.
-                    .concat(!page.clipboard.holdToStep || page.intoField || !page.clipboard.shortcut.includes("+") ? []
-                            : [[page.clipboard.shortcut, qsTr("按住连按往下选，松开粘贴")]])
-                    .concat([
-                        ["→  Alt+P", qsTr("打开或关闭预览")],
-                        ["Shift+Tab", qsTr("上一个分类")],
-                        ["↑ ↓", qsTr("上下移动，PgUp PgDn 翻页")],
-                        ["Shift+↑ ↓", qsTr("选中多条，也可 Ctrl+单击、Shift+单击；按选的顺序一起粘贴")],
-                        ["Ctrl+C", qsTr("复制；预览里选中了图中的字时，复制那一段")],
-                        ["Ctrl+P", qsTr("固定或取消固定")],
-                        ["Delete", qsTr("删除，Ctrl+Z 撤销")],
-                        ["Shift+F10", qsTr("右键菜单")],
-                        ["Esc", qsTr("关闭；选中了多条时先取消选择")]
-                    ])
+                where: "clipboard"
+                context: ({
+                    numberModifier: page.numberKey < 0 ? "" : modifier, // the numbers in the rows' left column
+                    intoField: page.intoField,
+                    holdKey: page.clipboard.holdToStep ? page.clipboard.shortcut : ""
+                })
             }
         }
     }

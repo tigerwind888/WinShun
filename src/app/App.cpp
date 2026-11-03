@@ -1,4 +1,5 @@
 #include "App.h"
+#include "WebSearchProvider.h"
 #include "platform/OcrFiles.h"
 #include "platform/OcrPackage.h"
 
@@ -10,6 +11,7 @@
 #include "ClipImportJob.h"
 #include "ClipStore.h"
 #include "Clipboard.h"
+#include "ClipboardDisplay.h"
 #include "DialogBar.h"
 #include "Diagnostics.h"
 #include "DisplayDiagnostics.h"
@@ -34,6 +36,7 @@
 #include "Pipe.h"
 #include "Placement.h"
 #include "PluginSettings.h"
+#include "PluginUpdates.h"
 #include "ProxyAddress.h"
 #include "SavedFile.h"
 #include "SearchEngine.h"
@@ -53,7 +56,6 @@
 #include "Updater.h"
 #include "WebDav.h"
 #include "WindowFrame.h"
-#include "WindowLogo.h"
 #include "platform/ClipboardWatcher.h"
 #include "platform/ComWorker.h"
 #include "platform/Credentials.h"
@@ -66,8 +68,8 @@
 #include "platform/Integrity.h"
 #include "platform/KeyListener.h"
 #include "platform/MessageWindow.h"
+#include "platform/PluginHotkeys.h"
 #include "platform/NetworkNotifier.h"
-#include "platform/NumberKeys.h"
 #include "platform/Paster.h"
 #include "platform/PointerWatch.h"
 #include "platform/ServiceDialogNav.h"
@@ -120,7 +122,9 @@
 #include <QWinEventNotifier>
 
 #include <windows.h>
+#include <dwmapi.h>
 
+#include <cmath>
 #include <thread>
 
 using namespace Qt::StringLiterals;
@@ -186,6 +190,7 @@ enum TrayCommand {
     ClipboardCommand,
     PauseClipboardCommand,
     KeepAwakeCommand, // 保持唤醒（到 16:42）: only while it is on; ends it
+    PluginUpdatesCommand, // N plugins have a newer version
     PluginMenuCommand = 1000 // and up: the entries of the plugins' submenus (trayMenu)
 };
 
@@ -407,6 +412,7 @@ App::App()
 
 App::~App()
 {
+    m_clipDisplay.reset();
     delete m_onboardingWindow.data();
     m_onboardingQml.reset();
     m_onboarding.reset();
@@ -424,6 +430,8 @@ App::~App()
     m_clipImport.reset(); // its thread joined before the history it fills goes
     siteicons::shutdown(); // an icon arriving now would be told to no one
     m_keyRouter.reset(); // no keys taken from here on
+    m_numberKeyHook.reset();
+    m_drainingNumberKeyHook.reset();
     m_drainingRouter.reset();
     m_holdWatch.reset();
     m_drainingWatch.reset();
@@ -462,6 +470,7 @@ App::~App()
 
 bool App::start(const StartOptions& options)
 {
+    m_clipDisplayProbe = options.clipboardDisplayProbe;
     ocr::setComponentsRoot(Settings::dataDir() + u"/components"_s);
     const bool firstRun = !Settings::exists();
     // Updated from a version without the clipboard history: tell about it once.
@@ -678,8 +687,10 @@ bool App::startRuntime(const StartOptions& options, bool firstRun, bool clipboar
     m_launcher->setFolderOpener([this](const QString& folder) { return openInTypingTab(folder); });
     m_launcher->setRevealer([this](const QString& path) { return revealInTypingTab(path); });
     m_typingSelectionTimer.setSingleShot(true);
-    m_typingSelectionTimer.setInterval(60);
+    m_typingSelectionTimer.setInterval(60ms);
     connect(m_launcher.get(), &Launcher::currentRowChanged, this, &App::followTypingSelection);
+    // Another query can replace the current file without changing its row or the result count (#182).
+    connect(m_launcher.get(), &Launcher::resultsReplaced, this, &App::followTypingSelection);
     connect(m_launcher->results(), &ResultModel::countChanged, this, &App::followTypingSelection);
     connect(&m_typingSelectionTimer, &QTimer::timeout, this, [this] {
         const auto* row = m_launcher->results()->at(m_launcher->currentRow());
@@ -704,6 +715,7 @@ bool App::startRuntime(const StartOptions& options, bool firstRun, bool clipboar
     connect(m_launcher.get(), &Launcher::pinRequested, this,
         [this](const QString& path, bool screenshot) { pictureAction(u"pin"_s, 0, path, screenshot); });
     connect(m_launcher.get(), &Launcher::settingsRequested, this, [this] { showSettings(); });
+    connect(m_launcher.get(), &Launcher::shortcutSettingsRequested, this, &App::showShortcutSettings);
     // Only the chosen folders are indexed (GitHub #52): the notes under the results.
     connect(m_launcher.get(), &Launcher::folderSettingsRequested, this, [this] { showSettingsFor(u"Index/Folders"_s); });
     // Not a setting the AI settings know of: the section, by its row's title (SettingsWindow.qml).
@@ -820,9 +832,14 @@ bool App::startRuntime(const StartOptions& options, bool firstRun, bool clipboar
         [this](const QString& message) { m_messages->showNotification(tr("保存为文件"), message); });
     connect(m_clipboard.get(), &Clipboard::activeChanged, this, &App::applyQuickPasteHotkeys);
     connect(qApp, &QGuiApplication::focusWindowChanged, this, &App::applyQuickPasteHotkeys);
+    connect(qApp, &QGuiApplication::focusWindowChanged, this, &App::updateNumberKeyHook);
     // Pinned, it stays up through a paste or a file opened (hideClipboard);
     // Esc hands the focus back too.
     connect(m_clipboard.get(), &Clipboard::dismissRequested, this, [this] { hideClipboard(); });
+    connect(m_clipboard.get(), &Clipboard::shortcutSettingsRequested, this, [this] {
+        hideClipboard(false);
+        showShortcutSettings();
+    });
     connect(m_clipboard.get(), &Clipboard::pinRequested, this, [this](qint64 id) { pictureAction(u"pin"_s, id, {}, false); });
     connect(m_clipboard.get(), &Clipboard::editRequested, this, [this](qint64 id) { pictureAction(u"edit"_s, id, {}, false); });
     connect(m_clipboard.get(), &Clipboard::lanSendSetupRequested, this, [this](bool update) {
@@ -956,6 +973,8 @@ bool App::startRuntime(const StartOptions& options, bool firstRun, bool clipboar
         applyTaskbarHotkeys();
         if (m_searchBox)
             m_searchBox->reattach(); // onto the new taskbar
+        if (m_dropPieHelper)
+            m_dropPieHelper->retry(); // the user's token to start it with is there now
         QTimer::singleShot(3s, this, [this] { // once it has registered its own keys
             applyClipboardHotkeys();
             applyTaskbarHotkeys();
@@ -1186,8 +1205,6 @@ bool App::createWindow()
     };
     connect(m_placement.get(), &Placement::boxWidthChanged, this, tellSettings);
     connect(m_placement.get(), &Placement::widthReset, this, tellSettings);
-    m_launcherLogo = new WindowLogo(m_window);
-    m_launcherLogo->follow(m_placement.get());
     m_searchField = m_window->findChild<QQuickItem*>(u"searchField"_s);
     if (m_searchField)
         m_searchField->installEventFilter(this); // the input method's questions, while it is in the box
@@ -1269,7 +1286,27 @@ bool App::createClipWindow()
     m_clipPlacement->enableWindowSizing();
     m_clipFrame->setWindow(window);
     m_clipFrame->setResizable(true);
-    m_clipLogo = new WindowLogo(window);
+    m_clipDisplay = std::make_unique<ClipboardDisplay>(m_clipboard.get(), window, m_clipPlacement.get(), m_clipDisplayProbe);
+    window->setProperty("displayController", QVariant::fromValue<QObject*>(m_clipDisplay.get()));
+    connect(m_clipDisplay.get(), &ClipboardDisplay::geometryEdited, m_clipPlacement.get(), &Placement::adoptDisplayGeometry);
+    connect(m_clipDisplay.get(), &ClipboardDisplay::focusLost, this, [this] { hideClipboard(); });
+    connect(m_clipDisplay.get(), &ClipboardDisplay::lost, this, [this] {
+        if (!m_clipDisplayWanted || !m_clipWindow) return;
+        m_clipDisplayWanted = false;
+        m_clipWindow->setProperty("controllerEventsEnabled", true);
+        emit m_clipboard->queryChanged();
+        emit m_clipboard->placed();
+        const HWND target = m_clipboard->target();
+        stopKeyRouting();
+        if (!m_clipWindow->isVisible()) return;
+        if (win::isShellFlyout(target)) avoidClipboardShellFlyout(target);
+        const bool keepFocus = startKeyRouting(target) || win::isShellFlyout(target);
+        m_clipFrame->setNoActivate(keepFocus);
+        win::setCloaked(m_clipWindow, false);
+        ::SetWindowPos(reinterpret_cast<HWND>(m_clipWindow->winId()), HWND_TOPMOST, 0, 0, 0, 0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    });
+    m_clipDisplay->start();
     connect(window, &QWindow::activeChanged, this, [this] {
         // Clicking elsewhere or switching apps hides it, like a menu. Not at
         // once: on the way to another window of ours (the field it goes back
@@ -1316,15 +1353,37 @@ QQuickWindow* App::createPreviewWindow()
 
 // The first search of the web shortcuts is the default (defaultWebSearchUrl).
 // WINSHUN_WEB_DRYRUN (tests): said in the log (WINSHUN_LOG_INFO), not opened.
-void App::openWebSearch(const QString& query)
+const WebShortcuts& App::activeWebShortcuts() const
 {
-    const QString url = defaultWebSearchUrl(m_settings.webShortcuts, query);
-    if (url.isEmpty())
+    static const WebShortcuts empty;
+    return m_pluginHost && webplugin::available(m_pluginHost->catalog()) ? m_settings.webShortcuts : empty;
+}
+
+void App::applyWebSearch()
+{
+    if (!m_pluginHost || !m_launcher)
         return;
+    const auto& shortcuts = activeWebShortcuts();
+    QList<std::pair<QString, QString>> keywords;
+    for (const auto& shortcut : shortcuts)
+        keywords.append({shortcut.keyword, shortcut.name});
+    m_pluginHost->setWebKeywords(keywords);
+    m_launcher->setWebShortcuts(shortcuts);
+    m_launcher->setWebSuggestions(!shortcuts.isEmpty() && m_settings.webSuggestions);
+}
+
+bool App::openWebSearch(const QString& query)
+{
+    if (activeWebShortcuts().isEmpty())
+        return false;
+    const QString url = defaultWebSearchUrl(activeWebShortcuts(), query);
+    if (url.isEmpty())
+        return false;
     static const bool dryRun = qEnvironmentVariableIsSet("WINSHUN_WEB_DRYRUN");
     qInfo().noquote() << (dryRun ? u"Web: would open %1 (the words read from a picture)"_s : u"Web: open %1 (the words read from a picture)"_s).arg(url);
     if (!dryRun)
         shell::openUrl(url);
+    return true;
 }
 
 bool App::eventFilter(QObject* watched, QEvent* event)
@@ -1354,7 +1413,7 @@ bool App::eventFilter(QObject* watched, QEvent* event)
     }
     if (event->type() == QEvent::Close && (watched == m_window || watched == m_clipWindow)) {
         // These windows are kept between openings. QWindow::close would
-        // destroy the HWND and detach Placement, WindowFrame and WindowLogo.
+        // destroy the HWND and detach Placement and WindowFrame.
         event->ignore();
         if (watched == m_window)
             hideLauncher();
@@ -1461,18 +1520,6 @@ void App::guardDarkFrames()
 // Theme and language take effect at once, in every window, without a restart.
 void App::applyAppearance()
 {
-    // 搜索框显示 Logo (GitHub #109): one switch for the launcher's, the clipboard's and
-    // the dialog bar's. Off, one still on screen goes at once; on, each comes back
-    // with its window's next show.
-    if (win::PeekingLogo::enabled() != m_settings.searchLogo) {
-        win::PeekingLogo::setEnabled(m_settings.searchLogo);
-        if (!m_settings.searchLogo) {
-            for (WindowLogo* logo : {m_launcherLogo, m_clipLogo}) {
-                if (logo)
-                    logo->conceal();
-            }
-        }
-    }
     SystemTheme::setRoundedCorners(m_settings.corners == u"round");
     updateSearchBoxLook(); // the native child redraws on its own thread
     // 界面大小: QML follows SystemTheme; the bar by file dialogs is placed by its heights.
@@ -1657,6 +1704,10 @@ void App::applySettings(bool initial)
     shellmenu::apply(m_settings.explorerMenu, tr("用 Win顺 搜索此处")); // after the language
     shellmenu::applyPasteFile(m_settings.pasteFileEnabled && m_settings.pasteFileMenu, tr("粘贴为文件"), m_language == u"en");
     m_updater->setAutomatic(m_settings.autoUpdate);
+    if (m_pluginUpdates) {
+        m_pluginUpdates->setAutomatic(m_settings.autoUpdate);
+        m_pluginUpdates->setPolicy(m_settings.pluginDeveloperMode, m_settings.plugins);
+    }
     m_backup->setFolder(m_settings.backupFolder);
     m_launcher->setRecordHistory(m_settings.recordHistory);
     m_launcher->setResultOptions(m_settings.foldersFirst ? KindOrder::FoldersFirst : KindOrder::FilesFirst,
@@ -1682,7 +1733,11 @@ void App::applySettings(bool initial)
     m_launcher->setNumberHints(m_settings.numberHints);
     tellLauncherFolders();
     m_clipboard->setNumberHints(m_settings.numberHints);
-    m_clipboard->setRowOptions(m_settings.clipboardClickToPaste, m_settings.clipboardLargePictures);
+    const QString clipboardSize = m_settings.clipboardUiSize == u"follow" ? m_settings.uiSize : m_settings.clipboardUiSize;
+    const bool clipboardResized = clipboardSize != m_clipboard->uiSize();
+    m_clipboard->setRowOptions(m_settings.clipboardClickToPaste, m_settings.clipboardLargePictures, clipboardSize);
+    if (clipboardResized && m_clipPlacement)
+        m_clipPlacement->resized(); // the rows have another height
     m_clipboard->setLayoutOptions(m_settings.clipboardFlipAbove, m_settings.clipboardSearchBoxSide == u"far");
     m_clipboard->setHoldToStep(m_settings.clipboardHoldToStep);
     if (!m_settings.clipboardHoldToStep && (m_hold || m_browseHotkey))
@@ -1695,8 +1750,6 @@ void App::applySettings(bool initial)
     m_launcher->setContentOptions(m_settings.contentSearch, m_settings.contentExtensions,
         m_settings.contentSizeLimits(), m_settings.contentInLowPriority, m_settings.contentDocuments);
     m_launcher->setContentIndex(m_settings.contentIndex);
-    m_launcher->setWebShortcuts(m_settings.webShortcuts);
-    m_launcher->setWebSuggestions(m_settings.webSuggestions);
     m_launcher->setFileTypes(m_settings.namedFileTypes()); // after applyAppearance: the built-in ones' names
     applyPlugins();
     if (!initial) {
@@ -1784,7 +1837,7 @@ QString App::screenshotKeyword() const
         return {};
     // They keep theirs (the settings refuse the word; WinShun.ini may be
     // edited by hand).
-    for (const WebShortcut& w : m_settings.webShortcuts) {
+    for (const WebShortcut& w : activeWebShortcuts()) {
         if (w.keyword.compare(word, Qt::CaseInsensitive) == 0)
             return {};
     }
@@ -1926,8 +1979,18 @@ void App::pluginPicturesChanged()
         m_launcher->setPictureVerbs(pin, edit);
     if (m_clipboard)
         m_clipboard->setPictureVerbs(pin, edit);
-    if (m_settingsEditor) // the screenshot history's keyword (剪贴板 page)
-        m_settingsEditor->setScreenshotHistory(screenshotPluginOn());
+    updateScreenshotPlugin();
+}
+
+// What the settings say of the screenshot plugin: the history's keyword (剪贴板
+// page) and the hotkey row (常规 page).
+void App::updateScreenshotPlugin()
+{
+    if (!m_settingsEditor || !m_pluginHost)
+        return;
+    const auto keys = m_pluginHotkeys.find(kScreenshotPlugin.toString());
+    m_settingsEditor->setScreenshotPlugin(m_pluginHost->catalog().find(kScreenshotPlugin) != nullptr,
+                                          screenshotPluginOn(), keys == m_pluginHotkeys.end() ? QStringList() : keys->second);
 }
 
 // 贴到屏幕 and 编辑 go to the plugin that does them (`picture`), with the
@@ -1993,6 +2056,26 @@ QJsonObject App::pluginLook() const
 void App::setUpAppTools()
 {
     std::vector<plugin::Host::AppTool> tools;
+    tools.push_back({u"register_hotkeys"_s, plugin::Permission::Ui,
+        [this](const QString& owner, const QString&, const QJsonObject& arguments, std::function<void(mcp::ToolResult)> done) {
+            const QJsonValue value = arguments.value(u"keys"_s);
+            QStringList keys;
+            if (value.isArray()) {
+                for (const QJsonValue& key : value.toArray()) {
+                    if (!key.isString()) {
+                        done(toolError(u"keys must contain shortcut strings"_s));
+                        return;
+                    }
+                    keys.append(key.toString());
+                }
+            }
+            if (!value.isArray() || !PluginHotkeys::valid(keys)) {
+                done(toolError(u"keys must contain at most 32 global shortcuts"_s));
+                return;
+            }
+            // A key not allowed is reported in errors; the others still register.
+            done({{{u"errors"_s, m_pluginKeyRelay->replace(owner, keys)}}});
+        }});
     // A picture into the clipboard history: the plugin's file in its own
     // data folder (and the annotations beside it), read off the GUI thread
     // and deleted. `copy`: onto the clipboard too (else recorded only, as
@@ -2077,8 +2160,13 @@ void App::setUpAppTools()
                 done(toolError(u"text is empty"_s));
                 return;
             }
-            openWebSearch(text);
-            done({});
+            if (!openWebSearch(text)) {
+                if (m_messages)
+                    m_messages->showNotification(tr("网页搜索插件未启用"),
+                        tr("请在设置 → 插件中安装并启用网页搜索，并添加要搜索的网站。"), [this] { showWebSettings(); });
+                done(toolError(tr("网页搜索插件未启用或没有可用的网站，请在设置 → 插件中安装并启用网页搜索")));
+            } else
+                done({});
         }});
     tools.push_back({u"show_ocr_setup"_s, plugin::Permission::Ui,
         [this](const QString&, const QString&, const QJsonObject&, std::function<void(mcp::ToolResult)> done) {
@@ -2155,8 +2243,9 @@ void App::applyClipboard(bool initial)
             m_clipPrewarming = false;
             m_clipReveal.cancel();
             m_clipboard->setWindow(nullptr);
+            m_clipDisplay.reset();
+            m_clipDisplayWanted = false;
             delete m_clipWindow.data();
-            m_clipLogo = nullptr;
             updateCompanions();
             m_clipFrame.reset();
             m_clipPlacement.reset();
@@ -2233,19 +2322,10 @@ void App::applyQuickPasteHotkeys()
     if (m_settings.clipboard && (keys == u"ctrl" || keys == u"alt")) {
         const QString modifier = keys == u"ctrl" ? u"Ctrl"_s : u"Alt"_s;
         const bool suspended = QGuiApplication::focusWindow() || m_clipboard->active();
-        QStringList reserved {m_settings.hotkey, m_settings.clipboardHotkey, m_settings.folderMenuHotkey};
-        for (const auto& [plugin, keys] : m_pluginHotkeys) // the screenshot's, say
-            reserved << keys;
+        const unsigned own = ownNumberDigits(keys);
         for (int n = 1; n <= 9; ++n) {
             const QString chord = modifier + u'+' + QString::number(n);
-            UINT modifiers = 0, vk = 0;
-            MessageWindow::parseHotkey(chord, &modifiers, &vk);
-            const bool own = std::ranges::any_of(reserved, [&](const QString& shortcut) {
-                UINT otherModifiers = 0, otherVk = 0;
-                return MessageWindow::parseHotkey(shortcut, &otherModifiers, &otherVk)
-                    && modifiers == otherModifiers && vk == otherVk;
-            });
-            if (own || !m_messages->registerHotkey(kQuickPasteHotkeyId + n, chord))
+            if ((own & (1u << n)) || !m_messages->registerHotkey(kQuickPasteHotkeyId + n, chord))
                 unavailable.append(chord);
             else if (suspended)
                 m_messages->unregisterHotkey(kQuickPasteHotkeyId + n);
@@ -2693,8 +2773,11 @@ void App::typingFolderKnown(HWND root, HWND tab, bool opus, std::uint64_t reques
 
 void App::showFolderSearch(HWND root, HWND tab, bool opus, const QString& folder)
 {
-    const QString prefix = folder.endsWith(u'\\') ? folder + u' ' : folder + u"\\ "_s;
-    showLauncher(prefix, {}, false, screenOf(::MonitorFromWindow(root, MONITOR_DEFAULTTONEAREST)), root);
+    // Typed in Opus, the box sits in the corner of its file list (as Listary's
+    // does) rather than over it, and may search the whole PC (GitHub #82).
+    const bool everywhere = opus && m_settings.opusTypingScope == u"all";
+    const QString prefix = everywhere ? QString() : folder.endsWith(u'\\') ? folder + u' ' : folder + u"\\ "_s;
+    showLauncher(prefix, {}, false, screenOf(::MonitorFromWindow(root, MONITOR_DEFAULTTONEAREST)), opus ? tab : root, opus);
     m_typingOrigin = {root, tab, opus, folder}; // after showLauncher, which clears it
     // What is found in that folder first, then elsewhere (or there alone, as
     // set: Launcher::setFolderTypingOnly), as Listary lists it (GitHub #110).
@@ -3118,6 +3201,8 @@ void App::showSettings()
             }
             context[u"chosen_folders"_s] = chosen;
             context[u"display"_s] = diagnostics::display(m_renderer, SystemTheme::backdropAvailable()); // fonts: this thread's
+            if (m_clipWatcher)
+                context[u"clipboard"_s] = m_clipWatcher->diagnosticStatus();
             const QString dataFolder = Settings::dataDir();
             const QString serviceFolder = QDir(QString::fromStdWString(win32::expandEnvironment(L"%ProgramData%")))
                                               .filePath(u"WinShun"_s);
@@ -3153,13 +3238,14 @@ void App::showSettings()
         });
         editor->plugins()->setLocale(m_language);
         editor->plugins()->setHost(m_pluginHost.get());
+        editor->plugins()->setUpdates(m_pluginUpdates.get());
         editor->plugins()->setRecoveryState(m_pluginRecoveryMessage, m_pluginRecoveryBusy);
         connect(editor->plugins(), &PluginSettings::recoveryRequested, this, &App::installMovedPlugins);
         editor->favorites()->setCatalogs(m_apps.get(), m_places.get());
         editor->favorites()->setStore(m_favorites.get());
         m_settingsWindow = window;
         m_settingsEditor = editor;
-        editor->setScreenshotHistory(screenshotPluginOn());
+        updateScreenshotPlugin();
         applyHotkey(); // shows whether the current hotkey works
         applyClipboardHotkeys(); // ... and where Win+V stands
         applyTaskbarHotkeys(); // ... and Win+S
@@ -3217,6 +3303,13 @@ void App::showClipboardSettings()
         QMetaObject::invokeMethod(m_settingsWindow, "showClipboardPage");
 }
 
+void App::showShortcutSettings()
+{
+    showSettings();
+    if (m_settingsWindow)
+        QMetaObject::invokeMethod(m_settingsWindow, "showShortcutsPage");
+}
+
 void App::showWebSettings()
 {
     showSettings();
@@ -3243,6 +3336,13 @@ void App::showPluginSettings(const QString& pluginId)
     showSettings();
     if (m_settingsWindow)
         QMetaObject::invokeMethod(m_settingsWindow, "showPluginPage", Q_ARG(QVariant, QVariant(pluginId)));
+}
+
+void App::showPluginUpdates()
+{
+    showSettings();
+    if (m_settingsWindow)
+        QMetaObject::invokeMethod(m_settingsWindow, "showPluginUpdates");
 }
 
 void App::showUpdate()
@@ -3713,8 +3813,8 @@ void App::applyDropPie()
 {
     if (m_settings.dropPie && integrity::processElevated()) {
         if (!m_dropPieHelper) {
-            auto notify = [this](const QString& title, const QString& text) {
-                if (m_messages) m_messages->showNotification(title, text);
+            auto notify = [this](const QString& title, const QString& text, std::function<void()> retry) {
+                if (m_messages) m_messages->showNotification(title, text, std::move(retry));
             };
             m_dropPieHelper = std::make_unique<DropPieHelper>(m_favorites.get(), std::move(notify));
         }
@@ -3762,15 +3862,13 @@ void App::applyDropPie()
 
 namespace {
 // The bar's word for an elevated dialog it can only copy for (#104). The
-// service navigates only for the WinShun.exe beside it; a portable copy never
-// is (its --install puts the service in Program Files), so installing the
-// service is no answer there either.
+// service navigates for the copy of Win顺 it was installed with or from
+// (installed, or a portable copy that installed it), so installing it helps
+// any copy without one; one installed by another copy keeps it for that one.
 QString copyOnlyHint(ServiceDialogNav::Reach reach)
 {
     using Reach = ServiceDialogNav::Reach;
-    if (reach == Reach::OtherCopy || (reach != Reach::Available && !Settings::portableFolder().isEmpty()))
-        return u"installed"_s;
-    return reach == Reach::NoService ? u"service"_s : QString();
+    return reach == Reach::OtherCopy ? u"other"_s : reach == Reach::NoService ? u"service"_s : QString();
 }
 } // namespace
 
@@ -3960,18 +4058,91 @@ bool App::createBarWindow()
 
 void App::updateNumberKeys()
 {
-    const bool launcherInFront = m_window && m_window->isActive();
-    const bool barInFront = m_barWindow && m_barWindow->isActive() && m_dialogBar;
-    if (m_settings.numberKeys == u"off" || (!launcherInFront && !barInFront))
-        return;
-    // Asked again each time, as programs start and end: digits another
-    // program holds as global hotkeys stay its (PixPin's Ctrl+1…), as do Win顺's own.
-    const unsigned left = numberkeys::heldMask(
-        m_settings.numberKeys == u"alt" ? numberkeys::Modifier::Alt : numberkeys::Modifier::Ctrl)
-        & ~(m_settings.numberKeys == m_settings.clipboardQuickPaste ? m_quickPasteKeys : 0u);
-    m_launcher->setNumberKeysLeft(left);
+    updateNumberKeyHook();
+    const unsigned own = ownNumberDigits(m_settings.numberKeys);
+    m_launcher->setNumberKeysLeft(own);
     if (m_dialogBar)
-        m_dialogBar->setNumberKeysLeft(left);
+        m_dialogBar->setNumberKeysLeft(own);
+}
+
+// The window in front decides: the launcher's and the bar's number keys, or
+// the clipboard's when it took the focus (over a program that keeps it, its
+// KeyRouter takes them). Asked again each time, as programs start and end:
+// no hook while no other program holds one of the digits.
+void App::updateNumberKeyHook()
+{
+    const QWindow* front = QGuiApplication::focusWindow();
+    const QString keys = !front ? QString()
+        : front == m_window || (front == m_barWindow && m_dialogBar) ? m_settings.numberKeys
+        : front == m_clipWindow && m_settings.clipboard        ? m_settings.clipboardNumberKeys
+                                                                : QString();
+    const auto modifier = keys == u"alt" ? numberkeys::Modifier::Alt : numberkeys::Modifier::Ctrl;
+    const unsigned digits
+        = keys == u"ctrl" || keys == u"alt" ? numberkeys::heldMask(modifier) & ~ownNumberDigits(keys) : 0u;
+    // One Windows refused (no hook) is tried again.
+    if (m_numberKeyHook && m_numberKeyHook->isActive() && m_numberKeyHook->modifier() == modifier
+        && m_numberKeyHook->digits() == digits)
+        return;
+    if (m_numberKeyHook && m_numberKeyHook->isActive()) {
+        // A digit it took still down (Ctrl+1 opened a row and hid the
+        // launcher) stays its own until let go: alone, its repeats would be
+        // the other program's hotkey. One still draining before it: gone.
+        m_numberKeyHook->drain();
+        m_drainingNumberKeyHook = std::move(m_numberKeyHook);
+        m_drainingNumberKeyRun = m_numberKeyRun;
+        QTimer::singleShot(2s, this, [this, run = m_drainingNumberKeyRun] {
+            if (m_drainingNumberKeyRun == run)
+                m_drainingNumberKeyHook.reset(); // a key held that long is the program's again
+        });
+    }
+    m_numberKeyHook.reset(); // one Windows refused
+    if (!digits)
+        return;
+    const std::uint64_t run = ++m_numberKeyRun;
+    m_numberKeyHook = std::make_unique<numberkeys::Hook>(modifier, digits,
+        [this](const numberkeys::Hook::Key& key) {
+            QMetaObject::invokeMethod(this, [this, key] { numberKeyHooked(key); }, Qt::QueuedConnection);
+        },
+        [this, run] {
+            QMetaObject::invokeMethod(this, [this, run] {
+                if (m_drainingNumberKeyRun == run)
+                    m_drainingNumberKeyHook.reset();
+            }, Qt::QueuedConnection);
+        });
+}
+
+// As the window's own key, to the item with the focus in it.
+void App::numberKeyHooked(const numberkeys::Hook::Key& key)
+{
+    QWindow* window = QGuiApplication::focusWindow();
+    if (!m_numberKeyHook || !window)
+        return;
+    QKeyEvent event(key.press ? QEvent::KeyPress : QEvent::KeyRelease, Qt::Key_0 + key.digit, key.modifiers,
+                    key.scanCode, key.vk, 0, QString(), key.autoRepeat);
+    QCoreApplication::sendEvent(window, &event);
+}
+
+unsigned App::ownNumberDigits(const QString& keys) const
+{
+    if (keys != u"ctrl" && keys != u"alt")
+        return 0;
+    QStringList own {m_settings.hotkey, m_settings.clipboardHotkey, m_settings.folderMenuHotkey};
+    for (const auto& [plugin, shortcuts] : m_pluginHotkeys) // the screenshot's, say
+        own << shortcuts;
+    const QString modifier = keys == u"ctrl" ? u"Ctrl"_s : u"Alt"_s;
+    unsigned digits = 0;
+    for (int n = 1; n <= 9; ++n) {
+        UINT modifiers = 0, vk = 0;
+        MessageWindow::parseHotkey(modifier + u'+' + QString::number(n), &modifiers, &vk);
+        const bool mine = std::ranges::any_of(own, [&](const QString& shortcut) {
+            UINT otherModifiers = 0, otherVk = 0;
+            return MessageWindow::parseHotkey(shortcut, &otherModifiers, &otherVk) && modifiers == otherModifiers
+                && vk == otherVk;
+        });
+        if (mine)
+            digits |= 1u << n;
+    }
+    return digits;
 }
 
 void App::updateCompanions()
@@ -4149,7 +4320,8 @@ win::Front App::toFront(QWindow* window)
 {
     QElapsedTimer timer;
     timer.start();
-    const win::Front front = win::bringToFront(window);
+    const win::Front front = win::bringToFront(window,
+        window == m_clipWindow ? win::ShellFlyout::Preserve : win::ShellFlyout::Dismiss);
     if (m_triggers && m_triggers->open())
         m_triggers->front(front, static_cast<double>(timer.nsecsElapsed()) / 1e6);
     if (window == m_window && front == win::Front::Refused)
@@ -4213,7 +4385,8 @@ const char* App::rawInputState() const
     return raw.registration->hwndTarget == m_keyListener->window() ? "ok" : "other";
 }
 
-void App::showLauncher(const QString& query, const std::optional<taskbar::Spot>& spot, bool inBox, QScreen* on, HWND avoid)
+void App::showLauncher(const QString& query, const std::optional<taskbar::Spot>& spot, bool inBox, QScreen* on, HWND avoid,
+    bool inside)
 {
     if (!m_window)
         return;
@@ -4288,7 +4461,7 @@ void App::showLauncher(const QString& query, const std::optional<taskbar::Spot>&
         screen = screen ? screen : QGuiApplication::primaryScreen();
         RECT bounds {};
         if (avoid && ::GetWindowRect(avoid, &bounds))
-            m_placement->avoidNative(QRect(bounds.left, bounds.top, bounds.right - bounds.left, bounds.bottom - bounds.top), screen);
+            m_placement->avoidNative(QRect(bounds.left, bounds.top, bounds.right - bounds.left, bounds.bottom - bounds.top), screen, inside);
         else
             m_placement->placeOn(screen);
     }
@@ -4298,10 +4471,7 @@ void App::showLauncher(const QString& query, const std::optional<taskbar::Spot>&
     const bool prewarming = m_prewarming.exchange(false); // up already, cloaked
     if (wasClosing) {
         // Back from where it got to on its way out.
-        m_placement->slideIn([this] {
-            if (m_launcherLogo && launcherShown())
-                m_launcherLogo->reveal();
-        });
+        m_placement->slideIn();
     } else if (!m_window->isVisible() || prewarming) {
         // Shown cloaked: Windows would first put up the window as it looked
         // when it was hidden (old selection, old rows), then our repaint.
@@ -4325,13 +4495,9 @@ void App::showClipboard()
     if (!m_clipWindow && !createClipWindow())
         return;
     m_idleTrim->used(); // it never takes the focus, which would tell IdleTrim
-    // Digits another program holds as global hotkeys stay its (KeyRouter
-    // passes them on): their rows carry no number.
-    if (m_settings.clipboardNumberKeys != u"off") {
-        m_clipboard->setNumberKeysLeft(numberkeys::heldMask(
-            m_settings.clipboardNumberKeys == u"ctrl" ? numberkeys::Modifier::Ctrl : numberkeys::Modifier::Alt)
-            & ~(m_settings.clipboardNumberKeys == m_settings.clipboardQuickPaste ? m_quickPasteKeys : 0u));
-    }
+    // Digits that are Win顺's own shortcuts stay so (KeyRouter passes them
+    // on): their rows show the chord struck through.
+    m_clipboard->setNumberKeysLeft(ownNumberDigits(m_settings.clipboardNumberKeys));
     if (m_keyRouter) // up already, over the program that keeps the focus
         return;
     if (m_clipboard->pinned() && m_clipWindow->isVisible() && !m_clipPrewarming.load()) {
@@ -4341,6 +4507,9 @@ void App::showClipboard()
     const bool prewarming = m_clipPrewarming.exchange(false); // up already, cloaked
     bool keepFocus = false; // where it is, with the program it pastes into
     if (!m_clipWindow->isVisible() || prewarming) {
+        m_clipWindow->setProperty("controllerEventsEnabled", true);
+        m_clipWindow->setProperty("shellWidth", 0);
+        m_clipDisplayWanted = false;
         m_clipRevealedAt.reset(); // there to be seen from its first frame on, however it went last (seenBy)
         // It pastes into what had the keyboard before it: a text field of
         // Win顺's own (read before the window takes the focus from it), or
@@ -4368,16 +4537,17 @@ void App::showClipboard()
                 m_clipPlacement->attachNative(*caret);
             else
                 m_clipPlacement->attach(QRect(QCursor::pos(), QSize(1, 0)));
-            constexpr LONG reach = 1 << 20; // the logo stays off the line typed in, all along it
-            m_clipLogo->setAvoid(caret ? std::optional(RECT {caret->x() - reach, caret->y(), caret->x() + reach,
-                                             caret->y() + caret->height()})
-                                       : std::nullopt);
             // As Windows' own: that program stays in front, whatever closes
             // without the focus stays open there (VS Code's command palette,
             // a browser's suggestions), the caret stays where the paste goes.
-            // Not over the Start menu, search and the like, which stay above
-            // every window: bringToFront closes them.
-            keepFocus = target && !win::isShellFlyout(foreground) && startKeyRouting(target);
+            // Search/Start must keep their input field too (#179). They can
+            // cover ordinary topmost windows, so put the clipboard beside
+            // the flyout instead of dismissing it to get the foreground.
+            const bool shellFlyout = win::isShellFlyout(foreground);
+            m_clipDisplayWanted = shellFlyout && m_clipDisplay && m_clipDisplay->ready();
+            keepFocus = target && (startKeyRouting(target) || shellFlyout);
+            if (shellFlyout && !m_clipDisplayWanted)
+                avoidClipboardShellFlyout(foreground);
         }
         m_clipboard->handlePlaced(); // the preview, if left open: as wide as there is room for here
         // Cloaked until its first frame: Windows would first put up the
@@ -4391,8 +4561,13 @@ void App::showClipboard()
         m_clipWindow->setProperty("_q_showWithoutActivating", true);
         m_clipWindow->show();
         m_clipWindow->setProperty("_q_showWithoutActivating", QVariant());
+        const HWND panel = reinterpret_cast<HWND>(m_clipWindow->winId());
+        // STARTF_USESHOWWINDOW/SW_HIDE can override Qt's first show while
+        // Qt already reports visible. Recover without activating the target.
+        if (!::IsWindowVisible(panel))
+            ::ShowWindow(panel, SW_SHOWNOACTIVATE);
         // On top of the other topmost windows, as an activated one would be.
-        ::SetWindowPos(reinterpret_cast<HWND>(m_clipWindow->winId()), HWND_TOPMOST, 0, 0, 0, 0,
+        ::SetWindowPos(panel, HWND_TOPMOST, 0, 0, 0, 0,
                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
         return;
     }
@@ -4404,7 +4579,27 @@ void App::showClipboard()
 bool App::clipboardInCharge() const
 {
     return m_clipWindow && m_clipWindow->isVisible() && !m_clipPrewarming.load()
-        && (m_clipWindow->isActive() || m_keyRouter);
+        && (m_clipWindow->isActive() || m_keyRouter || (m_clipDisplay && m_clipDisplay->active()
+            && ::GetForegroundWindow() == m_clipDisplay->handle()));
+}
+
+void App::avoidClipboardShellFlyout(HWND foreground)
+{
+    const QRect rect = win::shellFlyoutBounds(foreground);
+    if (rect.isEmpty())
+        return;
+    const HMONITOR monitor = ::MonitorFromWindow(foreground, MONITOR_DEFAULTTONEAREST);
+    QScreen* screen = screenOf(monitor);
+    MONITORINFO info {sizeof info};
+    if (screen && ::GetMonitorInfoW(monitor, &info)) {
+        const qreal scale = screen->devicePixelRatio();
+        const int vertical = std::max(rect.top() - info.rcWork.top, info.rcWork.bottom - rect.y() - rect.height());
+        if (vertical < m_clipWindow->minimumHeight() * scale + 12 * scale) {
+            const int beside = std::max(rect.left() - info.rcWork.left, info.rcWork.right - rect.x() - rect.width());
+            m_clipWindow->setProperty("shellWidth", std::max(240, int(std::floor(beside / scale)) - 12));
+        }
+    }
+    m_clipPlacement->avoidNative(rect, screen);
 }
 
 bool App::startKeyRouting(HWND target)
@@ -4439,11 +4634,12 @@ bool App::startKeyRouting(HWND target)
         : m_settings.clipboardNumberKeys == u"off"                                    ? Qt::NoModifier
                                                                                       : Qt::AltModifier;
     auto router = std::make_unique<KeyRouter>(
-        target, reinterpret_cast<HWND>(m_clipWindow->winId()), std::move(callbacks), numberKeys);
+        target, m_clipDisplayWanted ? m_clipDisplay->handle() : reinterpret_cast<HWND>(m_clipWindow->winId()),
+        std::move(callbacks), numberKeys, ownNumberDigits(m_settings.clipboardNumberKeys));
     diagnostics::record(u"clipboard-key-routing-start"_s,
         {{u"session"_s, static_cast<qint64>(run)}, {u"router"_s, router->diagnosticStatus()}});
     if (!router->isActive()) {
-        qWarning() << "Clipboard: no keyboard hook; it takes the focus instead";
+        qWarning() << "Clipboard: keyboard routing is unavailable";
         return false;
     }
     m_keyRouter = std::move(router);
@@ -4494,6 +4690,10 @@ void App::routedKey(const KeyRouter::Key& key)
         m_clipboard->dismiss(); // closes it, not the program behind
         return;
     }
+    if (m_clipDisplay && m_clipDisplay->active()) {
+        m_clipDisplay->key(key);
+        return;
+    }
     QQuickItem* item = m_clipWindow->contentItem();
     while (item->isFocusScope() && item->scopedFocusItem() && item->scopedFocusItem()->isEnabled())
         item = item->scopedFocusItem();
@@ -4516,8 +4716,9 @@ void App::routedForeground(HWND window)
     // Activated after all: from now on as any window with the focus, which
     // goes when it loses it. Only if it still is: the event may be old.
     const HWND clip = m_clipWindow ? reinterpret_cast<HWND>(m_clipWindow->winId()) : nullptr;
-    if (clip && window == clip) {
-        if (::GetForegroundWindow() == clip)
+    const HWND display = m_clipDisplay && m_clipDisplay->active() ? m_clipDisplay->handle() : nullptr;
+    if ((clip && window == clip) || (display && window == display)) {
+        if (::GetForegroundWindow() == window)
             stopKeyRouting();
         return;
     }
@@ -4569,7 +4770,7 @@ void App::armClipboardHold(int hotkey, std::uint64_t pressedAt)
         diagnostics::record(u"clipboard-hold-skipped"_s, {{u"reason"_s, u"late"_s}, {u"ms"_s, static_cast<qint64>(late)}});
         return;
     }
-    if (!target || win::isShellFlyout(foreground) || integrity::higherThanOurs(target)) {
+    if (!target || integrity::higherThanOurs(target)) {
         m_browseHotkey = hotkey;
         m_browseModifiers = modifiers & hotkeysteps::kModifiers;
         m_browseVk = vk;
@@ -4745,11 +4946,15 @@ void App::activateClipboard()
 {
     if (!m_clipWindow || (!m_keyRouter && !m_clipboard->pinned()))
         return;
+    if (m_clipDisplay && m_clipDisplay->active()) {
+        m_clipDisplay->activate();
+        return; // routedForeground retires routing once the peer owns focus
+    }
     if (!m_keyRouter) // pinned, the keys elsewhere: it takes no focus until told
         m_clipFrame->setNoActivate(false);
     // Active first, then no longer drawn as active without being so: the
     // backdrop does not flicker. Keys pressed in between are its own already.
-    win::bringToFront(m_clipWindow);
+    win::bringToFront(m_clipWindow, win::ShellFlyout::Preserve);
     // Refused (bringToFront says so in the log; it knows at once, the window
     // is this thread's): the keys go on coming through the router. Stopped,
     // they would go back to the program, the window left neither routed nor
@@ -4762,9 +4967,11 @@ void App::activateClipboard()
 
 void App::releaseClipboard(bool giveFocus)
 {
-    const bool hadFocus = m_clipWindow->isActive();
+    const bool hadFocus = m_clipWindow->isActive() || (m_clipDisplay && m_clipDisplay->active()
+        && ::GetForegroundWindow() == m_clipDisplay->handle());
     stopKeyRouting();
     m_clipFrame->setNoActivate(true); // clicks paste into the program in front, which keeps the focus
+    if (m_clipDisplay && m_clipDisplay->active()) m_clipDisplay->passive();
     if (giveFocus && hadFocus) {
         if (const HWND target = paste::usableTarget(m_clipboard->target()))
             paste::activate(target);
@@ -4789,9 +4996,15 @@ void App::engageClipboard()
     // takes the focus, and pastes where it did last.
     const HWND foreground = ::GetForegroundWindow();
     if (const HWND target = paste::usableTarget(foreground)) {
+        m_clipWindow->setProperty("shellWidth", 0);
         m_clipboard->setTarget(target);
-        if (!win::isShellFlyout(foreground) && startKeyRouting(target)) {
+        const bool shellFlyout = win::isShellFlyout(foreground);
+        if (startKeyRouting(target) || shellFlyout) {
+            if (shellFlyout)
+                avoidClipboardShellFlyout(foreground);
             m_clipFrame->setNoActivate(true);
+            ::SetWindowPos(reinterpret_cast<HWND>(m_clipWindow->winId()), HWND_TOPMOST, 0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
             return;
         }
     }
@@ -4814,10 +5027,25 @@ void App::uncloakClipboard()
 {
     if (!m_clipWindow)
         return;
+    if (m_clipDisplayWanted && m_clipDisplay && m_clipDisplay->ready()) {
+        m_clipWindow->setProperty("controllerEventsEnabled", false);
+        if (m_clipDisplay->show()) {
+            m_clipRevealedAt = ::GetTickCount64();
+            if (m_triggers) m_triggers->seen(TriggerWindow::Clipboard);
+            return; // the ordinary-process scene stays cloaked behind the peer
+        }
+    }
+    if (std::exchange(m_clipDisplayWanted, false)) {
+        m_clipWindow->setProperty("controllerEventsEnabled", true);
+        emit m_clipboard->queryChanged();
+        emit m_clipboard->placed();
+        const HWND target = m_clipboard->target();
+        stopKeyRouting();
+        if (win::isShellFlyout(target)) avoidClipboardShellFlyout(target);
+        const bool keepFocus = startKeyRouting(target) || win::isShellFlyout(target);
+        m_clipFrame->setNoActivate(keepFocus);
+    }
     win::setCloaked(m_clipWindow, false);
-    // The logo when it is on its own: under a box, that box's window has one.
-    if (m_clipWindow->isVisible() && !m_clipboard->field() && m_clipLogo)
-        m_clipLogo->reveal();
     if (m_clipWindow->isVisible() && !m_clipPrewarming.load()) {
         m_clipRevealedAt = ::GetTickCount64(); // there to be seen from now on (seenBy)
         if (m_triggers)
@@ -4840,6 +5068,8 @@ void App::hideClipboard(bool launcherToo)
         return;
     }
     const bool underLauncher = clipboardUnderLauncher();
+    if (m_clipDisplay) m_clipDisplay->hide();
+    m_clipDisplayWanted = false;
     m_clipWindow->hide();
     m_clipRevealedAt.reset(); // only here: pinned, it stays up when it lets go of the keys
     stopKeyRouting(); // hidden first: no inactive backdrop on the way out
@@ -4922,13 +5152,10 @@ void App::revealLauncher()
 {
     if (!m_window)
         return;
-    // In from off its place first, then seen, the logo with it: not if this
-    // was the launcher hiding before its first frame.
+    // Slide in before revealing, unless it was hidden before its first frame.
     if (m_window->isVisible())
         m_placement->slideIn();
     win::setCloaked(m_window, false);
-    if (m_launcherLogo && launcherShown())
-        m_launcherLogo->reveal();
     if (launcherShown()) {
         m_launcherRevealedAt = ::GetTickCount64(); // there to be seen from now on (seenBy)
         if (m_triggers)
@@ -5117,7 +5344,7 @@ void App::hideLauncher()
         m_searchBox->setText({}); // the placeholder again
         updateSearchBoxLook();
     }
-    m_placement->slideOut([this] { // the logo goes along (WindowLogo)
+    m_placement->slideOut([this] {
         if (m_launcherClosing)
             finishHidingLauncher();
     });
@@ -5315,6 +5542,8 @@ void App::showTrayMenu()
                  true},
                 shell::MenuItem::separator()});
     }
+    if (m_pluginUpdates && m_pluginUpdates->count() > 0) // under the line for Win顺's own update, if there is one
+        items.insert(items.begin(), {{PluginUpdatesCommand, tr("%n 个插件可更新…", "", m_pluginUpdates->count())}, shell::MenuItem::separator()});
     if (m_updater->available() && !m_updater->skipped()) // at the top, where it is seen
         items.insert(items.begin(),
             {{UpdateCommand, tr("Win顺 %1 可以更新了…").arg(m_updater->availableVersion())}, shell::MenuItem::separator()});
@@ -5334,7 +5563,7 @@ void App::showTrayMenu()
         case RebuildCommand: glyph = 0xE895; break;
         case AutostartCommand: glyph = 0xE7E8; break;
         case SettingsCommand: glyph = 0xE713; break;
-        case CheckUpdateCommand: case UpdateCommand: glyph = 0xE896; break;
+        case CheckUpdateCommand: case UpdateCommand: case PluginUpdatesCommand: glyph = 0xE896; break;
         case KeepAwakeCommand: glyph = 0xE823; break;
         case RestartCommand: glyph = 0xE72C; break;
         case QuitCommand: glyph = 0xE8BB; break;
@@ -5385,6 +5614,9 @@ void App::showTrayMenu()
         break;
     case UpdateCommand:
         showUpdate();
+        break;
+    case PluginUpdatesCommand:
+        showPluginUpdates();
         break;
     case CheckUpdateCommand:
         // A version already known is shown at once; otherwise the dialog says "checking".
@@ -5968,8 +6200,6 @@ void App::confirmScreenshot(const mcp::ScreenshotRequest& request, std::function
     styleWindow(window, SystemTheme::backdropAvailable());
     win::setDarkFrame(window, isDarkMode());
     ask->frame->setWindow(window);
-    // Never in a picture of the screen: not in this one, not in another's.
-    ::SetWindowDisplayAffinity(reinterpret_cast<HWND>(window->winId()), WDA_EXCLUDEFROMCAPTURE);
     const int signal = object->metaObject()->indexOfSignal("answered(int)");
     const int slot = metaObject()->indexOfMethod("screenshotAnswered(int)");
     if (signal >= 0 && slot >= 0)
@@ -6001,6 +6231,8 @@ void App::screenshotAnswered(int how)
         return;
     // Gone after the signal that told it returned; its frame after it.
     if (ask->window) {
+        // No fade-out: the grab below must not catch the dialog on its way out.
+        win::disableTransitions(ask->window);
         ask->window->hide();
         ask->window->deleteLater();
     }
@@ -6013,6 +6245,9 @@ void App::screenshotAnswered(int how)
     }
     const QString folder = QDir::tempPath() + u"/WinShun/mcp"_s;
     std::thread([monitor = ask->monitor, label = ask->label, done = std::move(ask->done), folder] {
+        // The hidden dialog is off the screen once the desktop has composed twice.
+        ::DwmFlush();
+        ::DwmFlush();
         capture::Grabber grabber;
         QString report;
         const std::vector<capture::Grabber::Shot> shots = grabber.grab(&report);
@@ -6138,9 +6373,47 @@ void App::createPluginHost()
     options.theme = isDarkMode() ? u"dark"_s : u"light"_s;
     options.version = QStringLiteral(WINSHUN_VERSION);
     options.appearance = pluginLook();
+    // What an earlier run kept aside for a plugin that was running, and what an
+    // interrupted swap left: before the host can start anything.
+    PluginUpdates::prepare(dataDir, options.userPluginDir, QStringLiteral(WINSHUN_VERSION), [this](const QString& id) {
+        const PluginConfig* c = m_settings.plugin(id);
+        return std::pair<bool, QStringList>(c && c->enabled, c ? c->confirmed : QStringList());
+    });
     m_pluginHost = std::make_unique<plugin::Host>(options);
+    m_pluginKeyRelay = std::make_unique<PluginHotkeys>([this](const QString& owner, const QString& key) {
+        m_pluginHost->notify(owner, u"hotkey"_s, {{u"key"_s, key}}, true);
+    });
+    {
+        PluginUpdates::Options updateOptions;
+        updateOptions.dataDir = dataDir;
+        updateOptions.userDir = options.userPluginDir;
+        updateOptions.bundledDir = options.bundledPluginDir;
+        updateOptions.source = PluginUpdates::defaultSource();
+        m_pluginUpdates = std::make_unique<PluginUpdates>(m_pluginHost.get(), updateOptions);
+        m_pluginUpdates->setBusy([this] { return m_pluginRecoveryBusy || (m_updater && !m_updater->installStage().isEmpty()); });
+        m_pluginUpdates->setPolicy(m_settings.pluginDeveloperMode, m_settings.plugins);
+        m_pluginUpdates->setAutomatic(m_settings.autoUpdate);
+        // A newer version that asks for permissions the user has not agreed to,
+        // of a plugin that is on: told once per version, not over the settings
+        // window (it shows them there).
+        connect(m_pluginUpdates.get(), &PluginUpdates::consentNeeded, this, [this](const QStringList& ids) {
+            if (m_settingsWindow && m_settingsWindow->isVisible())
+                return;
+            QString title = tr("%n 个插件的新版本要你同意新权限", "", static_cast<int>(ids.size()));
+            if (ids.size() == 1) {
+                const plugin::Entry* e = m_pluginHost->catalog().find(ids.front());
+                title = tr("“%1” 的新版本要你同意新权限").arg(e && e->manifest ? e->manifest->name.pick(m_language) : ids.front());
+            }
+            m_messages->showNotification(title, tr("点这里查看并更新"), [self = QPointer(this)] {
+                if (self)
+                    self->showPluginUpdates();
+            });
+        });
+    }
     connect(&m_pluginHost->catalog(), &plugin::Catalog::changed, this, &App::pluginsChanged);
     connect(m_pluginHost.get(), &plugin::Host::stateChanged, this, [this](const QString& id) {
+        if (!m_pluginHost->catalog().enabled(id))
+            m_pluginKeyRelay->remove(id);
         // A deferred install completed later from the regular plugin page.
         if (!m_onboarding && id == u"winshun.capture" && m_settings.onboardingCapturePending
             && m_pluginHost->catalog().enabled(id)
@@ -6162,10 +6435,14 @@ void App::createPluginHost()
             m_pluginHotkeys.erase(id);
         else
             m_pluginHotkeys[id] = keys;
+        updateScreenshotPlugin();
         applyTaskbarHotkeys();
         applyQuickPasteHotkeys();
     });
-    connect(m_pluginHost.get(), &plugin::Host::processExited, this, [this](const QString& id) { m_trayMenus.erase(id); });
+    connect(m_pluginHost.get(), &plugin::Host::processExited, this, [this](const QString& id) {
+        m_pluginKeyRelay->remove(id);
+        m_trayMenus.erase(id);
+    });
     connect(m_pluginHost.get(), &plugin::Host::disabledAfterCrashes, this, [this](const QString& id) {
         const plugin::Entry* e = m_pluginHost->catalog().find(id);
         const QString name = e && e->manifest ? e->manifest->name.pick(m_language) : id;
@@ -6280,8 +6557,21 @@ void App::installMovedPlugins()
         names.push_back(moved::name(id));
     setPluginRecoveryState(tr("正在从插件库恢复 %1。原来的设置和数据会保留。").arg(names.join(u"、"_s)), true);
     qInfo().noquote() << "Plugins moved to the library, installing:" << ids.join(u", "_s);
-    moved::install(ids, m_pluginHost->options().userPluginDir, m_language, [self = QPointer(this)](const QList<moved::Outcome>& outcomes) {
-        if (!self || !self->m_pluginHost)
+    QStringList claimed; // not changed from the background meanwhile
+    if (m_pluginUpdates) {
+        for (const QString& id : ids) {
+            if (m_pluginUpdates->claim(id))
+                claimed.push_back(id);
+        }
+    }
+    moved::install(ids, m_pluginHost->options().userPluginDir, m_language, [self = QPointer(this), claimed](const QList<moved::Outcome>& outcomes) {
+        if (!self)
+            return;
+        if (self->m_pluginUpdates) {
+            for (const QString& id : claimed)
+                self->m_pluginUpdates->release(id);
+        }
+        if (!self->m_pluginHost)
             return;
         QStringList installed;
         QStringList failed;
@@ -6347,6 +6637,7 @@ void App::applySwitches()
 void App::pluginsChanged()
 {
     applySwitches();
+    applyWebSearch();
     QHash<QString, QString> folders;
     for (const plugin::Entry& e : m_pluginHost->catalog().entries())
         folders.insert(e.id, e.dir);
@@ -6365,6 +6656,8 @@ void App::applyPlugins()
     if (!m_pluginHost)
         return;
     m_pluginHost->setDeveloperMode(m_settings.pluginDeveloperMode);
+    if (m_pluginUpdates)
+        m_pluginUpdates->setPolicy(m_settings.pluginDeveloperMode, m_settings.plugins);
     if (m_pluginTools)
         m_pluginTools->setPolicy(mcpPolicy());
     plugin::Catalog& catalog = m_pluginHost->catalog();
@@ -6396,10 +6689,7 @@ void App::applyPlugins()
     }
     catalog.setEnabled(enabled); // the ones not installed yet count too
     m_pluginHost->setKeywordOverrides(overrides);
-    QList<std::pair<QString, QString>> web;
-    for (const WebShortcut& w : m_settings.webShortcuts)
-        web.append({w.keyword, w.name});
-    m_pluginHost->setWebKeywords(web); // [WebSearch] keeps its keywords: a plugin's alike is set aside
+    applyWebSearch();
     m_pluginHost->setFavoriteKeywords(favoriteKeywords(*m_favorites)); // so do the favorites
     applyScreenshots(); // and the screenshot history's (Win顺's own)
     // Each plugin's settings: the INI's values by the manifest's types, the
@@ -6802,10 +7092,16 @@ mcp::ToolResult App::openAiSettings(const QString& key, const QString& section)
         if (!entry || !aisettings::visible(*entry))
             return {{}, true, u"Unknown setting '%1'; keys come from get_settings."_s.arg(key)};
         const aisettings::Section* of = aisettings::sectionOf(entry->section);
+        where = of ? u"%1 › %2"_s.arg(of->titleText(), entry->titleText()) : entry->titleText();
+        if (entry->section == u"web") { // the web plugin's card on the 插件 page, not a row the search finds
+            showWebSettings();
+            if (!m_settingsWindow)
+                return {{}, true, u"The settings window could not be opened."_s};
+            return {{{u"opened"_s, true}, {u"where"_s, where}}};
+        }
         page = of ? of->page : 0;
         tab = entry->tab;
         rowTitle = entry->rowTitleText();
-        where = of ? u"%1 › %2"_s.arg(of->titleText(), entry->titleText()) : entry->titleText();
     } else {
         const aisettings::Section* of = aisettings::sectionOf(section);
         if (!of) {
@@ -6839,8 +7135,8 @@ static QScreen* screenWithMouse()
 }
 
 // SettingsConfirm.qml, made as ScreenshotConfirm is (frame, backdrop, style),
-// in the middle of the work area of the screen with the mouse, and kept out of
-// every capture. One at a time: a second request is told so at once.
+// in the middle of the work area of the screen with the mouse. One at a time:
+// a second request is told so at once.
 void App::confirmSettingsChange(const mcp::SettingsAsk& ask, std::function<void(mcp::SettingsAnswer answer, bool always)> done)
 {
     if (m_settingsAsk) {
@@ -6870,7 +7166,6 @@ void App::confirmSettingsChange(const mcp::SettingsAsk& ask, std::function<void(
     styleWindow(window, SystemTheme::backdropAvailable());
     win::setDarkFrame(window, isDarkMode());
     slot->frame->setWindow(window);
-    ::SetWindowDisplayAffinity(reinterpret_cast<HWND>(window->winId()), WDA_EXCLUDEFROMCAPTURE);
     const int signal = object->metaObject()->indexOfSignal("answered(int,bool)");
     const int answered = metaObject()->indexOfMethod("settingsAnswered(int,bool)");
     if (signal >= 0 && answered >= 0)

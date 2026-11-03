@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QColor>
+#include <QRect>
 
 #include <windows.h>
 
@@ -12,13 +13,21 @@ namespace ws::win {
 
 // Windows 11 look for a frameless window: rounded corners and the standard
 // DWM shadow and system-managed border, in both square and rounded modes.
-// Windows 10 uses WindowEdge.qml as a fallback; Windows 11 outlines follow
-// the actual native corners, including desktop customization. With
-// `backdrop`, the Mica material fills the window behind its content (see
-// backdropSupported). The dark mode is separate, see setDarkFrame.
+// Windows 10 has square corners with the same DWM shadow, and WindowEdge.qml
+// draws the border. Windows 11 outlines follow the actual native corners,
+// including desktop customization. With `backdrop`, the Mica material fills
+// the window behind its content (see backdropSupported). The dark mode is
+// separate, see setDarkFrame.
 void styleFramelessWindow(QWindow* window, bool backdrop = false);
 
-// The appearance preference: DWM on Windows 11, a window region on Windows 10.
+// Whether DWM rounds the corners (Windows 11), see styleFramelessWindow.
+bool nativeWindowCorners();
+// Developer preview only, before making any windows. Shows the Windows 10
+// frame without changing the user's OS or saved preferences.
+void useCompositedFramesForPreview();
+
+// The appearance preference. Windows 10 keeps the windows' own corners
+// square (see styleFramelessWindow); the controls inside still follow it.
 bool roundedCorners();
 
 // Returns whether the preference changed; also updates existing styled HWNDs.
@@ -60,22 +69,34 @@ bool materialsEnabled();
 // while it still gets focus and draws as usual.
 void setCloaked(QWindow* window, bool cloaked);
 
+// No DWM fade as the window is shown or hidden: hidden, it is off the screen
+// in the next composition, not some 200 ms later (a capture must not catch it).
+void disableTransitions(QWindow* window);
+
 // Windows' Start menu, search, notification center or quick settings: they
 // stay above every other window while open.
 bool isShellFlyout(HWND window);
+// Includes visible companion windows, even from another Shell host (Start's
+// Phone Link sidebar). Uses window regions for full-monitor transparent hosts.
+// Physical screen pixels; empty for non-flyouts.
+QRect shellFlyoutBounds(HWND window);
 
 // How bringToFront went: in front already; directly; after an input that
 // does nothing (Windows lets the process that sent the latest input set the
 // foreground); or refused (an administrator's window or a hung one's ghost
 // in front, their input out of reach, UIPI).
 enum class Front : std::uint8_t { Already, Direct, Input, Refused };
+enum class ShellFlyout { Dismiss, Preserve };
 
 // Shows or restores a requested window, then brings it to the foreground
 // even when another app owns the focus. Windows normally refuses this to
 // background processes (focus stealing protection), but a hotkey press is
 // an explicit user request. Never waits for the program in front, however
 // busy it is, and knows at once whether it worked (GitHub #111).
-Front bringToFront(QWindow* window);
+// Preserve suppresses the synthetic Escape used for Shell flyouts. Callers
+// that must keep the old field open should normally show without activation;
+// an explicit foreground activation may still dismiss a system popup itself.
+Front bringToFront(QWindow* window, ShellFlyout flyout = ShellFlyout::Dismiss);
 
 // Makes native popup menus (tray, context menu) follow the dark theme.
 void setMenuTheme(bool dark);

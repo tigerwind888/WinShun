@@ -83,7 +83,7 @@ public:
     // A query begins: earlier answers are dropped. With `keywordPlugin`
     // and `keywordCommand`, keyword mode for that command. `text` as typed
     // (a trailing space tells a keyword from a name, Catalog::match).
-    void begin(std::uint64_t queryId, const QString& text, const QString& keywordPlugin = {}, const QString& keywordCommand = {});
+    void begin(std::uint64_t queryId, const QString& text, const QString& keywordPlugin = {}, const QString& keywordCommand = {}, bool contentOnly = false);
     std::uint64_t queryId() const noexcept { return m_queryId; }
     bool keywordMode() const noexcept { return !m_keywordPlugin.isEmpty(); }
     // Push mode: the name search's rows are in the sink now; what was held
@@ -91,6 +91,18 @@ public:
     // keywords it begins among the rows (placeHint).
     void namesShown();
     bool namesReady() const noexcept { return m_namesReady; }
+    bool contentOnly() const noexcept { return m_contentOnly; }
+    // Content only (内容): no name search to wait for, only for the list to
+    // be this query's. True when a provider's answer with a file is held
+    // for that: the launcher clears the last query's rows (or, asked again,
+    // has its own) and calls namesShown at once, not when the native scan
+    // shows a row.
+    bool answerHeld() const;
+    // A content provider's row (commands[].contentSearch).
+    bool contentRow(const SearchResult& row) const;
+    // Where the native content matches end: the first of the content
+    // providers' rows after them, which stay last (count() with none).
+    int contentEnd() const;
 
     // What Host::results said (dropped unless for the current query).
     void results(std::uint64_t queryId, const QString& pluginId, const QString& commandId, const Items& items, bool partial,
@@ -126,6 +138,7 @@ private:
     QString m_keywordPlugin;
     QString m_keywordCommand;
     bool m_namesReady = false;
+    bool m_contentOnly = false;
     bool m_assigned = false; // keyword mode: an answer has replaced the rows
     int m_keywordItemIndex = 0; // anonymous ids span every appended batch
     std::map<QString, Batch> m_held; // "<plugin>/<command>" -> its answer so far

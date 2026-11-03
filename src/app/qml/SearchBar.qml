@@ -1,7 +1,7 @@
 import QtQuick
 import WinShun
 
-// Search icon, the input field and the scope switcher. The rest of it drags
+// Logo controls, the input field and the scope switcher. The rest of it drags
 // the window (see WindowFrame).
 Item {
     id: bar
@@ -27,6 +27,7 @@ Item {
     signal keyPressed(var event)
     signal keyReleased(var event)
     signal editingRequested()
+    signal typed() // the text was edited by the user (not set by the launcher)
 
     // On whole device pixels, as the rows' text (ResultRow.qml): centred, at
     // 150 % the field's text sits on a half pixel, and while the window slides
@@ -69,8 +70,8 @@ Item {
         frame.addControl(input)
         frame.addControl(tabs)
         frame.addControl(expand)
-        frame.addControl(pin)
         frame.addControl(regexChip)
+        frame.addControl(boxPin)
         frame.addHandle(handle)
     }
 
@@ -122,50 +123,84 @@ Item {
         }
     }
 
-    // The search icon is a handle (linux.do #157, as Lertaro has it): held
-    // and dragged it moves the window, as the rest of the header does;
-    // clicked, the settings (WindowFrame.addHandle, handleClicked in
-    // Main.qml). Pointed at, a square shows under it and a tip says so.
-    // In the drag area, QML hears of the pointer there from the frame alone.
+    // A native drag handle with three click actions (Main.qml). The pin
+    // badge and selected background make its persistent state visible.
     Rectangle {
         id: handle
+        objectName: bar.panelMode ? "panelSearchLogo" : "searchLogo"
 
         readonly property bool pointed: visible && contains(mapFromItem(null, bar.frame.pointer))
+        readonly property bool checked: bar.launcher.pinned
+        readonly property string help: qsTr("左键：设置 · 中键：%1\n右键：窗口居中 · 拖动：移动窗口")
+            .arg(checked ? qsTr("取消钉住") : qsTr("钉住"))
 
         visible: !bar.inBox
-        anchors.horizontalCenter: icon.horizontalCenter
+        anchors.left: parent.left
+        anchors.leftMargin: 14
         y: bar.onPixel((bar.height - height) / 2)
         width: Theme.searchIconSize + 12
         height: width
         radius: Theme.controlRadius
-        color: pointed && !bar.placement.moving ? Theme.chipHover : "transparent"
+        color: checked ? Theme.chipActive : pointed && !bar.placement.moving ? Theme.chipHover : "transparent"
+        border.width: checked || activeFocus ? 1 : 0
+        border.color: activeFocus ? Theme.accent : Theme.chipBorder
         Behavior on color { ColorAnimation { duration: 100 } }
+        activeFocusOnTab: true
         Accessible.role: Accessible.Button
-        Accessible.name: qsTr("设置")
+        Accessible.name: qsTr("Win顺：设置")
+        Accessible.description: (checked ? qsTr("已钉住") + "\n" : "") + help
+        Accessible.onPressAction: bar.launcher.openSettings()
+        Keys.onPressed: (event) => {
+            if (event.key === Qt.Key_Space || event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+                bar.launcher.openSettings()
+                event.accepted = true
+            }
+        }
+
+        Image {
+            objectName: "searchLogoImage"
+            anchors.centerIn: parent
+            width: Theme.searchIconSize
+            height: width
+            source: "qrc:/branding/logo.svg"
+            sourceSize.width: width
+            sourceSize.height: height
+            smooth: false
+            Accessible.ignored: true
+        }
+
+        Rectangle {
+            objectName: "searchLogoPinBadge"
+            visible: handle.checked
+            anchors.right: parent.right
+            anchors.bottom: parent.bottom
+            width: 14
+            height: width
+            radius: Theme.controlRadius
+            color: Theme.chipActive
+            Accessible.ignored: true
+            Glyph {
+                anchors.centerIn: parent
+                glyph: "\uE841" // PinnedFill
+                overlay: "\uE718"
+                size: 12
+                color: Theme.accent
+            }
+        }
     }
 
     HoverTip {
+        objectName: bar.panelMode ? "panelSearchLogoHint" : "searchLogoHint"
         target: handle.pointed && !bar.placement.moving ? handle : null
-        text: qsTr("拖动可移动窗口 · 点击打开设置")
-    }
-
-    Glyph {
-        id: icon
-        visible: !bar.inBox
-        color: handle.pointed ? Theme.text : Theme.subtext
-        anchors.left: parent.left
-        anchors.leftMargin: 20
-        y: bar.onPixel((bar.height - height) / 2)
-        glyph: bar.launcher.scope === Launcher.Content ? "" // Document
-             : "" // Search
-        size: Theme.searchIconSize
+        text: handle.help
+        shortcut: "Ctrl+, · Ctrl+T"
     }
 
     TextInput {
         id: input
         objectName: bar.panelMode ? "panelSearchField" : "searchField" // App answers the input method for it while it is in the box
-        anchors.left: icon.right
-        anchors.leftMargin: 14
+        anchors.left: handle.right
+        anchors.leftMargin: 8
         anchors.right: regexChip.visible ? regexChip.left : tabs.left
         anchors.rightMargin: regexChip.visible ? 8 : 12
         y: bar.onPixel((bar.height - height) / 2)
@@ -187,6 +222,7 @@ Item {
             bar.launcher.query = text
             bar.reportField()
         }
+        onTextEdited: bar.typed()
         onPreeditTextChanged: bar.reportField()
         onCursorPositionChanged: bar.reportField()
         onSelectionStartChanged: bar.reportField()
@@ -280,38 +316,32 @@ Item {
         }
     }
 
-    // Pins the launcher (Launcher.pinned, Ctrl+T; linux.do #157): it stays
-    // up through clicks elsewhere and opened results, until Esc. Beside the
-    // panel's button; on, it shows so: the filled pin in
-    // the accent colour on a raised square with an edge (as the footer's
-    // chosen chips; a mark in the accent colour, never a fill of it).
+    // The logo, and the pin badge on it, are not there over the taskbar box:
+    // a pinned window shows this chip left of the expand button, a click
+    // unpins. Nothing while it is not pinned.
     Rectangle {
-        id: pin
+        id: boxPin
 
-        readonly property bool checked: bar.launcher.pinned
-        readonly property bool tipWanted: pinArea.containsMouse
-        readonly property string tip: checked ? qsTr("取消钉住") : qsTr("钉住：点别处、打开文件后都不收起，按 Esc 关闭")
-
+        visible: bar.inBox && bar.launcher.pinned
         anchors.right: expand.left
-        anchors.rightMargin: 4
+        anchors.rightMargin: 6
         y: bar.onPixel((bar.height - height) / 2)
         width: height
         height: tabs.height
         radius: Theme.controlRadius
-        color: pinArea.pressed ? Theme.controlPressed : checked ? Theme.chipActive
-             : pinArea.containsMouse ? Theme.chipHover : "transparent"
-        border.width: checked ? 1 : 0
+        color: pinArea.pressed ? Theme.controlPressed : pinArea.containsMouse ? Theme.chipHover : Theme.chipActive
+        border.width: 1
         border.color: Theme.chipBorder
-        Accessible.role: Accessible.CheckBox
-        Accessible.name: qsTr("钉住")
-        Accessible.checked: checked
+        Accessible.role: Accessible.Button
+        Accessible.name: qsTr("取消钉住")
+        Accessible.description: qsTr("已钉住")
 
         Glyph {
             anchors.centerIn: parent
-            glyph: pin.checked ? "" : "" // PinnedFill, Pin
-            overlay: pin.checked ? "" : "" // the needle (lines up with PinnedFill in Fluent and MDL2)
-            size: 24 / Screen.devicePixelRatio // fixed 24 device pixels, including on another screen
-            color: pin.checked ? Theme.accent : pinArea.containsMouse ? Theme.text : Theme.subtext
+            glyph: "" // PinnedFill
+            overlay: ""
+            size: 12
+            color: Theme.accent
         }
         MouseArea {
             id: pinArea
@@ -321,8 +351,8 @@ Item {
             onClicked: bar.launcher.togglePin()
         }
         HoverTip {
-            target: pin.tipWanted ? pin : null
-            text: pin.tip
+            target: pinArea.containsMouse ? boxPin : null
+            text: qsTr("已钉住 · 点击取消")
             shortcut: "Ctrl+T"
         }
     }
@@ -368,7 +398,7 @@ Item {
     ScopeTabs {
         id: tabs
         scaled: true
-        anchors.right: pin.left
+        anchors.right: expand.left
         anchors.rightMargin: 6
         anchors.leftMargin: 16
         y: bar.onPixel((bar.height - height) / 2)

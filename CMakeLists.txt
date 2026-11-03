@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.21)
 
 project(WinShun
-    VERSION 0.17.0
+    VERSION 0.18.0
     DESCRIPTION "Fast file, folder and text-content search launcher for Windows"
     LANGUAGES C CXX) # C: miniz
 
@@ -13,7 +13,7 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-find_package(Qt6 6.8 REQUIRED COMPONENTS Core Gui Qml Quick Sql Svg LinguistTools)
+find_package(Qt6 6.8 REQUIRED COMPONENTS Core Gui Qml Quick Sql Svg Network LinguistTools)
 qt_standard_project_setup(REQUIRES 6.8)
 
 option(WINSHUN_BUILD_TESTS "Build unit tests" ON)
@@ -57,6 +57,7 @@ add_subdirectory(src/bookmarks-plugin)
 add_subdirectory(src/translate-plugin)
 add_subdirectory(src/capture)
 add_subdirectory(src/capture-plugin)
+add_subdirectory(src/ocr-search-plugin)
 add_subdirectory(src/app)
 add_subdirectory(src/stub)
 add_subdirectory(src/service)
@@ -89,7 +90,25 @@ install(DIRECTORY "${bundled_plugins_dir}/" DESTINATION plugins)
 # its program -- in library-plugins/<id>; release.ps1 zips each folder into
 # <id>-<version>.wsplugin for the library, wsbench --semantic reads them there.
 set(library_plugins_dir "${CMAKE_BINARY_DIR}/library-plugins")
+file(READ "${PROJECT_SOURCE_DIR}/src/web-plugin/package/plugin.json" web_plugin_manifest)
+string(JSON web_plugin_manifest SET "${web_plugin_manifest}" minWinShun "\"${PROJECT_VERSION}\"")
+file(GENERATE OUTPUT "${CMAKE_BINARY_DIR}/generated/web-plugin.json" CONTENT "${web_plugin_manifest}\n")
+# Content providers (commands[].contentSearch) are not in 0.17.0: like
+# winshun.web, the OCR plugin needs at least the version it is built with.
+set(ocr_plugin_source "${PROJECT_SOURCE_DIR}/src/ocr-search-plugin/package/plugin.json")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${ocr_plugin_source}")
+file(READ "${ocr_plugin_source}" ocr_plugin_manifest)
+string(JSON ocr_plugin_manifest SET "${ocr_plugin_manifest}" minWinShun "\"${PROJECT_VERSION}\"")
+set(OCR_PLUGIN_MANIFEST "${CMAKE_BINARY_DIR}/generated/ocr-search-plugin.json")
+file(GENERATE OUTPUT "${OCR_PLUGIN_MANIFEST}" CONTENT "${ocr_plugin_manifest}\n")
 add_custom_target(library_plugins ALL
+    COMMAND ${CMAKE_COMMAND} -E copy_directory "${PROJECT_SOURCE_DIR}/src/web-plugin/package" "${library_plugins_dir}/winshun.web"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_BINARY_DIR}/generated/web-plugin.json" "${library_plugins_dir}/winshun.web/plugin.json"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory "${PROJECT_SOURCE_DIR}/src/ocr-search-plugin/package" "${library_plugins_dir}/winshun.ocr-search"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${OCR_PLUGIN_MANIFEST}" "${library_plugins_dir}/winshun.ocr-search/plugin.json"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:WinShunOcrSearch>" "${library_plugins_dir}/winshun.ocr-search/WinShunOcrSearch.exe"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:WinShunOcrSearchApp>" "${library_plugins_dir}/winshun.ocr-search/WinShunOcrSearchApp.dll"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${PROJECT_SOURCE_DIR}/third_party/miniz/LICENSE" "${library_plugins_dir}/winshun.ocr-search/licenses/miniz.txt"
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${PROJECT_SOURCE_DIR}/src/semantic-plugin/package" "${library_plugins_dir}/winshun.semantic"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:WinShunSemantic>" "${library_plugins_dir}/winshun.semantic/WinShunSemantic.exe"
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${PROJECT_SOURCE_DIR}/src/localsend-plugin/package" "${library_plugins_dir}/winshun.localsend"
@@ -106,7 +125,7 @@ add_custom_target(library_plugins ALL
     # What is compiled into WinShunCaptureApp.dll; Qt, ONNX Runtime and the OCR models are Win顺's.
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "${PROJECT_SOURCE_DIR}/third_party/zxing-cpp/LICENSE" "${library_plugins_dir}/winshun.capture/licenses/zxing-cpp.txt"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "${PROJECT_SOURCE_DIR}/third_party/miniz/LICENSE" "${library_plugins_dir}/winshun.capture/licenses/miniz.txt"
-    DEPENDS WinShunSemantic WinShunLocalSend WinShunBreak WinShunBookmarks WinShunTranslate WinShunCapture WinShunCaptureApp
+    DEPENDS WinShunSemantic WinShunLocalSend WinShunBreak WinShunBookmarks WinShunTranslate WinShunCapture WinShunCaptureApp WinShunOcrSearch WinShunOcrSearchApp
     COMMENT "Staging the library plugins into ${library_plugins_dir}"
     VERBATIM)
 

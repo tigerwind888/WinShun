@@ -134,6 +134,7 @@ struct Command {
     QList<Action> actions;
     Run run; // Kind::None: the plugin's process answers
     int cacheSeconds = 0;
+    bool contentSearch = false; // optional provider of indexed content results
     QJsonObject ai;
     bool zeroCode() const noexcept { return run.kind != Run::Kind::None; }
     friend bool operator==(const Command&, const Command&) = default;
@@ -175,6 +176,7 @@ struct Manifest {
     QStringList pictures;
     bool settingsWindow = false;
     bool systemSwitches = false; // provider of the search UI's existing switch rows
+    bool webSearch = false; // declarative URL provider; no process or static keyword commands
 
     const Command* command(QStringView commandId) const;
     bool resident() const noexcept { return runtime && runtime->mode == RunMode::Resident; }

@@ -12,6 +12,7 @@ Column {
     id: section
 
     property string title
+    property string glyph: ""
     property string note
     property int page: -1 // the index into the window's pages
     property int tab: 0 // the index into its page's tabs, on a page that has them
@@ -26,6 +27,9 @@ Column {
     readonly property var pageKeywords: column && column.pageKeywords !== undefined
                                         ? (column.pageKeywords[page] ?? "").split(";").filter(word => word.length > 0)
                                         : []
+    // The window's device pixel ratio, for this section and its rows: one
+    // Screen attached object for all of them (GitHub #111; docs/pitfalls.md).
+    readonly property real dpr: column && column.dpr !== undefined ? column.dpr : Screen.devicePixelRatio
     // Its rows on show while searching.
     readonly property int found: searching && search.total >= 0 ? search.sectionCount(section) : 0
     // While searching: the first section of its page on show, which carries the page's name.
@@ -98,12 +102,31 @@ Column {
         }
     }
 
-    Text {
+    Item {
         visible: section.title.length > 0
-        text: section.title
-        color: Theme.text
-        font.pixelSize: Theme.fontTitle
-        font.weight: Theme.fontStrong
+        width: parent.width
+        height: 26
+
+        Row {
+            anchors.verticalCenter: parent.verticalCenter
+            spacing: 8
+
+            Glyph {
+                visible: section.glyph.length > 0
+                anchors.verticalCenter: parent.verticalCenter
+                glyph: section.glyph
+                size: 15
+                color: Theme.accent
+            }
+
+            Text {
+                anchors.verticalCenter: parent.verticalCenter
+                text: section.title
+                color: Theme.text
+                font.pixelSize: Theme.fontBody
+                font.weight: Theme.fontStrong
+            }
+        }
     }
 
     Text {
@@ -117,7 +140,7 @@ Column {
 
     Rectangle {
         width: parent.width
-        height: Theme.snap(card.implicitHeight, Screen.devicePixelRatio) // whole device pixels: the bottom edge as crisp as the top
+        height: Theme.snap(card.implicitHeight, section.dpr) // whole device pixels: the bottom edge as crisp as the top
         radius: Theme.cardRadius
         color: Theme.card
         border.width: 1

@@ -160,7 +160,6 @@ Placement::Placement(QString stateFile, QString group, QObject* parent)
 
     connect(&m_slide, &QVariantAnimation::valueChanged, this, [this](const QVariant& value) { stepSlide(value.toInt()); });
     connect(&m_slide, &QVariantAnimation::finished, this, [this] {
-        emit slideStepped();
         if (const std::function<void()> done = std::exchange(m_slideDone, {}))
             done();
     });
@@ -393,10 +392,11 @@ void Placement::placeOn(QScreen* screen)
     avoidNative({}, screen);
 }
 
-void Placement::avoidNative(const QRect& window, QScreen* screen)
+void Placement::avoidNative(const QRect& window, QScreen* screen, bool inside)
 {
     m_glide.stop();
     m_avoid = window.isEmpty() ? std::nullopt : std::optional {window};
+    m_avoidInside = inside;
     m_box.reset();
     setAbove(false);
     setTaskbar({});
@@ -410,6 +410,30 @@ void Placement::avoidNative(const QRect& window, QScreen* screen)
 void Placement::attach(const QRect& box, QScreen* screen)
 {
     attachBy(box, screen, kBoxGap);
+}
+
+void Placement::placeDisplay(const QRect& geometry, int room, bool above)
+{
+    if (!m_window || geometry.isEmpty()) return;
+    m_glide.stop();
+    m_box.reset();
+    m_avoid.reset();
+    setTaskbar({});
+    m_dropped = true;
+    m_left = geometry.x();
+    setAbove(above);
+    setRoom(room);
+    m_place = geometry.topLeft();
+    m_window->setGeometry(geometry);
+}
+
+void Placement::adoptDisplayGeometry(const QRect& geometry)
+{
+    if (!m_window || geometry.isEmpty()) return;
+    m_moveStart = m_window->position();
+    m_window->setGeometry(geometry);
+    m_place = geometry.topLeft();
+    rememberSpot();
 }
 
 void Placement::attachBy(const QRect& box, QScreen* screen, int gap)
@@ -653,7 +677,8 @@ QPoint Placement::settleAvoiding(QScreen* screen)
         QPoint(up(m_avoid->x() + m_avoid->width(), native.origin.x()) - 1,
             up(m_avoid->y() + m_avoid->height(), native.origin.y()) - 1));
     const int height = std::max(m_roomNeeded, m_roomWanted > 0 ? m_roomWanted : m_window->height());
-    QPoint at = windowavoidance::place(screen->availableGeometry(), obstacle, {widthNow(), height}, home);
+    QPoint at = m_avoidInside ? windowavoidance::corner(screen->availableGeometry(), obstacle, {widthNow(), height})
+                              : windowavoidance::place(screen->availableGeometry(), obstacle, {widthNow(), height}, home);
     at.setX(native.keepInside(at.x(), widthNow(), native.work.x(), native.work.x() + native.work.width(), native.origin.x()));
     at.setY(native.keepInside(at.y(), std::min(height, screen->availableGeometry().height()),
         native.work.y(), native.work.y() + native.work.height(), native.origin.y()));
@@ -775,6 +800,41 @@ void Placement::moveHome()
     if (!screen)
         return;
     glideTo(settleOn(screen));
+}
+
+void Placement::centerOnScreen()
+{
+    if (!m_window || m_moving || m_sizing || m_windowSizing)
+        return;
+    QScreen* screen = m_window->screen();
+    if (!screen)
+        return;
+    const QRect area = screen->availableGeometry();
+    if (area.isEmpty())
+        return;
+    m_glide.stop();
+    settleSlide();
+    m_box.reset();
+    m_avoid.reset();
+    setTaskbar({});
+    m_taskbarSpot.reset();
+    m_taskbarScreen.clear();
+    m_dropped = false;
+    setAbove(false);
+    const QSize size = m_window->size();
+    QPoint target(area.x() + std::max(0, (area.width() - size.width()) / 2),
+        area.y() + std::max(0, (area.height() - size.height()) / 2));
+    const NativeArea native = nativeArea(screen);
+    target.setX(native.keepInside(target.x(), size.width(), native.work.left(), native.work.x() + native.work.width(), native.origin.x()));
+    target.setY(native.keepInside(target.y(), size.height(), native.work.top(), native.work.y() + native.work.height(), native.origin.y()));
+    moveWindow(target);
+    if (m_panel) {
+        savePanel();
+    } else {
+        m_anchor = {0.5, qreal(target.y() - area.y()) / area.height()};
+        save();
+        setRoom(area.y() + area.height() - target.y());
+    }
 }
 
 void Placement::setMoving(bool moving)
@@ -1071,7 +1131,6 @@ void Placement::stepSlide(int elapsed)
         m_contentShift = shift;
         emit contentShiftChanged();
     }
-    emit slideStepped();
 }
 
 void Placement::rememberWidth(int defaultWidth, int minimumWidth)

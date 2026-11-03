@@ -59,6 +59,7 @@ Item {
     required property bool elevatable
     required property bool revealable
     required property bool copyable
+    required property bool settingsAction
     required property bool selected // one of several picked with Ctrl / Shift
     required property string modified // "昨天 14:32"; empty for an app, or not known
     required property string modifiedFull
@@ -85,7 +86,7 @@ Item {
     property int hint: 0 // its number for the number keys (Ctrl+1…); 0 for none
     property bool reserveHintSpace: false // all rows align, including unnumbered and temporarily hidden hints
     property string hintModifier: "Ctrl" // ... with this held
-    property bool hintTaken: false // another program holds that chord as a global hotkey: shown struck through
+    property bool hintTaken: false // one of Win顺's own shortcuts has that chord: shown struck through
     property real hintOpacity: 1
     // The window's tip for a name or folder cut short (one for all its rows).
     property NameTip nameTip: null
@@ -115,6 +116,8 @@ Item {
     signal actionRequested(int index, int action)
     signal switchClicked(int index) // its switch clicked
     signal dragRequested(int index) // its file or folder dragged out of the window
+    signal previewRequested(int index) // middle click: the preview of this row, the file stays shut
+    signal hoverMoved(int index, point globalPos) // the mouse moved over it (not pressed)
 
     // Text on whole device pixels. Qt rounds each corner of a glyph's quad to
     // the pixel grid on the GPU, in single precision: on a half pixel (where
@@ -423,7 +426,7 @@ Item {
 
         anchors.fill: parent
         hoverEnabled: true
-        acceptedButtons: Qt.LeftButton | Qt.RightButton
+        acceptedButtons: Qt.LeftButton | Qt.MiddleButton | Qt.RightButton
         onPressed: (mouse) => {
             if (row.nameTip)
                 row.nameTip.dismiss()
@@ -442,6 +445,7 @@ Item {
         onPositionChanged: (mouse) => {
             if (!pressed) { // moved: a tip dismissed (a key, a scroll) may come again
                 row.offerTip()
+                row.hoverMoved(row.index, area.mapToGlobal(mouse.x, mouse.y))
                 return
             }
             if (!preventStealing || draggedOut || !(mouse.buttons & Qt.LeftButton))
@@ -456,12 +460,16 @@ Item {
                 return
             if (mouse.button === Qt.RightButton)
                 row.menuRequested(row.index, area.mapToGlobal(mouse.x, mouse.y), mouse.modifiers)
+            else if (mouse.button === Qt.MiddleButton)
+                row.previewRequested(row.index)
             else
                 row.clicked(row.index, mouse.modifiers)
         }
         onDoubleClicked: (mouse) => {
             if (mouse.button === Qt.LeftButton)
                 row.doubleClicked(row.index, mouse.modifiers)
+            else if (mouse.button === Qt.MiddleButton) // a second middle click, as quick: closes again
+                row.previewRequested(row.index)
         }
 
         // Inside the MouseArea so that hovering a button still hovers the row.
@@ -546,7 +554,7 @@ Item {
             }
             RowAction {
                 id: copyPathAction
-                visible: !row.switchReady && (!row.plugin || row.pluginCopies)
+                visible: !row.settingsAction && !row.switchReady && (!row.plugin || row.pluginCopies)
                 glyph: row.plugin ? "" : "copyPath" // Copy; else drawn by Glyph: a box holding "\\.."
                 tip: row.plugin ? qsTr("复制") : row.web ? qsTr("复制网址") : row.place ? qsTr("复制打开命令") : qsTr("复制完整路径")
                 tipShortcut: row.plugin ? "Ctrl+C" : "Ctrl+Shift+C"
@@ -593,7 +601,7 @@ Item {
                                       && row.hintTaken && under(numberSlot)
         target: hovered ? hovered : onDate ? date : onKeys ? numberSlot : null
         text: hovered ? hovered.tip : onDate ? row.modifiedFull
-            : onKeys ? qsTr("%1 被别的程序占用了，在这里按也会交给那个程序。可在设置的“结果列表”里改用 %2")
+            : onKeys ? qsTr("%1 是你给 Win顺 设的快捷键，在这里按也是那个快捷键。可在设置的“结果列表”里改用 %2")
                        .arg(row.hintModifier + "+" + row.hint).arg(row.hintModifier === "Alt" ? "Ctrl" : "Alt")
             : ""
         shortcut: hovered ? hovered.tipShortcut : ""

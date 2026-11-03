@@ -4,12 +4,15 @@
 #include "ClipStore.h"
 
 #include <QImage>
+#include <QJsonArray>
+#include <QJsonObject>
 #include <QString>
 #include <QStringList>
 
 #include <windows.h>
 
 #include <atomic>
+#include <chrono>
 #include <functional>
 #include <mutex>
 #include <thread>
@@ -54,8 +57,9 @@ struct ClipWrite {
 // Skipped: what password managers and Windows mark as not for clipboard
 // history or monitoring (ExcludeClipboardContentFromMonitorProcessing,
 // CanIncludeInClipboardHistory = 0, Clipboard Viewer Ignore), copies from
-// the excluded programs, and what this class wrote itself (see
-// ClipWrite::id).
+// the excluded programs, what this class wrote itself (see
+// ClipWrite::id), and text a remote-desktop sync garbled into the ANSI bytes
+// read as UTF-16 right after a copy (ClipMisread.h, GitHub #181).
 //
 // An equation (Word offers MathML for one copied alone) or an embedded
 // object (Equation 3.0, MathType, WPS's 公式编辑器) is recorded as a
@@ -85,6 +89,9 @@ public:
     void setOptions(Options options); // any thread
     bool running() const noexcept { return m_running.load(); }
     bool listening() const noexcept { return m_listening.load(); }
+    // Bounded in-memory metadata, copied into an explicitly exported diagnostic
+    // bundle. No clipboard payload, content hash, paths or arbitrary format names.
+    QJsonObject diagnosticStatus() const; // any thread, never opens the clipboard
     // Puts `data` on the clipboard, on the watcher's thread; `done` runs
     // there with whether that worked.
     void write(ClipWrite data, std::function<void(bool)> done);
@@ -94,7 +101,7 @@ private:
     static LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
     void read();
     bool writeNow(const ClipWrite& data);
-    bool openClipboard();
+    bool openClipboard(DWORD* lastError = nullptr, int* attempts = nullptr);
     void startWorker(bool captureInitial); // m_lifecycleMutex held
     void configureWatching(HWND window); // on the worker
     bool recordingEnabled();
@@ -103,6 +110,9 @@ private:
     Callbacks m_callbacks;
     std::mutex m_mutex;
     Options m_options; // guarded by m_mutex
+    mutable std::mutex m_diagnosticsMutex;
+    QJsonArray m_recentReads; // guarded by m_diagnosticsMutex
+    qint64 m_readAttempts = 0; // guarded by m_diagnosticsMutex
     std::mutex m_lifecycleMutex; // starting, posting writes, and retiring an idle writer
     std::atomic<HWND> m_window {nullptr};
     std::atomic<bool> m_running {false};
@@ -113,6 +123,8 @@ private:
     DWORD m_lastSequence = 0;
     DWORD m_startSequence = 0; // the clipboard's when watching began: what was there already
     int m_readRetries = 0;
+    QString m_lastText; // the last text seen or written (empty if long), to tell a garbled copy of it
+    std::chrono::steady_clock::time_point m_lastTextAt;
     std::unordered_map<std::wstring, QString> m_programNames;
 };
 

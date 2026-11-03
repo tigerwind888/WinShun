@@ -4,6 +4,7 @@
 #include "Backup.h"
 #include "App.h"
 #include "Clipboard.h"
+#include "ClipboardDisplay.h"
 #include "DialogBar.h"
 #include "AppCatalog.h"
 #include "History.h"
@@ -29,9 +30,13 @@
 #include "DropPieHelper.h"
 #include "Query.h"
 #include "Host.h"
+#include "platform/Integrity.h"
 #include "platform/SiteIcons.h"
 #include "platform/FileDialog.h"
 #include "platform/FileManagers.h"
+#include "platform/WindowEffects.h"
+#include "platform/Foreground.h"
+#include "platform/MessageWindow.h"
 #include "platform/OcrPackage.h"
 #include "miniz.h"
 
@@ -47,12 +52,15 @@
 #include <QGuiApplication>
 #include <QImage>
 #include <QPixmap>
+#include <QProcess>
+#include <QRegularExpression>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QKeyEvent>
 #include <QInputMethodEvent>
 #include <QMouseEvent>
+#include <QWheelEvent>
 #include <QPainter>
 #include <QLibraryInfo>
 #include <QLocale>
@@ -89,7 +97,9 @@
 #include <ncrypt.h>
 #include <ole2.h>
 #include <shellapi.h>
+#include <dwmapi.h>
 #include <exdisp.h>
+#include <uiautomation.h>
 #include <shlobj.h>
 #include <wrl/client.h>
 
@@ -279,6 +289,8 @@ int runPlugins(const QStringList& args)
     const bool dark = args.contains(u"--dark"_s);
     const bool dialog = args.contains(u"--dialog"_s);
     const bool aiPage = valueAfter(args, u"--page") == u"ai"; // the AI 助手 page instead (its plugin switches)
+    const bool allow = args.contains(u"--dialog-allow"_s); // the 更新并允许 question instead
+    const bool updatesOnly = args.contains(u"--updates"_s); // the 插件库 tab as the badge leads to it
 
     say(u"starting (dark %1, dialog %2)"_s.arg(dark).arg(dialog));
     QQmlApplicationEngine engine;
@@ -291,6 +303,8 @@ int runPlugins(const QStringList& args)
     auto* editor = new SettingsEditor(settings, u"software"_s, &engine);
     editor->plugins()->setLocale(u"zh"_s);
     editor->plugins()->loadPreview();
+    if (updatesOnly)
+        editor->plugins()->gallery()->setUpdatesOnly(true);
     if (aiPage)
         editor->setMcpStatus(u"已连接：Claude Desktop（12 次调用）"_s);
     say(u"loading the page"_s);
@@ -300,6 +314,7 @@ int runPlugins(const QStringList& args)
         {u"plugins"_s, QVariant::fromValue(editor->plugins())},
         {u"editor"_s, QVariant::fromValue(editor)},
         {u"dialogShown"_s, dialog},
+        {u"allowShown"_s, allow},
         {u"aiPage"_s, aiPage},
     });
     auto* window = qobject_cast<QQuickWindow*>(object);
@@ -406,7 +421,7 @@ bool previewWebForms(QQuickWindow* window, SettingsEditor* editor, const QDir& o
 {
     QMetaObject::invokeMethod(window, "showWebPage");
     settle(window);
-    QObject* add = named(window, "webAddButton");
+    QObject* add = visualNamed(window->contentItem(), u"webAddButton"_s);
     QObject* loader = named(window, "webDialog");
     QObject* pageFlick = named(window, "flick");
     if (!add || !loader || !pageFlick)
@@ -848,6 +863,121 @@ int runSettings(const QStringList& args)
         return finish(window, false);
     }
 
+    // GitHub #111: an item that reads Screen.* has a Screen attached object of
+    // its own, and on every move to another monitor each of them leaves the
+    // old QScreen (a disconnect that walks all of that screen's connections)
+    // and joins the new one: the hitch grows with the square of their number.
+    // The settings window keeps them few (SettingsWindow.dpr).
+    if (args.contains(u"--screen-objects"_s)) {
+        constexpr int budget = 500; // 1,631 here before #111, 355 after
+        int count = 0;
+        const std::function<void(QQuickItem*)> walk = [&](QQuickItem* item) {
+            for (const QObject* child : item->children())
+                count += qstrcmp(child->metaObject()->className(), "QQuickScreenAttached") == 0;
+            for (QQuickItem* child : item->childItems())
+                walk(child);
+        };
+        walk(window->contentItem());
+        say(u"Screen attached objects: %1 (at most %2)"_s.arg(count).arg(budget));
+        return finish(window, count > 0 && count <= budget);
+    }
+
+    // #163: the page's name and tabs stay (pageHeader, above the scrolled
+    // page); another tab starts at the top; a row gone to by the search, by
+    // the page's scrolling to it or by Tab lands whole below the header.
+    if (args.contains(u"--page-scroll"_s)) {
+        bool ok = true;
+        const auto check = [&](bool condition, const QString& message) {
+            say((condition ? u"ok: "_s : u"FAILED: "_s) + message);
+            ok = condition && ok;
+        };
+        auto* flick = qobject_cast<QQuickItem*>(named(window, "flick"));
+        auto* header = qobject_cast<QQuickItem*>(named(window, "pageHeader"));
+        auto* page = qobject_cast<QQuickItem*>(named(window, "page"));
+        if (!flick || !header || !page)
+            return finish(window, false);
+        const auto top = [&](QQuickItem* item) { return item->mapToItem(window->contentItem(), QPointF()).y(); };
+        const auto contentY = [&] { return flick->property("contentY").toDouble(); };
+        const auto show = [&](int pageIndex, int tab) {
+            QMetaObject::invokeMethod(window, "showPage", Q_ARG(QVariant, pageIndex), Q_ARG(QVariant, tab));
+            settle(window);
+            pump(150);
+        };
+        const std::function<QQuickItem*(QQuickItem*, const QString&)> rowTitled = [&](QQuickItem* item, const QString& title) -> QQuickItem* {
+            if (item->isVisible() && item->property("title").toString() == title && item->property("stackControl").isValid())
+                return item;
+            for (QQuickItem* child : item->childItems()) {
+                if (QQuickItem* found = rowTitled(child, title))
+                    return found;
+            }
+            return nullptr;
+        };
+        // Whole in the view: under the header, over the window's bottom.
+        const auto inView = [&](QQuickItem* item) {
+            return top(item) >= top(header) + header->height() - 0.5 && top(item) + item->height() <= window->height() + 0.5;
+        };
+        const QString deepTitle = u"删除，Ctrl+Z 撤销"_s;
+
+        show(0, 4); // 按键一览: many rows
+        const double headerTop = top(header);
+        check(flick->property("contentHeight").toDouble() > window->height() + 400, u"the page is longer than the window"_s);
+        flick->setProperty("contentY", 900.0);
+        settle(window, 2);
+        check(contentY() > 800 && qFuzzyCompare(top(header), headerTop) && header->isVisible(), u"scrolled, the page's name and tabs stay"_s);
+        saveGrab(window, out.filePath(u"page-scrolled.png"_s));
+        QMetaObject::invokeMethod(window, "showTab", Q_ARG(QVariant, 3));
+        settle(window, 2);
+        check(contentY() == 0 && window->property("currentTab").toInt() == 3, u"another tab starts at the top"_s);
+
+        // The search: Enter goes to the row, in view whole below the header.
+        QMetaObject::invokeMethod(window, "showSetting", Q_ARG(QVariant, 0), Q_ARG(QVariant, 4), Q_ARG(QVariant, deepTitle));
+        pump(500);
+        settle(window, 2);
+        QQuickItem* deep = rowTitled(page, deepTitle);
+        check(deep && contentY() > 0 && inView(deep), u"the search lands on a deep row, whole below the header"_s);
+        saveGrab(window, out.filePath(u"page-searched.png"_s));
+
+        // The page scrolled to a row (the plugin card, the capture's hotkeys).
+        flick->setProperty("contentY", 0.0);
+        settle(window, 2);
+        if (deep) {
+            QMetaObject::invokeMethod(window, "revealRow", Q_ARG(QVariant, QVariant::fromValue<QObject*>(deep)));
+            settle(window, 2);
+            check(inView(deep), u"revealRow brings a deep row in whole below the header"_s);
+            const double before = top(deep);
+            flick->setProperty("contentY", contentY() - 40); // a little too low
+            settle(window, 2);
+            QMetaObject::invokeMethod(window, "revealRow", Q_ARG(QVariant, QVariant::fromValue<QObject*>(deep)));
+            settle(window, 2);
+            check(inView(deep) && top(deep) >= top(header) + header->height() - 0.5 && before > 0, u"revealRow keeps a row from under the header"_s);
+        }
+
+        // Tab to controls out of view, below and then above.
+        show(6, 0); // 剪贴板 › 记录: switch after switch
+        QList<QQuickItem*> tabbable;
+        const std::function<void(QQuickItem*)> collect = [&](QQuickItem* item) {
+            if (item->isVisible() && item->activeFocusOnTab() && item->isEnabled())
+                tabbable.append(item);
+            for (QQuickItem* child : item->childItems())
+                collect(child);
+        };
+        collect(page);
+        check(tabbable.size() > 3 && top(tabbable.last()) > window->height(), u"the page has controls to Tab to, some below the view (%1)"_s.arg(tabbable.size()));
+        if (tabbable.size() > 3) {
+            flick->setProperty("contentY", 0.0);
+            settle(window, 2);
+            tabbable.last()->forceActiveFocus(Qt::TabFocusReason);
+            pump(150);
+            settle(window, 2);
+            check(contentY() > 0 && inView(tabbable.last()), u"Tab to a control below scrolls it whole into view"_s);
+            tabbable.first()->forceActiveFocus(Qt::TabFocusReason);
+            pump(150);
+            settle(window, 2);
+            check(inView(tabbable.first()), u"Tab to a control above scrolls it whole into view, below the header"_s);
+        }
+        return finish(window, ok);
+    }
+
     if (args.contains(u"--web-form"_s)) {
         if (args.contains(u"--compact"_s))
             window->resize(760, 420); // the supported minimum, also used on high-DPI screens
@@ -902,6 +1032,52 @@ int runSettings(const QStringList& args)
         settle(window, 2);
         check(!row->property("shown").toBool(), "completed recovery kept its warning row");
         say(u"plugin recovery: real QML controls, busy/offline/retry/completed states; no network or file picker used"_s);
+        return finish(window, ok);
+    }
+
+    // 常规's 截图的快捷键 row and the 按键一览 entry follow the capture plugin: not installed, off, on without
+    // and with shortcuts (App::updateScreenshotPlugin hands them over).
+    if (args.contains(u"--capture-hotkey"_s)) {
+        bool ok = true;
+        auto* row = window->findChild<QQuickItem*>(u"captureHotkeyRow"_s);
+        auto* button = window->findChild<QQuickItem*>(u"captureHotkeyButton"_s);
+        if (!row || !button)
+            return finish(window, false);
+        window->resize(args.contains(u"--compact"_s) ? QSize(760, 420) : QSize(920, 720));
+        QMetaObject::invokeMethod(window, "goTo", Q_ARG(QVariant, QVariant::fromValue(row)));
+        const auto overview = [&] { // the keys of the 截图 entry among the shortcuts
+            for (const QVariant& section : window->property("shortcutSections").toList()) {
+                for (const QVariant& entry : section.toMap().value(u"rows"_s).toList()) {
+                    if (entry.toMap().value(u"text"_s).toString() == u"截图"_s)
+                        return entry.toMap().value(u"keys"_s).toString();
+                }
+            }
+            return u"(no entry)"_s;
+        };
+        struct Case {
+            const char* name;
+            bool installed, on;
+            QStringList keys;
+            QString description, button, keys0;
+        };
+        const Case cases[] = {
+            {"not-installed", false, false, {}, u"可选插件"_s, u"去插件库"_s, {}},
+            {"off", true, false, {}, u"插件还没打开"_s, u"去设置"_s, {}},
+            {"no-key", true, true, {}, u"还没设"_s, u"去设置"_s, {}},
+            {"key", true, true, {u"F1"_s, u"Ctrl+Alt+F2"_s}, u"现在是 F1 / Ctrl+Alt+F2"_s, u"去设置"_s, u"F1 / Ctrl+Alt+F2"_s},
+        };
+        for (const Case& c : cases) {
+            editor->setScreenshotPlugin(c.installed, c.on, c.keys);
+            settle(window, 3);
+            const QString description = row->property("description").toString();
+            const QString text = button->property("text").toString();
+            const QString keys = overview();
+            const bool good = description.contains(c.description) && text == c.button && keys == c.keys0
+                && row->property("values").toStringList() == c.keys;
+            say(u"capture-hotkey %1: \"%2\" / button \"%3\" / overview \"%4\"%5"_s.arg(QString::fromLatin1(c.name), description, text, keys,
+                good ? QString() : u" -- WRONG"_s));
+            ok = good && saveGrab(window, out.filePath(u"capture-hotkey-%1.png"_s.arg(QString::fromLatin1(c.name)))) && ok;
+        }
         return finish(window, ok);
     }
 
@@ -1400,7 +1576,7 @@ int runSettings(const QStringList& args)
         {QCoreApplication::translate("PasteFileCard", "粘贴为文件"), pluginsPage, 0}, // a built-in card
         // Shown as 内置功能 cards too, the rows of their own page first (open_settings searches them by title).
         {QCoreApplication::translate("SettingsWindow", "双击空白处弹出文件夹菜单"), 0, 2},
-        {QCoreApplication::translate("SettingsWindow", "菜单里列出收藏夹"), 0, 2},
+        {QCoreApplication::translate("SettingsWindow", "菜单里列出的内容"), 0, 2},
         {QCoreApplication::translate("SettingsWindow", "对话框旁的搜索框"), 0, 2},
         {QCoreApplication::translate("SettingsWindow", "在 Directory Opus 里直接打字搜索"), 0, 2},
         {u"AI"_s, aiPage, 0},
@@ -1481,6 +1657,30 @@ void checkSearchMenuKeys(Launcher& launcher, QQuickWindow* window, FilePreview& 
         if (!field || !view) continue;
         field->forceActiveFocus();
         field->setProperty("cursorPosition", query.size());
+        for (const auto [alias, arrow] : {std::pair{Qt::Key_J, Qt::Key_Down}, {Qt::Key_N, Qt::Key_Down},
+                 {Qt::Key_K, Qt::Key_Up}, {Qt::Key_P, Qt::Key_Up}, {Qt::Key_U, Qt::Key_PageUp}, {Qt::Key_D, Qt::Key_PageDown}}) {
+            for (const int start : {0, 2, 17}) {
+                view->setProperty("currentIndex", start);
+                key(arrow);
+                const int expected = view->property("currentIndex").toInt();
+                view->setProperty("currentIndex", start);
+                key(alias, Qt::ControlModifier);
+                check(view->property("currentIndex").toInt() == expected && launcher.query() == query && field->hasActiveFocus(),
+                    mode + u"Ctrl+%1 matches %2 from row %3, retaining text and focus"_s.arg(int(alias)).arg(int(arrow)).arg(start));
+            }
+        }
+        view->setProperty("currentIndex", 2);
+        key(Qt::Key_J, Qt::ControlModifier, {}, true);
+        check(view->property("currentIndex").toInt() == 3, mode + u"holding a navigation alias repeats"_s);
+        view->setProperty("currentIndex", 2);
+        key(Qt::Key_J, Qt::ControlModifier | Qt::AltModifier);
+        check(view->property("currentIndex").toInt() == 2, mode + u"AltGr is not navigation"_s);
+        QInputMethodEvent aliasComposition(u"shi"_s, {});
+        QCoreApplication::sendEvent(field, &aliasComposition);
+        key(Qt::Key_J, Qt::ControlModifier);
+        check(view->property("currentIndex").toInt() == 2, mode + u"aliases do not move results during IME composition"_s);
+        QInputMethodEvent aliasCompositionEnded;
+        QCoreApplication::sendEvent(field, &aliasCompositionEnded);
         view->setProperty("currentIndex", 2);
         key(Qt::Key_Right);
         auto* menu = qobject_cast<QQuickWindow*>(window->property("contextMenu").value<QObject*>());
@@ -1587,13 +1787,65 @@ void checkSearchMenuKeys(Launcher& launcher, QQuickWindow* window, FilePreview& 
         key(Qt::Key_Right);
         key(Qt::Key_O, Qt::ControlModifier);
         check(!menuOpen(), mode + u"no selected result opens no menu"_s);
+        if (!panel && launcher.results()->at(0)) {
+            const QString folder = QFileInfo(launcher.results()->at(0)->path).absolutePath();
+            const QString prefix = QDir::toNativeSeparators(folder) + u"\\ "_s;
+            launcher.setTypingFolder(prefix);
+            launcher.setQuery(prefix + query);
+            timeout.restart();
+            while (launcher.searching() && timeout.elapsed() < 2000) pump(10);
+            const bool only = launcher.typingFolderOnly();
+            key(Qt::Key_D, Qt::ControlModifier);
+            check(launcher.typingFolderOnly() == only, mode + u"Ctrl+D pages without changing the folder filter"_s);
+            key(Qt::Key_D, Qt::ControlModifier | Qt::ShiftModifier);
+            check(launcher.typingFolderOnly() != only, mode + u"Ctrl+Shift+D switches the current folder filter"_s);
+            key(Qt::Key_D, Qt::ControlModifier | Qt::ShiftModifier);
+            check(launcher.typingFolderOnly() == only, mode + u"Ctrl+Shift+D switches it back"_s);
+            launcher.setTypingFolder({});
+            launcher.setQuery(query);
+            timeout.restart();
+            while (launcher.searching() && timeout.elapsed() < 2000) pump(10);
+        }
         view->setProperty("currentIndex", 0);
     }
+    const auto previousScope = launcher.scope();
+    launcher.setScope(Launcher::All);
+    launcher.setSearchKinds(false, false);
+    launcher.setQuery(u"设置"_s);
+    QElapsedTimer settingsWait;
+    settingsWait.start();
+    while (launcher.searching() && settingsWait.elapsed() < 3000) pump(10);
+    const auto* settingsRow = launcher.results()->at(0);
+    check(settingsRow && settingsRow->isSettings(), u"settings are searchable with app and Windows place searches disabled"_s);
+    check(launcher.results()->data(launcher.results()->index(0), ResultModel::SettingsActionRole).toBool()
+            && !launcher.results()->data(launcher.results()->index(0), ResultModel::FolderRole).toString().contains(u"winshun:"),
+        u"settings have an action-only row and a user-facing description"_s);
+    int settingsOpened = 0;
+    const auto settingsConnection = QObject::connect(&launcher, &Launcher::settingsRequested, [&] { ++settingsOpened; });
+    auto* settingsField = visualNamed(window->contentItem(), u"panelSearchField"_s);
+    if (settingsField) settingsField->forceActiveFocus();
+    window->property("view").value<QObject*>()->setProperty("currentIndex", 0);
+    key(Qt::Key_Return);
+    check(settingsOpened == 1, u"Enter on the settings result dispatches the internal settings action"_s);
+    key(Qt::Key_Comma, Qt::ControlModifier);
+    key(Qt::Key_Comma, Qt::ControlModifier, {}, true);
+    check(settingsOpened == 2, u"Ctrl+, opens settings once, ignoring auto-repeat"_s);
+    check(launcher.menuItems(0).size() == 1, u"settings expose only their applicable Open action"_s);
+    settle(window, 3);
+    check(saveGrab(window, output.filePath(u"search-settings-entry.png"_s)), u"render the settings entry"_s);
+    QObject::disconnect(settingsConnection);
+    launcher.setSearchKinds(true, true);
+    launcher.setScope(previousScope);
+    launcher.setQuery(query);
+    settingsWait.restart();
+    while (launcher.searching() && settingsWait.elapsed() < 3000) pump(10);
     QFile report(output.filePath(u"search-navigation.json"_s));
     check(report.open(QIODevice::WriteOnly), u"write the regression report"_s);
     if (report.isOpen()) report.write(QJsonDocument(QJsonObject {{u"passed"_s, passed}, {u"checks"_s, checks}}).toJson());
     say(u"search navigation: %1 checks, production Main.qml/Launcher/ContextMenu, local Qt key and IME events, %2"_s
         .arg(checks.size()).arg(passed ? u"passed" : u"FAILED"));
+    if (!passed)
+        throw std::runtime_error("Production search navigation regression failed; see search-navigation.json");
 }
 
 void checkDialogSearchKeys(IndexService& index, QQmlEngine* engine, const QDir& output)
@@ -1629,6 +1881,22 @@ void checkDialogSearchKeys(IndexService& index, QQmlEngine* engine, const QDir& 
     auto* field = visualNamed(window->contentItem(), u"dialogSearchField"_s);
     auto* list = visualNamed(window->contentItem(), u"dialogResults"_s);
     check(field && list, u"production dialog field and result list"_s);
+    settle(window);
+    auto* logo = visualNamed(window->contentItem(), u"dialogSearchLogo"_s);
+    check(logo && logo->isVisible() && logo->property("status").toInt() == 1,
+        u"the dialog search bar loads its inline program logo"_s);
+    check(logo && field && logo->x() + logo->width() + 8 <= field->x() && field->x() == 40,
+        u"the program logo keeps the original input alignment and spacing"_s);
+    const QString originalQuery = bar.query();
+    const int originalHeight = window->height();
+    bar.setQuery({});
+    window->setHeight(bar.barHeight());
+    settle(window);
+    check(saveGrab(window, output.filePath(u"dialog-search-logo.png"_s)), u"render the dialog logo with the empty search field"_s);
+    window->setHeight(originalHeight);
+    bar.setQuery(originalQuery);
+    timeout.restart();
+    while (bar.results()->count() != 18 && timeout.elapsed() < 2000) pump(10);
     if (field && list) {
         // Native dialog placement/activation is outside this key test. Show
         // its real view offscreen without changing the desktop's focus.
@@ -1643,6 +1911,17 @@ void checkDialogSearchKeys(IndexService& index, QQmlEngine* engine, const QDir& 
             QCoreApplication::sendEvent(window, &event);
         };
         const auto menuOpen = [&] { return window->property("menuOpen").toBool(); };
+        for (const auto [alias, arrow] : {std::pair{Qt::Key_J, Qt::Key_Down}, {Qt::Key_N, Qt::Key_Down},
+                 {Qt::Key_K, Qt::Key_Up}, {Qt::Key_P, Qt::Key_Up}, {Qt::Key_U, Qt::Key_PageUp}, {Qt::Key_D, Qt::Key_PageDown}}) {
+            list->setProperty("currentIndex", 2);
+            key(arrow);
+            const int expected = list->property("currentIndex").toInt();
+            list->setProperty("currentIndex", 2);
+            key(alias, Qt::ControlModifier);
+            check(list->property("currentIndex").toInt() == expected && bar.query() == query && field->hasActiveFocus(),
+                u"dialog Ctrl+%1 matches the existing navigation key"_s.arg(int(alias)));
+        }
+        list->setProperty("currentIndex", 2);
         key(Qt::Key_Right);
         auto* menu = qobject_cast<QQuickWindow*>(window->property("contextMenu").value<QObject*>());
         check(menu && menuOpen() && menu->property("row").toInt() == 2, u"Right opens the selected dialog result's menu"_s);
@@ -1691,6 +1970,417 @@ void checkDialogSearchKeys(IndexService& index, QQmlEngine* engine, const QDir& 
     if (report.isOpen()) report.write(QJsonDocument(QJsonObject {{u"passed"_s, passed}, {u"checks"_s, checks}}).toJson());
     say(u"dialog search navigation: %1 checks, production DialogBarWindow/DialogBar, local Qt input, %2"_s
         .arg(checks.size()).arg(passed ? u"passed" : u"FAILED"));
+    if (!passed)
+        throw std::runtime_error("Production dialog search navigation regression failed; see dialog-navigation.json");
+}
+
+// The first item of that name that is shown (the launcher has a footer in its
+// box and another in its panel).
+QQuickItem* shownNamed(QQuickItem* root, const QString& name)
+{
+    if (root->objectName() == name && root->isVisible())
+        return root;
+    for (QQuickItem* child : root->childItems()) {
+        if (QQuickItem* found = shownNamed(child, name))
+            return found;
+    }
+    return nullptr;
+}
+
+// #185 and #174: the shortcut panels (one click opens them, a click elsewhere
+// or on the button closes them, the last row asks for the settings) and the
+// clipboard's own sizes. Production QML; the clicks go to the window as
+// events, nothing is injected globally.
+bool checkShortcutPanels(QQmlEngine* engine, const QDir& output)
+{
+    QTemporaryDir temporary;
+    IndexService index(temporary.path(), IndexService::Options{});
+    AppCatalog apps;
+    SystemCatalog places;
+    apps.setApps(std::make_shared<const AppList>());
+    places.setPlaces(std::make_shared<const PlaceList>());
+    History history(temporary.filePath(u"history.tsv"_s));
+    SearchEngine search(&index, &apps, &places);
+    Launcher launcher(&index, &apps, &places, &search, &history);
+    ClipStore store(temporary.filePath(u"clipboard"_s));
+    store.open(QDateTime::currentMSecsSinceEpoch());
+    for (int i = 0; i < 12; ++i)
+        store.add(ClipCapture {.kind = ClipKind::Text, .text = u"Clipboard entry number %1 with some text to read"_s.arg(i)},
+            QDateTime::currentMSecsSinceEpoch() + i);
+    ClipboardWatcher watcher({}, {});
+    Clipboard clipboard(&store, &watcher);
+    clipboard.setRowOptions(false, false, SystemTheme::uiSize());
+    Placement placement(temporary.filePath(u"state.ini"_s), u"Launcher"_s);
+    Placement clipPlacement(temporary.filePath(u"clipboard.ini"_s), u"Clipboard"_s);
+    WindowFrame frame(false);
+    WindowFrame clipFrame(false);
+    int launcherAsked = 0, clipboardAsked = 0; // the last row's requests for the settings
+    QObject::connect(&launcher, &Launcher::shortcutSettingsRequested, [&] { ++launcherAsked; });
+    QObject::connect(&clipboard, &Clipboard::shortcutSettingsRequested, [&] { ++clipboardAsked; });
+    QJsonArray checks;
+    bool passed = true;
+    const auto check = [&](bool okay, const QString& name) {
+        checks.append(QJsonObject {{u"name"_s, name}, {u"passed"_s, okay}});
+        passed = okay && passed;
+        if (!okay) qWarning("shortcut panel regression: %s", qUtf8Printable(name));
+    };
+    const auto click = [](QQuickWindow* window, QQuickItem* item) {
+        const QPointF at = item->mapToScene({item->width() / 2, item->height() / 2});
+        QMouseEvent press(QEvent::MouseButtonPress, at, window->mapToGlobal(at), Qt::LeftButton, Qt::LeftButton, {});
+        QCoreApplication::sendEvent(window, &press);
+        QMouseEvent release(QEvent::MouseButtonRelease, at, window->mapToGlobal(at), Qt::LeftButton, {}, {});
+        QCoreApplication::sendEvent(window, &release);
+        pump(120);
+    };
+    const auto tipWindow = [] {
+        for (QWindow* window : QGuiApplication::allWindows()) {
+            if (window->objectName() == u"shortcutTip" && window->isVisible())
+                return qobject_cast<QQuickWindow*>(window);
+        }
+        return static_cast<QQuickWindow*>(nullptr);
+    };
+    // The panel of one window: opens on a click and not on hovering, shows
+    // its keys in groups, closes on a click elsewhere and on the button,
+    // and its last row asks for the settings.
+    const auto panel = [&](QQuickWindow* window, int& asked, const QString& name,
+                           const QStringList& expected, const QStringList& absent, QQuickItem* elsewhere) {
+        QQuickItem* button = shownNamed(window->contentItem(), u"shortcutsButton"_s);
+        check(button && button->isVisible(), name + u": the info button shows"_s);
+        if (!button) return;
+        const QPointF at = button->mapToScene({button->width() / 2, button->height() / 2});
+        QMouseEvent hover(QEvent::MouseMove, at, window->mapToGlobal(at), Qt::NoButton, {}, {});
+        QCoreApplication::sendEvent(window, &hover);
+        pump(500);
+        check(!tipWindow(), name + u": hovering opens nothing"_s);
+        click(window, button);
+        QQuickWindow* tip = tipWindow();
+        check(tip && button->property("open").toBool(), name + u": a click opens the panel"_s);
+        if (!tip) return;
+        const QVariantList rows = tip->property("rows").toList();
+        QStringList keys, groups;
+        for (const QVariant& row : rows) {
+            keys << row.toMap().value(u"keys"_s).toString();
+            const QString group = row.toMap().value(u"group"_s).toString();
+            if (!groups.contains(group)) groups << group;
+        }
+        check(groups.size() >= 2 && rows.size() < 20, name + u": compact and grouped (%1 keys in %2 groups)"_s.arg(rows.size()).arg(groups.size()));
+        for (const QString& key : expected)
+            check(keys.contains(key), name + u": lists " + key);
+        for (const QString& key : absent)
+            check(!keys.contains(key), name + u": leaves out " + key);
+        check(visualNamed(tip->contentItem(), u"shortcutLink"_s) != nullptr, name + u": the last row leads to all shortcuts"_s);
+        settle(tip, 2);
+        saveGrab(tip, output.filePath(u"shortcut-panel-%1.png"_s.arg(name)));
+        click(window, elsewhere);
+        check(!tipWindow() && !button->property("open").toBool(), name + u": a click elsewhere closes it"_s);
+        click(window, button);
+        check(tipWindow() != nullptr, name + u": opens again"_s);
+        click(window, button);
+        check(!tipWindow(), name + u": the button closes it"_s);
+        click(window, button);
+        tip = tipWindow();
+        QQuickItem* link = tip ? visualNamed(tip->contentItem(), u"shortcutLink"_s) : nullptr;
+        if (link) click(tip, link);
+        check(asked == 1 && !tipWindow(), name + u": the last row asks for the settings and closes the panel"_s);
+    };
+
+    {
+        QQmlComponent component(engine, u"WinShun"_s, u"Main"_s);
+        std::unique_ptr<QObject> object(component.createWithInitialProperties({
+            {u"launcher"_s, QVariant::fromValue(&launcher)}, {u"clipboard"_s, QVariant::fromValue(&clipboard)},
+            {u"frame"_s, QVariant::fromValue(&frame)}, {u"placement"_s, QVariant::fromValue(&placement)}}));
+        auto* window = qobject_cast<QQuickWindow*>(object.get());
+        if (!window) {
+            qWarning().noquote() << "shortcut panel:" << component.errorString();
+            return false;
+        }
+        window->create();
+        launcher.setWindow(window);
+        frame.setWindow(window);
+        placement.setWindow(window);
+        placement.rememberWidth(760, 640);
+        showOffScreen(window);
+        launcher.setQuery(u"panel"_s);
+        launcher.results()->assign({SearchResult{.name = u"Example.txt"_s, .path = u"T:\\Example.txt"_s}}, {});
+        placement.placeOn(window->screen());
+        settle(window);
+        QQuickItem* field = visualNamed(window->contentItem(), u"searchField"_s);
+        saveGrab(window, output.filePath(u"launcher.png"_s));
+        check(field != nullptr, u"launcher: the search field shows"_s);
+        if (field)
+            panel(window, launcherAsked, u"launcher"_s,
+                  {u"Shift+Tab"_s, u"Ctrl+Tab"_s, u"Ctrl+S"_s, u"Ctrl+T"_s}, {u"Ctrl+C"_s, u"Ctrl+Shift+Enter"_s, u"Ctrl+J / N · Ctrl+K / P"_s}, field);
+        window->hide();
+    }
+    {
+        QQmlComponent component(engine, u"WinShun"_s, u"ClipboardWindow"_s);
+        std::unique_ptr<QObject> object(component.createWithInitialProperties({{u"clipboard"_s, QVariant::fromValue(&clipboard)},
+            {u"placement"_s, QVariant::fromValue(&clipPlacement)}, {u"frame"_s, QVariant::fromValue(&clipFrame)}}));
+        auto* window = qobject_cast<QQuickWindow*>(object.get());
+        if (!window) {
+            qWarning().noquote() << "shortcut panel:" << component.errorString();
+            return false;
+        }
+        window->create();
+        clipFrame.setWindow(window);
+        clipPlacement.setWindow(window);
+        clipboard.setActive(true);
+        clipboard.handleShown();
+        showOffScreen(window);
+        settle(window);
+        QQuickItem* field = visualNamed(window->contentItem(), u"clipboardSearchField"_s);
+        check(field != nullptr, u"clipboard: the search field shows"_s);
+        if (field)
+            panel(window, clipboardAsked, u"clipboard"_s,
+                  {u"Shift+Tab"_s, u"Ctrl+P"_s, u"Delete"_s}, {u"Ctrl+C"_s, u"Esc"_s}, field);
+        // 剪贴板大小: every step's own type and row height, one line a row in 密集.
+        struct Step { const char* size; int row; };
+        const Step steps[] = {{"dense", 32}, {"compact", 52}, {"standard", 60}, {"roomy", 68}};
+        for (const Step& step : steps) {
+            const QString name = QString::fromLatin1(step.size);
+            clipboard.setRowOptions(false, false, name);
+            settle(window);
+            pump(200);
+            QQuickItem* row = visualNamed(window->contentItem(), u"clipboardRow-0"_s);
+            check(row && qRound(row->height()) == step.row, name + u": a row is %1 px high"_s.arg(step.row));
+            check(clipboard.uiSize() == name, name + u": the window follows the clipboard's size"_s);
+            saveGrab(window, output.filePath(u"clipboard-%1.png"_s.arg(name)));
+        }
+        clipboard.setActive(false);
+        window->hide();
+    }
+    QFile report(output.filePath(u"shortcut-panel.json"_s));
+    if (report.open(QIODevice::WriteOnly)) report.write(QJsonDocument(QJsonObject {{u"passed"_s, passed}, {u"checks"_s, checks}}).toJson());
+    say(u"shortcut panels and clipboard sizes: %1 checks, production QML, %2"_s.arg(checks.size()).arg(passed ? u"passed" : u"FAILED"));
+    return passed;
+}
+
+// #162: actual native hit testing/messages and production QML, isolated from
+// the user's profile. No global mouse or keyboard input is injected.
+bool checkSearchLogo(QQmlEngine* engine, const QDir& output)
+{
+    QTemporaryDir temporary;
+    IndexService index(temporary.path(), IndexService::Options{});
+    AppCatalog apps;
+    SystemCatalog places;
+    apps.setApps(std::make_shared<const AppList>());
+    places.setPlaces(std::make_shared<const PlaceList>());
+    History history(temporary.filePath(u"history.tsv"_s));
+    SearchEngine search(&index, &apps, &places);
+    Launcher launcher(&index, &apps, &places, &search, &history);
+    ClipStore store(temporary.filePath(u"clipboard"_s));
+    store.open(QDateTime::currentMSecsSinceEpoch());
+    ClipboardWatcher watcher({}, {});
+    Clipboard clipboard(&store, &watcher);
+    Placement placement(temporary.filePath(u"state.ini"_s), u"Launcher"_s);
+    WindowFrame frame(false);
+    QQmlComponent component(engine, u"WinShun"_s, u"Main"_s);
+    std::unique_ptr<QObject> object(component.createWithInitialProperties({
+        {u"launcher"_s, QVariant::fromValue(&launcher)}, {u"clipboard"_s, QVariant::fromValue(&clipboard)},
+        {u"frame"_s, QVariant::fromValue(&frame)}, {u"placement"_s, QVariant::fromValue(&placement)}}));
+    auto* window = qobject_cast<QQuickWindow*>(object.get());
+    if (!window) {
+        qWarning().noquote() << "search logo:" << component.errorString();
+        return false;
+    }
+    window->create();
+    launcher.setWindow(window);
+    frame.setWindow(window);
+    frame.setSideSizing(true);
+    placement.setWindow(window);
+    placement.rememberWidth(760, 640);
+    showOffScreen(window);
+    launcher.setQuery(u"Logo 测试"_s);
+    launcher.results()->assign({SearchResult{.name = u"Example.txt"_s, .path = u"T:\\Example.txt"_s}}, {});
+    int settingsRequests = 0;
+    QObject::connect(&launcher, &Launcher::settingsRequested, window, [&] { ++settingsRequests; });
+    QJsonArray checks;
+    bool passed = true;
+    const auto check = [&](bool okay, const QString& name) {
+        checks.append(QJsonObject {{u"name"_s, name}, {u"passed"_s, okay}});
+        passed = okay && passed;
+        if (!okay) qWarning("search logo regression: %s", qUtf8Printable(name));
+    };
+    const HWND hwnd = reinterpret_cast<HWND>(window->winId());
+    for (const bool panel : {false, true}) {
+        launcher.setPanel(panel);
+        if (panel) placement.enterPanel(window->screen());
+        else placement.placeOn(window->screen());
+        settle(window);
+        const QString mode = panel ? u"panel: "_s : u"box: "_s;
+        auto* logo = visualNamed(window->contentItem(), panel ? u"panelSearchLogo"_s : u"searchLogo"_s);
+        auto* field = visualNamed(window->contentItem(), panel ? u"panelSearchField"_s : u"searchField"_s);
+        check(logo && field && logo->isVisible(), mode + u"production logo and field are visible"_s);
+        if (!logo || !field) continue;
+        auto* image = visualNamed(logo, u"searchLogoImage"_s);
+        auto* badge = visualNamed(logo, u"searchLogoPinBadge"_s);
+        check(image && image->property("status").toInt() == 1 && !image->property("source").toUrl().isEmpty(),
+            mode + u"application logo loads at the requested display size"_s);
+        check(logo->property("help").toString().contains(u'\n'), mode + u"all pointer actions have a multiline hint"_s);
+        const auto point = [&] {
+            const QPointF local = logo->mapToScene({logo->width() / 2, logo->height() / 2});
+            POINT native {qRound(local.x() * window->devicePixelRatio()), qRound(local.y() * window->devicePixelRatio())};
+            ::ClientToScreen(hwnd, &native);
+            return MAKELPARAM(native.x, native.y);
+        };
+        const auto click = [&](UINT down, UINT up) {
+            const LPARAM at = point();
+            ::SendMessageW(hwnd, down, HTCAPTION, at);
+            ::SendMessageW(hwnd, up, HTCAPTION, at);
+            settle(window);
+        };
+        field->forceActiveFocus();
+        const QString query = launcher.query();
+        // #173: cover the whole visible handle, rather than only its centre.
+        // Measure the native client extent independently of Qt's reported DPR.
+        const QString previousUiSize = SystemTheme::uiSize();
+        for (const QString& size : {u"compact"_s, u"standard"_s, u"roomy"_s}) {
+            SystemTheme::setUiSize(size);
+            settle(window);
+            RECT client {};
+            ::GetClientRect(hwnd, &client);
+            const qreal scaleX = qreal(client.right) / window->width();
+            const qreal scaleY = qreal(client.bottom) / window->height();
+            const auto nativePoint = [&](QPointF local) {
+                const QPointF scene = logo->mapToScene(local);
+                POINT native {qRound(scene.x() * scaleX), qRound(scene.y() * scaleY)};
+                ::ClientToScreen(hwnd, &native);
+                return MAKELPARAM(native.x, native.y);
+            };
+            for (const qreal x : {0.1, 0.5, 0.9}) {
+                for (const qreal y : {0.1, 0.5, 0.9}) {
+                    const LPARAM at = nativePoint({logo->width() * x, logo->height() * y});
+                    const LRESULT hit = ::SendMessageW(hwnd, WM_NCHITTEST, 0, at);
+                    ::SendMessageW(hwnd, WM_NCMOUSEMOVE, hit, at);
+                    const bool hovered = logo->property("pointed").toBool();
+                    const bool wasPinned = launcher.pinned();
+                    ::SendMessageW(hwnd, WM_NCMBUTTONDOWN, hit, at);
+                    ::SendMessageW(hwnd, WM_NCMBUTTONUP, hit, at);
+                    pump(1); // the queued native handle action
+                    check(hit == HTCAPTION && hovered && launcher.pinned() != wasPinned,
+                        mode + u"%1 logo hover and action cover (%2,%3)"_s.arg(size).arg(x).arg(y));
+                    launcher.setPinned(wasPinned);
+                }
+            }
+            for (const QPointF& outside : {QPointF(-2, logo->height() / 2), QPointF(logo->width() + 2, logo->height() / 2),
+                     QPointF(logo->width() / 2, -2), QPointF(logo->width() / 2, logo->height() + 2)}) {
+                const LPARAM at = nativePoint(outside);
+                const LRESULT hit = ::SendMessageW(hwnd, WM_NCHITTEST, 0, at);
+                ::SendMessageW(hwnd, WM_NCMOUSEMOVE, hit, at);
+                const bool hovered = logo->property("pointed").toBool();
+                const bool wasPinned = launcher.pinned();
+                ::SendMessageW(hwnd, WM_NCMBUTTONDOWN, hit, at);
+                ::SendMessageW(hwnd, WM_NCMBUTTONUP, hit, at);
+                pump(1);
+                check(!hovered && launcher.pinned() == wasPinned,
+                    mode + u"%1 does not activate outside the logo at (%2,%3)"_s.arg(size).arg(outside.x()).arg(outside.y()));
+            }
+        }
+        SystemTheme::setUiSize(previousUiSize);
+        settle(window);
+        check(::SendMessageW(hwnd, WM_NCHITTEST, 0, point()) == HTCAPTION, mode + u"logo retains the system drag region"_s);
+        click(WM_NCMBUTTONDOWN, WM_NCMBUTTONUP);
+        check(launcher.pinned() && badge && badge->isVisible() && logo->property("checked").toBool(),
+            mode + u"native middle click pins and reveals the badge"_s);
+        check(launcher.query() == query && field->hasActiveFocus(), mode + u"pinning keeps query and input focus"_s);
+        check(saveGrab(window, output.filePath(panel ? u"logo-panel-pinned.png"_s : u"logo-box-pinned.png"_s)),
+            mode + u"pinned state screenshot"_s);
+        QKeyEvent pinKey(QEvent::KeyPress, Qt::Key_T, Qt::ControlModifier);
+        QCoreApplication::sendEvent(window, &pinKey);
+        settle(window);
+        check(!launcher.pinned() && badge && !badge->isVisible(), mode + u"Ctrl+T clears the same visible pin state"_s);
+        click(WM_NCMBUTTONDBLCLK, WM_NCMBUTTONUP);
+        click(WM_NCMBUTTONDOWN, WM_NCMBUTTONUP);
+        check(!launcher.pinned(), mode + u"repeated middle clicks toggle independently"_s);
+        ::SendMessageW(hwnd, WM_NCMBUTTONUP, HTCAPTION, point());
+        settle(window);
+        check(!launcher.pinned(), mode + u"release without a logo press does nothing"_s);
+        ::SendMessageW(hwnd, WM_NCMBUTTONDOWN, HTCAPTION, point());
+        ::SendMessageW(hwnd, WM_MBUTTONUP, 0, 0);
+        ::SendMessageW(hwnd, WM_NCMBUTTONUP, HTCAPTION, point());
+        settle(window);
+        check(!launcher.pinned(), mode + u"releasing outside cancels the logo action"_s);
+        const LPARAM start = point();
+        const LPARAM moved = MAKELPARAM(short(LOWORD(start)) + ::GetSystemMetricsForDpi(SM_CXDRAG, ::GetDpiForWindow(hwnd)),
+            short(HIWORD(start)));
+        ::SendMessageW(hwnd, WM_NCMBUTTONDOWN, HTCAPTION, start);
+        ::SendMessageW(hwnd, WM_NCMOUSEMOVE, HTCAPTION, moved);
+        ::SendMessageW(hwnd, WM_NCMBUTTONUP, HTCAPTION, start);
+        settle(window);
+        check(!launcher.pinned(), mode + u"moving beyond the drag threshold cancels even after returning to the logo"_s);
+        // DragDetect consumes the queued release without global input.
+        const int before = settingsRequests;
+        ::PostMessageW(hwnd, WM_NCLBUTTONDOWN, HTCAPTION, point());
+        ::PostMessageW(hwnd, WM_LBUTTONUP, 0, 0);
+        pump(100);
+        check(settingsRequests == before + 1, mode + u"native left click requests settings exactly once"_s);
+        logo->forceActiveFocus();
+        QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, {});
+        QCoreApplication::sendEvent(window, &enter);
+        check(settingsRequests == before + 2, mode + u"keyboard activation opens settings"_s);
+        field->forceActiveFocus();
+        const QRect area = window->screen()->availableGeometry();
+        window->setPosition(area.topLeft() + QPoint(24, 36));
+        settle(window);
+        const QSize size = window->size();
+        click(WM_NCRBUTTONDOWN, WM_NCRBUTTONUP);
+        const QPoint wanted(area.x() + (area.width() - size.width()) / 2,
+            area.y() + (area.height() - size.height()) / 2);
+        check((window->position() - wanted).manhattanLength() <= 2,
+            mode + u"native right click centers on the current monitor work area"_s);
+        check(window->size() == size && launcher.query() == query && !launcher.pinned() && settingsRequests == before + 2,
+            mode + u"centering retains size, query and pin state without opening settings"_s);
+        check(saveGrab(window, output.filePath(panel ? u"logo-panel.png"_s : u"logo-box.png"_s)), mode + u"unpinned state screenshot"_s);
+        ::SendMessageW(hwnd, WM_NCMOUSEMOVE, HTCAPTION, point());
+        // Keep the user's real cursor where it is: the synthetic hover owns
+        // its leave message too, instead of TrackMouseEvent's real cursor check.
+        TRACKMOUSEEVENT tracking {sizeof tracking, TME_NONCLIENT | TME_LEAVE | TME_CANCEL, hwnd, HOVER_DEFAULT};
+        ::TrackMouseEvent(&tracking);
+        MSG leave {};
+        while (::PeekMessageW(&leave, hwnd, WM_NCMOUSELEAVE, WM_NCMOUSELEAVE, PM_REMOVE)) {}
+        pump(400);
+        settle(window);
+        auto* hint = visualNamed(window->contentItem(), panel ? u"panelSearchLogoHint"_s : u"searchLogoHint"_s);
+        check(hint && hint->isVisible() && hint->property("shownText").toString() == logo->property("help").toString(),
+            mode + u"native hover displays every logo action"_s);
+        if (!hint || !hint->isVisible())
+            say(u"logo hover: pointer (%1,%2), pointed %3, hint %4"_s.arg(frame.pointer().x()).arg(frame.pointer().y())
+                .arg(logo->property("pointed").toBool()).arg(hint ? hint->property("shown").toBool() : false));
+        check(saveGrab(window, output.filePath(panel ? u"logo-panel-hint.png"_s : u"logo-box-hint.png"_s)), mode + u"hint screenshot"_s);
+        ::SendMessageW(hwnd, WM_NCMOUSELEAVE, 0, 0);
+    }
+    window->hide();
+    QQuickWindow appearance;
+    QQmlComponent sample(engine, u"WinShun"_s, u"AppearancePreview"_s);
+    std::unique_ptr<QObject> sampleObject(sample.create());
+    auto* sampleRoot = qobject_cast<QQuickItem*>(sampleObject.get());
+    check(sampleRoot != nullptr, u"appearance settings load the production size preview"_s);
+    if (sampleRoot) {
+        sampleRoot->setParentItem(appearance.contentItem());
+        const QString previousSize = SystemTheme::uiSize();
+        showOffScreen(&appearance);
+        for (const QString& size : {u"compact"_s, u"standard"_s, u"roomy"_s}) {
+            SystemTheme::setUiSize(size);
+            sampleRoot->setSize({760, sampleRoot->implicitHeight()});
+            appearance.resize(760, qRound(sampleRoot->height()));
+            settle(&appearance);
+            auto* logo = visualNamed(sampleRoot, u"appearanceSearchLogo"_s);
+            check(logo && logo->isVisible() && logo->property("status").toInt() == 1,
+                u"appearance preview shows the program logo at %1 size"_s.arg(size));
+            check(saveGrab(&appearance, output.filePath(u"appearance-logo-%1.png"_s.arg(size))),
+                u"appearance preview screenshot at %1 size"_s.arg(size));
+        }
+        SystemTheme::setUiSize(previousSize);
+        appearance.hide();
+    }
+    QFile report(output.filePath(u"search-logo.json"_s));
+    if (!report.open(QIODevice::WriteOnly)) {
+        qWarning("Cannot write search logo report");
+        return false;
+    }
+    report.write(QJsonDocument(QJsonObject {{u"passed"_s, passed}, {u"checks"_s, checks}}).toJson());
+    say(u"search logo: %1 checks, native WindowFrame and production Main, %2"_s.arg(checks.size()).arg(passed ? u"passed" : u"FAILED"));
+    return passed;
 }
 
 // The production window, real temporary images, and local Qt input events;
@@ -1816,6 +2506,13 @@ void checkFileGallery(Launcher& launcher, IndexService& index, QQmlEngine* engin
             while (launcher.searching() && timeout.elapsed() < 2000)
                 pump(10);
             key(Qt::Key_Space, {}, u" "_s);
+            check(!filePreview.isOpen() && launcher.query() == typed + u' ', "Space right after typing did not type a space");
+            launcher.setQuery(typed);
+            timeout.restart();
+            while (launcher.searching() && timeout.elapsed() < 2000)
+                pump(10);
+            key(Qt::Key_Up); // the selection was moved: Space is the preview key now
+            key(Qt::Key_Space, {}, u" "_s);
             check(filePreview.isOpen() && launcher.query() == typed, "Space did not preview without changing the query");
             QKeyEvent repeat(QEvent::KeyPress, Qt::Key_Space, {}, u" "_s, true);
             QCoreApplication::sendEvent(window, &repeat);
@@ -1835,16 +2532,16 @@ void checkFileGallery(Launcher& launcher, IndexService& index, QQmlEngine* engin
             timeout.restart();
             while (launcher.searching() && timeout.elapsed() < 2000)
                 pump(10);
-            launcher.setPreviewHotkey(u"Ctrl+P"_s);
+            launcher.setPreviewHotkey(u"Ctrl+Shift+P"_s);
             key(Qt::Key_P, Qt::AltModifier);
             check(!filePreview.isOpen(), "old preview key remained active after reassignment");
-            key(Qt::Key_P, Qt::ControlModifier | Qt::ShiftModifier);
+            key(Qt::Key_P, Qt::ControlModifier | Qt::ShiftModifier | Qt::AltModifier);
             check(!filePreview.isOpen(), "preview accepted additional modifiers");
-            key(Qt::Key_P, Qt::ControlModifier);
+            key(Qt::Key_P, Qt::ControlModifier | Qt::ShiftModifier);
             check(filePreview.isOpen(), "custom preview chord did not open the preview");
-            key(Qt::Key_P, Qt::ControlModifier);
+            key(Qt::Key_P, Qt::ControlModifier | Qt::ShiftModifier);
             launcher.setPreviewHotkey({});
-            key(Qt::Key_P, Qt::ControlModifier);
+            key(Qt::Key_P, Qt::ControlModifier | Qt::ShiftModifier);
             check(!filePreview.isOpen(), "clearing the shortcut did not disable it");
             launcher.setPreviewHotkey(u"Alt+P"_s);
             say(u"preview hotkeys: production Main.qml + FilePreview; default, Space, IME preedit, repeat, Shift+Space, reassignment, modifiers, disabled"_s);
@@ -1866,6 +2563,87 @@ void checkFileGallery(Launcher& launcher, IndexService& index, QQmlEngine* engin
             timeout.restart();
             while (launcher.searching() && timeout.elapsed() < 2000)
                 pump(10);
+            // A middle click previews that tile and opens nothing; an open preview follows the mouse after a moment,
+            // and the arrow keys bring it back to the current tile.
+            const auto tile = [&](int i) {
+                QQuickItem* item = nullptr;
+                QMetaObject::invokeMethod(grid, "itemAtIndex", Q_RETURN_ARG(QQuickItem*, item), Q_ARG(int, i));
+                return item;
+            };
+            const auto mouse = [&](int i, QEvent::Type type, Qt::MouseButton button) {
+                QQuickItem* item = tile(i);
+                if (!item) { check(false, "gallery tile missing"); return; }
+                const QPointF at = item->mapToScene(QPointF(item->width() / 2 + (type == QEvent::MouseMove ? 3 : 0), item->height() / 2));
+                QMouseEvent event(type, at, window->mapToGlobal(at.toPoint()), button,
+                                  type == QEvent::MouseButtonPress ? button : Qt::NoButton, {});
+                QCoreApplication::sendEvent(window, &event);
+            };
+            const auto middleClick = [&](int i) {
+                mouse(i, QEvent::MouseButtonPress, Qt::MiddleButton);
+                mouse(i, QEvent::MouseButtonRelease, Qt::MiddleButton);
+            };
+            grid->setProperty("currentIndex", 0);
+            const QString before = launcher.query();
+            middleClick(2);
+            check(filePreview.isOpen() && filePreview.isShowing(launcher.results()->pathAt(2))
+                    && grid->property("currentIndex").toInt() == 2 && launcher.query() == before,
+                "middle click did not preview its tile");
+            mouse(3, QEvent::MouseMove, Qt::NoButton);
+            pump(60);
+            check(filePreview.isShowing(launcher.results()->pathAt(2)), "the preview followed the mouse before its moment passed");
+            pump(250);
+            check(filePreview.isShowing(launcher.results()->pathAt(3)) && grid->property("currentIndex").toInt() == 2,
+                "hovering a tile did not show it in the open preview");
+            key(Qt::Key_Left);
+            check(grid->property("currentIndex").toInt() == 1 && filePreview.isShowing(launcher.results()->pathAt(1)),
+                "an arrow key did not bring the preview back to the current tile");
+            middleClick(1);
+            check(!filePreview.isOpen(), "middle click on the shown tile did not close the preview");
+            mouse(3, QEvent::MouseMove, Qt::NoButton);
+            pump(250);
+            check(!filePreview.isOpen(), "hovering opened a closed preview");
+            say(u"preview mouse: middle click toggles, hover follows after 100 ms, arrows return to the current tile"_s);
+            // Text: dragging picks across lines instead of flicking, wheel still scrolls.
+            {
+                QFile text(temporary.filePath(u"lines.txt"_s));
+                check(text.open(QIODevice::WriteOnly), "could not create the text fixture");
+                for (int i = 1; i <= 600; ++i)
+                    text.write(QStringLiteral("line %1 alpha beta gamma\n").arg(i).toUtf8());
+                text.close();
+                filePreview.show({.path = QDir::toNativeSeparators(text.fileName()), .name = u"lines.txt"_s});
+                timeout.restart();
+                while (filePreview.kind() != FilePreview::Text && timeout.elapsed() < 3000)
+                    pump(10);
+                pump(200);
+                auto* previewWindow = qobject_cast<QQuickWindow*>(filePreview.window());
+                auto* lines = previewWindow ? visualNamed(previewWindow->contentItem(), u"previewTextLines"_s) : nullptr;
+                auto* picker = previewWindow ? visualNamed(previewWindow->contentItem(), u"previewTextPicker"_s) : nullptr;
+                check(filePreview.kind() == FilePreview::Text && lines && picker, "text preview did not show the file");
+                if (lines && picker) {
+                    const auto send = [&](QEvent::Type type, QPointF at, Qt::MouseButtons buttons) {
+                        QMouseEvent event(type, at, previewWindow->mapToGlobal(at.toPoint()), Qt::LeftButton, buttons, {});
+                        QCoreApplication::sendEvent(previewWindow, &event);
+                    };
+                    const QPointF origin = picker->mapToScene(QPointF(0, 0));
+                    const qreal top = lines->property("contentY").toReal();
+                    send(QEvent::MouseButtonPress, origin + QPointF(150, 12), Qt::LeftButton);
+                    send(QEvent::MouseMove, origin + QPointF(150, 60), Qt::LeftButton);
+                    send(QEvent::MouseMove, origin + QPointF(200, 100), Qt::LeftButton);
+                    send(QEvent::MouseButtonRelease, origin + QPointF(200, 100), Qt::NoButton);
+                    pump(50);
+                    const QString picked = filePreview.selectedText();
+                    check(picked.startsWith(u"line 1") || picked.contains(u"alpha"), "dragging in the text did not pick any");
+                    check(picked.count(u'\n') >= 2 && picked.contains(u"line 2 "), "the pick did not run across lines");
+                    check(lines->property("contentY").toReal() == top, "dragging in the text moved it");
+                    const QPointF over = origin + QPointF(150, 60);
+                    QWheelEvent wheel(over, previewWindow->mapToGlobal(over.toPoint()), {}, QPoint(0, -240), Qt::NoButton, {}, Qt::NoScrollPhase, false);
+                    QCoreApplication::sendEvent(previewWindow, &wheel);
+                    pump(50);
+                    check(lines->property("contentY").toReal() > top, "the wheel did not scroll the text");
+                    filePreview.close();
+                    check(filePreview.selectedText().isEmpty(), "the pick stayed after the preview closed");
+                }
+            }
         }
         const auto click = [&](QQuickItem* item) {
             if (!item) { check(false, "click target missing"); return; }
@@ -1918,6 +2696,12 @@ void checkFileGallery(Launcher& launcher, IndexService& index, QQmlEngine* engin
 
 void checkDropPieHelper(const QDir& output)
 {
+    // Elevated, the helper gets the desktop user's environment, not this run's
+    // PATH to Qt: from a build folder it cannot even load.
+    if (integrity::processElevated()) {
+        say(u"drop pie: skipped, elevated (run it with normal rights)"_s);
+        return;
+    }
     QTemporaryDir profile;
     Favorites favorites(profile.filePath(u"favorites.json"_s));
     favorites.load();
@@ -1927,42 +2711,99 @@ void checkDropPieHelper(const QDir& output)
         favorites.add({Favorite::Kind::Folder, folder, u"Folder %1"_s.arg(i)});
     }
     QStringList notices;
+    std::function<void()> clickRetry; // the last notification's 重试
     auto helper = std::make_unique<DropPieHelper>(&favorites,
-        [&](const QString& title, const QString& text) { notices.push_back(title + u": "_s + text); });
+        [&](const QString& title, const QString& text, std::function<void()> retry) {
+            notices.push_back(title + u": "_s + text);
+            clickRetry = std::move(retry);
+        });
     Settings settings = Settings::defaults();
     helper->update(settings);
-    const auto waitForFolders = [&](int count) {
+    const auto waitFor = [&](const std::function<bool(const QJsonObject&)>& wanted, int ms = 6000) {
         QElapsedTimer waiting;
         waiting.start();
-        while (waiting.elapsed() < 6000) {
+        while (waiting.elapsed() < ms) {
             const auto state = helper->state();
-            if (state.value(u"ready"_s).toBool() && state.value(u"folders"_s).toInt() == count) return true;
+            if (state.value(u"ready"_s).toBool() && wanted(state)) return true;
             pump(20);
         }
         return false;
     };
-    bool passed = waitForFolders(2);
+    const auto folders = [](int count) { return [count](const QJsonObject& state) { return state.value(u"folders"_s).toInt() == count; }; };
+    bool passed = waitFor(folders(2));
     QJsonObject state = helper->state();
     passed = passed && !state.value(u"elevated"_s).toBool(true);
-    win32::UniqueHandle child(::OpenProcess(SYNCHRONIZE, FALSE, DWORD(state.value(u"pid"_s).toInteger())));
     const QString folder = profile.filePath(u"third-folder"_s);
     QDir().mkpath(folder);
     favorites.add({Favorite::Kind::Folder, folder, u"Third folder"_s});
-    passed = waitForFolders(3) && passed;
+    const bool updatedFavorites = waitFor(folders(3));
+    // The appearance reaches it too (its ini where Settings::useProfile has it).
     settings.uiSize = u"compact"_s;
     settings.theme = u"dark"_s;
     helper->update(settings);
-    passed = waitForFolders(3) && notices.isEmpty() && passed;
+    const bool updatedAppearance = waitFor([](const QJsonObject& state) {
+        return state.value(u"folders"_s).toInt() == 3 && state.value(u"theme"_s).toString() == u"dark";
+    });
+    // Ended from outside (or crashed): started again by itself (GitHub #172).
+    // Its two log lines (the exit, then running again) are expected here.
+    const int warnings = g_warnings;
+    const qint64 first = helper->state().value(u"pid"_s).toInteger();
+    QElapsedTimer restarting;
+    restarting.start();
+    if (win32::UniqueHandle killed(::OpenProcess(PROCESS_TERMINATE, FALSE, DWORD(first))); killed.valid())
+        ::TerminateProcess(killed.get(), 1);
+    const bool restarted = waitFor([first](const QJsonObject& state) {
+        return state.value(u"pid"_s).toInteger() != first && state.value(u"folders"_s).toInt() == 3;
+    }, 12000); // a second after it ended, then a start as slow as the first may be
+    const qint64 restartMs = restarting.elapsed();
+    // Ended twice more, the third time in a row: told, with 重试 to click.
+    // The notification outlives the helper (turned off, Win顺 no longer
+    // elevated): clicked then, it does nothing. Three more log lines. Told
+    // only with the desktop shell up a minute: not checked right after it started.
+    const bool noticeChecked = [] {
+        DWORD pid = 0;
+        ::GetWindowThreadProcessId(::GetShellWindow(), &pid);
+        const win32::UniqueHandle shell(pid ? ::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid) : nullptr);
+        FILETIME created {}, exited {}, kernel {}, user {}, now {};
+        if (!shell.valid() || !::GetProcessTimes(shell.get(), &created, &exited, &kernel, &user))
+            return false;
+        ::GetSystemTimeAsFileTime(&now);
+        const auto ticks = [](const FILETIME& time) { return (quint64(time.dwHighDateTime) << 32) | time.dwLowDateTime; };
+        return ticks(now) - ticks(created) > 65 * 10'000'000ull; // 100 ns ticks
+    }();
+    bool toldOnce = true;
+    for (int failures = 2; failures <= 3; ++failures) {
+        const qint64 pid = helper->state().value(u"pid"_s).toInteger();
+        if (win32::UniqueHandle killed(::OpenProcess(PROCESS_TERMINATE, FALSE, DWORD(pid))); killed.valid())
+            ::TerminateProcess(killed.get(), 1);
+        toldOnce = waitFor([pid](const QJsonObject& state) {
+            return state.value(u"pid"_s).toInteger() != pid && state.value(u"folders"_s).toInt() == 3;
+        }, 15000) && toldOnce && (!noticeChecked || notices.size() == failures - 2);
+    }
+    toldOnce = toldOnce && (!noticeChecked || (notices.size() == 1 && clickRetry));
+    g_warnings = warnings + std::max(0, g_warnings - warnings - 5);
+    state = helper->state();
+    win32::UniqueHandle child(::OpenProcess(SYNCHRONIZE, FALSE, DWORD(state.value(u"pid"_s).toInteger())));
+    QElapsedTimer stopping;
+    stopping.start();
     helper.reset();
-    const bool stopped = child.valid() && ::WaitForSingleObject(child.get(), 2000) == WAIT_OBJECT_0;
-    passed = passed && stopped;
-    state.insert(u"updatedFavorites"_s, passed);
+    const bool stopped = child.valid() && ::WaitForSingleObject(child.get(), 10'000) == WAIT_OBJECT_0;
+    state.insert(u"stop_ms"_s, stopping.elapsed());
+    if (clickRetry)
+        clickRetry(); // the helper gone: nothing (it once was a use after free)
+    passed = passed && updatedFavorites && updatedAppearance && restarted && toldOnce && stopped;
+    state.insert(u"updatedFavorites"_s, updatedFavorites);
+    state.insert(u"updatedAppearance"_s, updatedAppearance);
+    state.insert(u"restarted"_s, restarted);
+    state.insert(u"restart_ms"_s, restartMs);
+    state.insert(u"toldOnce"_s, toldOnce);
+    state.insert(u"notice_checked"_s, noticeChecked);
     state.insert(u"stopped"_s, stopped);
     state.insert(u"passed"_s, passed);
     QFile report(output.filePath(u"drop-pie-helper.json"_s));
     if (report.open(QIODevice::WriteOnly)) report.write(QJsonDocument(state).toJson());
     if (!passed) qWarning().noquote() << "Drop pie helper regression failed:" << notices << state;
-    else say(u"drop pie: real ordinary-user helper, OLE target registration, favorite refresh and shutdown checked"_s);
+    else say(u"drop pie: real ordinary-user helper, OLE target registration, favorite and appearance refresh, restart after it ends, the notice after three failures (its retry harmless once the helper is gone) and shutdown checked"_s);
 }
 
 bool checkSwitchProvider(QQuickWindow* window, const QDir& output)
@@ -2613,6 +3454,35 @@ bool checkClipboardSizing(QQuickWindow* window, Clipboard& clipboard, Placement&
     // first width drag then legitimately changed the automatic row count.
     placement.attach(QRect(area.topLeft() + QPoint(50, 20), QSize(1, 0)), screen);
     settle(window);
+    auto* numberedRow = visualNamed(page, u"clipboardRow-0"_s);
+    auto* numberSlot = numberedRow ? visualNamed(numberedRow, u"clipboardNumberSlot"_s) : nullptr;
+    auto* number = numberedRow ? visualNamed(numberedRow, u"clipboardNumber"_s) : nullptr;
+    auto* icon = numberedRow ? visualNamed(numberedRow, u"clipboardIconSlot"_s) : nullptr;
+    check("number_column_separate_from_thumbnail", numberSlot && icon
+        && numberSlot->x() + numberSlot->width() + 6 <= icon->x());
+    check("number_column_centred_and_digit_only", number && numberSlot && numberedRow
+        && number->property("text").toString() == u"1"
+        && numberSlot->height() == numberedRow->height());
+    const qreal numberedIconX = icon ? icon->x() : -1;
+    clipboard.setNumberHints(u"held"_s);
+    settle(window);
+    pump(200);
+    check("held_number_keeps_column_alignment", icon && numberSlot
+        && icon->x() == numberedIconX && numberSlot->opacity() == 0);
+    clipboard.setNumberHints(u"off"_s);
+    settle(window);
+    check("disabled_numbers_release_column", icon && numberSlot
+        && icon->x() == numberedIconX - 28 && !numberSlot->isVisible());
+    clipboard.setNumberHints(u"always"_s);
+    clipboard.setNumberKeys(u"ctrl"_s);
+    clipboard.setNumberKeysLeft(1u << 1);
+    settle(window);
+    check("occupied_number_is_struck_through", number && numberedRow
+        && numberedRow->property("hintModifier").toString() == u"Ctrl"
+        && number->property("font").value<QFont>().strikeOut());
+    clipboard.setNumberKeysLeft(0);
+    clipboard.setNumberKeys(u"alt"_s);
+    settle(window);
     const auto resize = [&](int edge, int dw, int dh, bool cancel = false) {
         RECT original {};
         ::GetWindowRect(hwnd, &original);
@@ -2774,7 +3644,7 @@ bool checkClipboardInteractions(QQmlEngine* engine, const QDir& output, const QS
         .text = QDir::toNativeSeparators(temporary.filePath(u"不存在的演示文件.txt"_s))}, QDateTime::currentMSecsSinceEpoch());
     ClipboardWatcher watcher({}, {});
     Clipboard clipboard(&store, &watcher);
-    clipboard.setRowOptions(false, false);
+    clipboard.setRowOptions(false, false, SystemTheme::uiSize());
     clipboard.setPreviewOpen(false);
     clipboard.setActive(true);
     clipboard.handleShown();
@@ -2797,6 +3667,31 @@ bool checkClipboardInteractions(QQmlEngine* engine, const QDir& output, const QS
     auto* row = visualNamed(window->contentItem(), u"clipboardRow-0"_s);
     auto* page = visualNamed(window->contentItem(), u"clipboardPage"_s);
     if (!row || !page) { check(false, "production clipboard row missing"); return false; }
+    auto* logo = visualNamed(window->contentItem(), u"clipboardSearchLogo"_s);
+    auto* searchField = visualNamed(window->contentItem(), u"clipboardSearchField"_s);
+    check(logo && logo->isVisible() && logo->property("status").toInt() == 1
+            && logo->property("source").toUrl() == QUrl(u"qrc:/branding/logo.svg"_s),
+        "clipboard search must load the shared program logo");
+    if (logo && searchField) {
+        for (const bool searchAtBottom : {false, true}) {
+            clipboard.setLayoutOptions(true, searchAtBottom);
+            settle(window);
+            const QRectF mark(logo->mapToScene(QPointF()), logo->size());
+            const QRectF field(searchField->mapToScene(QPointF()), searchField->size());
+            check(qAbs(field.left() - mark.right() - 14) < 0.01
+                    && qAbs(field.center().y() - mark.center().y()) <= 1 && field.width() > 0,
+                "clipboard logo must preserve the search field spacing in either header position");
+            check(QMetaObject::invokeMethod(page, "focusSearch") && searchField->hasFocus(),
+                "clipboard search must retain its logical input focus");
+            check(saveGrab(window, output.filePath(searchAtBottom ? u"clipboard-search-bottom.png"_s : u"clipboard-search-top.png"_s)),
+                "clipboard search logo must render in either header position");
+        }
+        clipboard.setLayoutOptions(true, false);
+        settle(window);
+        say(u"clipboard search logo: shared SVG loaded; spacing, focus and both header positions checked"_s);
+    } else {
+        check(false, "clipboard search logo and field must be present");
+    }
     if (sizingOnly) {
         const bool passed = checkClipboardSizing(window, clipboard, placement, store, page, output);
         check(!watcher.running(), "sizing probe must never capture or write the native clipboard");
@@ -3444,6 +4339,11 @@ int runResults(const QStringList& args)
         return finish(window, checkNumberColumn(&engine, out, valueAfter(args, u"--width", u"760"_s).toInt()) && saved);
     if (args.contains(u"--clipboard-send"_s))
         return finish(window, checkClipboardInteractions(&engine, out, {}) && saved);
+    if (args.contains(u"--shortcut-panel"_s))
+        return finish(window, checkShortcutPanels(&engine, out) && saved);
+    if (args.contains(u"--search-logo"_s)) {
+        return finish(window, checkSearchLogo(&engine, out) && saved);
+    }
     if (args.contains(u"--preview-hotkeys"_s) || args.contains(u"--search-navigation"_s)) {
         checkLauncherFilters(window, &engine, out, true, true);
         return finish(window, saved);
@@ -3721,7 +4621,7 @@ bool probeFolderTyping(App& app, const QDir& out, const QString& folder, QJsonOb
             // Never close a pre-existing window, or user-added tabs.
             const QString shown = QString::fromStdWString(filemanager::explorerFolder(tab));
             if (tabs == 1 && (shown == folder || shown.startsWith(folder + u'\\'))) {
-                owned->Quit();
+                ::PostMessageW(root, WM_CLOSE, 0, 0); // Quit() leaves a Windows 11 tab window open
                 QElapsedTimer closing; closing.start();
                 while (::IsWindow(root) && closing.elapsed() < 2000) pump(20);
             }
@@ -3759,6 +4659,7 @@ bool probeFolderTyping(App& app, const QDir& out, const QString& folder, QJsonOb
     ComPtr<IShellBrowser> browser;
     owned.As(&services);
     if (!services || FAILED(services->QueryService(SID_STopLevelBrowser, IID_PPV_ARGS(&browser)))) return false;
+    IShellBrowser* shown = browser.Get(); // whose selection is read: a tab of its own later
     const auto selected = [&] {
         ComPtr<IShellView> shellView;
         ComPtr<IFolderView2> view;
@@ -3766,7 +4667,7 @@ bool probeFolderTyping(App& app, const QDir& out, const QString& folder, QJsonOb
         ComPtr<IShellItem> item;
         DWORD count = 0;
         int focused = -1;
-        if (FAILED(browser->QueryActiveShellView(&shellView)) || FAILED(shellView.As(&view))
+        if (FAILED(shown->QueryActiveShellView(&shellView)) || FAILED(shellView.As(&view))
             || FAILED(view->GetSelection(FALSE, &selection)) || !selection
             || FAILED(selection->GetCount(&count)) || count != 1
             || FAILED(view->GetFocusedItem(&focused)) || focused < 0
@@ -3788,11 +4689,16 @@ bool probeFolderTyping(App& app, const QDir& out, const QString& folder, QJsonOb
     }
     if (!window || !launcher) return false;
     const QString prefix = folder + u"\\ "_s;
-    launcher->setQuery(prefix + u"follow_"_s);
-    waiting.restart();
-    while ((launcher->searching() || launcher->results()->count() != 3) && waiting.elapsed() < 5000) pump(20);
-    check(launcher->results()->count() == 3, "production search found three real direct children");
-    if (launcher->results()->count() != 3) return false;
+    const auto search = [&](const QString& words, int count) {
+        launcher->setQuery(prefix + words);
+        waiting.restart();
+        while ((launcher->searching() || launcher->results()->count() != count) && waiting.elapsed() < 5000)
+            pump(20);
+        return !launcher->searching() && launcher->results()->count() == count;
+    };
+    const bool found = search(u"follow_"_s, 3);
+    check(found, "production search found three real direct children");
+    if (!found) return false;
     settle(window, 3);
     auto* field = window->property("searchBar").value<QObject*>();
     if (field) QMetaObject::invokeMethod(field, "focusAtEnd");
@@ -3808,11 +4714,13 @@ bool probeFolderTyping(App& app, const QDir& out, const QString& folder, QJsonOb
         while (selected() != expected && waiting.elapsed() < 3000) pump(20);
         return selected() == expected;
     };
-    check(follows(), "initial result selected and focused in the real Shell view");
+    check(launcher->currentRow() == 0 && follows(), "initial result selected and focused in the real Shell view");
     key(Qt::Key_Down);
-    check(follows(), "Down follows the production QML current row");
-    key(Qt::Key_Down); key(Qt::Key_Up); key(Qt::Key_Up); key(Qt::Key_Down);
-    check(follows(), "rapid navigation selects the latest row");
+    check(launcher->currentRow() == 1 && follows(), "Down follows the production QML current row");
+    key(Qt::Key_Up);
+    check(launcher->currentRow() == 0 && follows(), "Up follows the production QML current row");
+    key(Qt::Key_Down); key(Qt::Key_Down); key(Qt::Key_Up); key(Qt::Key_Up); key(Qt::Key_Down);
+    check(launcher->currentRow() == 1 && follows(), "rapid navigation selects the latest row");
     check(::GetForegroundWindow() == reinterpret_cast<HWND>(window->winId()) && window->isActive(),
         "Explorer selection never took keyboard focus");
     RECT searchRect {}, sourceRect {};
@@ -3835,6 +4743,14 @@ bool probeFolderTyping(App& app, const QDir& out, const QString& folder, QJsonOb
         check(desktop.copy(region(searchRect)).save(out.filePath(u"typing-search.png"_s)), "production search screenshot saved");
         check(desktop.copy(region(sourceRect)).save(out.filePath(u"typing-explorer.png"_s)), "Explorer selection screenshot saved");
     }
+    check(search(u"follow_1"_s, 1) && launcher->currentRow() == 0 && follows(),
+        "a unique result is selected in the source view");
+    check(search(u"follow_2"_s, 1) && launcher->currentRow() == 0 && follows(),
+        "replacing a unique result follows its new path without changing the row or count");
+    report.insert(u"same_size_replacement"_s, QJsonObject {
+        {u"row"_s, launcher->currentRow()},
+        {u"expected"_s, launcher->results()->pathAt(launcher->currentRow())},
+        {u"selected"_s, selected()}});
     const QString chosen = selected();
     check(!filemanager::selectInExplorer(tab, (folder + u"\\child"_s).toStdWString(), chosen.toStdWString(), [] { return true; }),
         "changed source folder rejected without navigation");
@@ -3854,6 +4770,172 @@ bool probeFolderTyping(App& app, const QDir& out, const QString& folder, QJsonOb
     app.hideLauncher();
     pump(300);
     check(selected() == beforeHide, "hiding cancels the pending selection");
+
+    // The second tab of the window (GitHub #182): typed in there, the arrow
+    // keys follow in that tab; a result in a subfolder is reached by Ctrl+Enter,
+    // which says so in the footer, and takes that tab to it.
+    // Explorer's own buttons, by UI Automation: the tab strip's "+" and the
+    // "x" of its last tab (keys injected into it never opened a tab here).
+    const auto press = [&](const wchar_t* id, bool last) {
+        ComPtr<IUIAutomation> automation;
+        ComPtr<IUIAutomationElement> window;
+        ComPtr<IUIAutomationCondition> condition;
+        ComPtr<IUIAutomationElementArray> found;
+        ComPtr<IUIAutomationElement> button;
+        ComPtr<IUnknown> pattern;
+        ComPtr<IUIAutomationInvokePattern> invoke;
+        VARIANT name {};
+        name.vt = VT_BSTR;
+        name.bstrVal = ::SysAllocString(id);
+        const auto release = qScopeGuard([&] { ::VariantClear(&name); });
+        int count = 0;
+        return SUCCEEDED(::CoCreateInstance(__uuidof(CUIAutomation), nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&automation)))
+            && SUCCEEDED(automation->ElementFromHandle(root, &window))
+            && SUCCEEDED(automation->CreatePropertyCondition(UIA_AutomationIdPropertyId, name, &condition))
+            && SUCCEEDED(window->FindAll(TreeScope_Descendants, condition.Get(), &found))
+            && SUCCEEDED(found->get_Length(&count)) && count > 0
+            && SUCCEEDED(found->GetElement(last ? count - 1 : 0, &button))
+            && SUCCEEDED(button->GetCurrentPattern(UIA_InvokePatternId, &pattern)) && SUCCEEDED(pattern.As(&invoke))
+            && SUCCEEDED(invoke->Invoke());
+    };
+    const auto tabsOf = [&] {
+        std::vector<ComPtr<IShellBrowser>> found;
+        for (const auto& web : browsers()) {
+            SHANDLE_PTR hwnd = 0; web->get_HWND(&hwnd);
+            ComPtr<IServiceProvider> provider;
+            ComPtr<IShellBrowser> inTab;
+            if (reinterpret_cast<HWND>(hwnd) == root && SUCCEEDED(web.As(&provider))
+                && SUCCEEDED(provider->QueryService(SID_STopLevelBrowser, IID_PPV_ARGS(&inTab))))
+                found.push_back(inTab);
+        }
+        return found;
+    };
+    app.hideLauncher();
+    const auto firstTabs = tabsOf();
+    ComPtr<IShellBrowser> second;
+    if (press(L"AddButton", false)) {
+        waiting.restart();
+        while (!second && waiting.elapsed() < 5000) {
+            pump(50);
+            for (const auto& inTab : tabsOf()) {
+                HWND candidate = nullptr;
+                inTab->GetWindow(&candidate);
+                if (candidate != tab && std::ranges::none_of(firstTabs, [&](const auto& known) {
+                        HWND other = nullptr;
+                        known->GetWindow(&other);
+                        return other == candidate;
+                    }))
+                    second = inTab;
+            }
+        }
+    }
+    check(second != nullptr, "a second tab opened in the own Explorer window");
+    if (!second)
+        return false;
+    HWND secondTab = nullptr;
+    second->GetWindow(&secondTab);
+    filemanager::goTo(secondTab, folder.toStdWString());
+    waiting.restart();
+    while (QString::fromStdWString(filemanager::explorerFolder(secondTab)) != folder && waiting.elapsed() < 5000)
+        pump(50);
+    pump(500);
+    const auto closeSecond = qScopeGuard([&] {
+        app.hideLauncher();
+        if (::IsWindow(secondTab) && press(L"CloseButton", true)) {
+            QElapsedTimer closing; closing.start();
+            while (tabsOf().size() > 1 && closing.elapsed() < 3000) pump(50);
+        }
+    });
+    shown = second.Get();
+    ::SetForegroundWindow(root);
+    app.showFolderSearch(root, secondTab, false, folder);
+    const bool again = search(u"follow_"_s, 3);
+    check(again, "production search found the three children again for the second tab");
+    if (!again)
+        return false;
+    settle(window, 3);
+    if (field) QMetaObject::invokeMethod(field, "focusAtEnd");
+    check(launcher->currentRow() == 0 && follows(), "initial result selected in the second tab");
+    key(Qt::Key_Down);
+    check(launcher->currentRow() == 1 && follows(), "Down follows in the second tab");
+    key(Qt::Key_Down);
+    check(launcher->currentRow() == 2 && follows(), "Down follows to the last child in the second tab");
+    check(launcher->keyHints().value(u"second"_s).toString() == u"打开位置"_s,
+        "a child of the folder keeps the plain 打开位置 hint");
+    const QString nestedFile = QDir::toNativeSeparators(folder + u"\\child\\nested-only.txt"_s);
+    launcher->setQuery(prefix + u"nested-only"_s);
+    waiting.restart();
+    while ((launcher->searching() || launcher->results()->count() < 1) && waiting.elapsed() < 5000)
+        pump(20);
+    pump(300);
+    check(launcher->keyHints().value(u"second"_s).toString() == u"在原窗口定位"_s,
+        "a result in a subfolder says Ctrl+Enter locates it in the original window");
+    check(selected() != nestedFile && QString::fromStdWString(filemanager::explorerFolder(secondTab)) == folder,
+        "moving onto the subfolder result left the second tab where it was");
+    const int warned = g_warnings;
+    QKeyEvent reveal(QEvent::KeyPress, Qt::Key_Return, Qt::ControlModifier);
+    QCoreApplication::sendEvent(window, &reveal);
+    waiting.restart();
+    while ((QString::fromStdWString(filemanager::explorerFolder(secondTab)) != folder + u"\\child"_s
+               || QDir::fromNativeSeparators(selected()).compare(QDir::fromNativeSeparators(nestedFile), Qt::CaseInsensitive) != 0)
+        && waiting.elapsed() < 5000)
+        pump(50);
+    check(QString::fromStdWString(filemanager::explorerFolder(secondTab)) == folder + u"\\child"_s
+            && QDir::fromNativeSeparators(selected()).compare(QDir::fromNativeSeparators(nestedFile), Qt::CaseInsensitive) == 0,
+        "Ctrl+Enter took the second tab to the subfolder and selected the file");
+
+    // Typed in Directory Opus (GitHub #82), by a window of its class standing
+    // in for a lister (production needs the real one only to read its folder):
+    // the box in the bottom right corner of the file list, the folder before
+    // the words or, as set (--opus-everywhere), nothing.
+    WNDCLASSW listerClass {};
+    listerClass.lpfnWndProc = ::DefWindowProcW;
+    listerClass.hInstance = ::GetModuleHandleW(nullptr);
+    listerClass.lpszClassName = L"dopus.lister";
+    ::RegisterClassW(&listerClass);
+    const HWND lister = ::CreateWindowExW(0, L"dopus.lister", L"Opus stand-in", WS_OVERLAPPEDWINDOW | WS_VISIBLE,
+        area.left + 20, area.top + 20, std::min<int>(1600, area.right - area.left - 40), area.bottom - area.top - 40,
+        nullptr, nullptr, listerClass.hInstance, nullptr);
+    RECT client {};
+    if (lister)
+        ::GetClientRect(lister, &client);
+    const HWND list = lister ? ::CreateWindowExW(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE, 300, 120,
+                                    client.right - 320, client.bottom - 140, lister, nullptr, listerClass.hInstance, nullptr)
+                             : nullptr;
+    const auto closeLister = qScopeGuard([&] {
+        app.hideLauncher();
+        if (lister)
+            ::DestroyWindow(lister);
+        ::UnregisterClassW(L"dopus.lister", listerClass.hInstance);
+    });
+    check(list != nullptr, "a stand-in Opus lister opened");
+    if (!list)
+        return false;
+    pump(300);
+    app.showFolderSearch(lister, list, true, folder);
+    pump(600);
+    settle(window, 3);
+    RECT listRect {}, boxRect {};
+    ::GetWindowRect(list, &listRect);
+    ::GetWindowRect(reinterpret_cast<HWND>(window->winId()), &boxRect);
+    const qreal scale = window->screen() ? window->screen()->devicePixelRatio() : 1.0;
+    const int gap = qRound(12 * scale);
+    const bool everywhere = QCoreApplication::arguments().contains(u"--opus-everywhere"_s);
+    check(boxRect.left >= listRect.left && boxRect.top >= listRect.top && boxRect.right <= listRect.right
+            && boxRect.bottom <= listRect.bottom,
+        "the Opus box is inside the file list");
+    check(std::abs(listRect.right - boxRect.right - gap) <= 2, "the Opus box sits 12 px from the right edge of the list");
+    report.insert(u"opus_list"_s, QJsonArray {int(listRect.left), int(listRect.top), int(listRect.right - listRect.left),
+        int(listRect.bottom - listRect.top)});
+    report.insert(u"opus_box"_s, QJsonArray {int(boxRect.left), int(boxRect.top), int(boxRect.right - boxRect.left),
+        int(boxRect.bottom - boxRect.top)});
+    check(everywhere ? launcher->typingFolder().isEmpty()
+                     : launcher->query() == prefix && !launcher->typingFolder().isEmpty(),
+        everywhere ? "the whole PC: no folder before the words" : "the tab's folder before the words");
+    // The tab and the stand-in come to the front as the launcher goes: the
+    // warnings about its losing the front that this makes are no fault.
+    pump(500);
+    g_warnings = warned;
     return ok;
 }
 
@@ -4296,6 +5378,609 @@ bool probeOnboarding(const QStringList& args, const QDir& out, QJsonObject& repo
     return passed;
 }
 
+// Production App, launcher, settings model and plugin installation on the
+// runtime probe's isolated profile. Opens no browser and uses no user data.
+bool probeWebPlugin(App& app, const QStringList& args, const QDir& out, QJsonObject& report)
+{
+    QJsonObject checks;
+    bool passed = true;
+    const auto check = [&](bool ok, const QString& key) {
+        checks.insert(key, ok);
+        if (!ok) { qWarning().noquote() << "web plugin:" << key; passed = false; }
+        return ok;
+    };
+    app.showSettings();
+    pump(100);
+    QQuickWindow* settingsWindow = nullptr;
+    SettingsEditor* editor = nullptr;
+    for (auto* candidate : QGuiApplication::allWindows()) {
+        if (auto* found = candidate->property("editor").value<SettingsEditor*>()) {
+            editor = found;
+            settingsWindow = qobject_cast<QQuickWindow*>(candidate);
+            break;
+        }
+    }
+    if (!check(settingsWindow && editor, u"production_settings"_s)) return false;
+    QMetaObject::invokeMethod(settingsWindow, "showWebPage");
+    settle(settingsWindow, 3);
+    const auto* addButton = visualNamed(settingsWindow->contentItem(), u"webAddButton"_s);
+    check(addButton && addButton->isVisible()
+        && QRectF(QPointF(), settingsWindow->size()).contains(addButton->mapRectToItem(settingsWindow->contentItem(), addButton->boundingRect())),
+        u"plugin_settings_reveals_editor"_s);
+    check(editor->saveWebShortcut(-1, u"zzwebfixture"_s, u"迁移验证站点"_s,
+        u"https://fixture.invalid/?q=%s"_s, u"http://127.0.0.1:9/"_s).isEmpty(), u"production_editor_saves_site"_s);
+    auto* searchBox = named(settingsWindow, "searchBox");
+    auto* settingsSearch = named(settingsWindow, "settingsSearch");
+    QMetaObject::invokeMethod(searchBox, "setText", Q_ARG(QVariant, QVariant(u"zzwebfixture"_s)));
+    settle(settingsWindow, 3);
+    check(settingsSearch && settingsSearch->property("current").value<QObject*>() != nullptr
+        && settingsWindow->property("currentPage") == settingsWindow->property("pluginsPage"), u"settings_search_finds_edited_site"_s);
+    QMetaObject::invokeMethod(searchBox, "setText", Q_ARG(QVariant, QVariant(QString())));
+    QMetaObject::invokeMethod(settingsWindow, "showWebPage");
+    settle(settingsWindow, 3);
+    check(saveGrab(settingsWindow, out.filePath(u"web-plugin-settings.png"_s)), u"settings_screenshot"_s);
+    const auto pages = settingsWindow->property("pages").value<QJSValue>().toVariant().toList();
+    check(std::none_of(pages.cbegin(), pages.cend(), [](const QVariant& page) {
+        return page.toMap().value(u"title"_s).toString() == QCoreApplication::translate("SettingsWindow", "网页搜索");
+    }), u"no_duplicate_sidebar_page"_s);
+    app.showLauncher(u"wsweb 中文 & spaces"_s);
+    pump(100);
+    Launcher* launcher = nullptr;
+    QQuickWindow* searchWindow = nullptr;
+    for (auto* candidate : QGuiApplication::allWindows()) {
+        if (auto* found = candidate->property("launcher").value<Launcher*>()) {
+            launcher = found;
+            searchWindow = qobject_cast<QQuickWindow*>(candidate);
+            break;
+        }
+    }
+    if (!check(launcher && searchWindow, u"production_launcher"_s)) return false;
+    const auto webRows = [&] {
+        int count = 0;
+        for (int i = 0; i < launcher->results()->count(); ++i)
+            count += launcher->results()->at(i)->isWeb();
+        return count;
+    };
+    const auto wait = [&](const auto& predicate) {
+        QElapsedTimer timer; timer.start();
+        do { pump(20); if (predicate()) return true; } while (timer.elapsed() < 5000);
+        return false;
+    };
+    check(wait([&] { return webRows() >= 1; }), u"enabled_keyword_search"_s);
+    check(launcher->results()->at(0) && launcher->results()->at(0)->isWeb(), u"keyword_ranks_first"_s);
+    if (!valueAfter(args, u"--web-suggest-url").isEmpty())
+        check(wait([&] { return webRows() >= 3; }), u"live_suggestions"_s);
+    settle(searchWindow, 3); // Let the popup resize after asynchronous suggestions.
+    check(saveGrab(searchWindow, out.filePath(u"web-plugin-search.png"_s)), u"search_screenshot"_s);
+    app.showLauncher(u"网页测试"_s);
+    check(wait([&] { return webRows() >= 1; }), u"site_name_search"_s);
+    app.showLauncher(u"wycs"_s);
+    check(wait([&] { return webRows() >= 1; }), u"site_pinyin_search"_s);
+    const QString favoritePath = QDir::toNativeSeparators(Settings::profile() + u"/fixture/startup-probe.txt"_s);
+    editor->favorites()->addPaths({QVariant(favoritePath)});
+    const int favorite = editor->favorites()->indexOf(favoritePath);
+    check(favorite >= 0, u"favorite_keyword_fixture"_s);
+    check(favorite >= 0 && !editor->favorites()->save(favorite, u"Keyword fixture"_s, u"wsweb"_s).isEmpty(),
+        u"enabled_reserves_keyword"_s);
+    editor->plugins()->setEnabled(u"winshun.web"_s, false);
+    check(favorite >= 0 && editor->favorites()->save(favorite, u"Keyword fixture"_s, u"wsweb"_s).isEmpty(),
+        u"disabled_releases_keyword"_s);
+    if (favorite >= 0)
+        editor->favorites()->remove(favorite);
+    app.showLauncher(u"wsweb disabled"_s);
+    check(wait([&] { return webRows() == 0; }), u"disabled_removes_rows"_s);
+    editor->plugins()->confirmEnable(u"winshun.web"_s);
+    app.showLauncher(u"wsweb restored"_s);
+    check(wait([&] { return webRows() >= 1; }), u"reenable_restores_rows"_s);
+    const auto before = editor->webShortcuts();
+    editor->plugins()->confirmUninstall(u"winshun.web"_s, false);
+    app.showLauncher(u"wsweb uninstalled"_s);
+    check(wait([&] { return webRows() == 0; }), u"uninstall_removes_rows"_s);
+    check(editor->webShortcuts() == before, u"uninstall_keeps_configuration"_s);
+    Settings saved; saved.load();
+    check(!saved.plugin(u"winshun.web")->enabled && !saved.webShortcuts.isEmpty(), u"uninstall_persists_disabled_data"_s);
+    QString error;
+    const QString archive = valueAfter(args, u"--web-plugin-archive");
+    auto package = plugin::install::inspect(archive.isEmpty()
+        ? QDir(valueAfter(args, u"--runtime-plugins")).filePath(u"winshun.web"_s) : archive);
+    check(package && package->manifest && package->manifest->webSearch, u"reinstall_package_valid"_s);
+    if (!archive.isEmpty())
+        check(package && package->archive, u"reinstall_from_archive"_s);
+    if (package && package->manifest) {
+        check(!plugin::install::place(*package, Settings::profile() + u"/plugins"_s, &error).isEmpty(), u"reinstall_package"_s);
+        plugin::install::discard(*package);
+        check(wait([&] { return editor->plugins()->list()->card(u"winshun.web"_s) != nullptr; }), u"reinstall_discovered"_s);
+        editor->plugins()->confirmEnable(u"winshun.web"_s);
+        app.showLauncher(u"wsweb reinstalled"_s);
+        check(wait([&] { return webRows() >= 1; }), u"reinstall_restores_search"_s);
+        check(editor->webShortcuts() == before, u"reinstall_keeps_configuration"_s);
+    }
+    report.insert(u"web_plugin"_s, checks);
+    report.insert(u"web_plugin_passed"_s, passed);
+    return passed;
+}
+
+// Production clipboard entry points against a Shell-like receiver or native
+// Start. No clipboard data is copied or pasted by this probe.
+bool probeClipboardShell(const QString& receiver, const QDir& out, QJsonObject& report, bool splitDisplay = false,
+    bool requireUiAccess = false)
+{
+    QProcess child;
+    child.setProcessChannelMode(QProcess::MergedChannels);
+    const bool nativeShell = receiver == u"native";
+    if (!nativeShell)
+        child.start(receiver, {u"--shell-receiver"_s});
+    const auto cleanup = qScopeGuard([&] {
+        if (child.state() != QProcess::NotRunning) {
+            child.terminate();
+            if (!child.waitForFinished(2000)) {
+                child.kill(); // this probe's own temporary receiver only
+                child.waitForFinished(2000);
+            }
+        }
+    });
+    QByteArray output;
+    QElapsedTimer deadline;
+    deadline.start();
+    while (!nativeShell && !output.contains('\n') && deadline.elapsed() < 3000) {
+        child.waitForReadyRead(50);
+        output += child.readAll();
+        pump(10);
+    }
+    const auto match = QRegularExpression(u"window:(\\d+)"_s).match(QString::fromUtf8(output));
+    HWND target = match.hasMatch() ? reinterpret_cast<HWND>(quintptr(match.captured(1).toULongLong())) : nullptr;
+    if (nativeShell) {
+        // SC_TASKLIST opens Start without synthesizing a Windows-key shortcut.
+        ::PostMessageW(::GetShellWindow(), WM_SYSCOMMAND, SC_TASKLIST, 0);
+        pump(1000);
+        target = ::GetForegroundWindow();
+    }
+    const auto closeNativeMenu = qScopeGuard([&] {
+        if (nativeShell && win::isShellFlyout(target) && ::GetForegroundWindow() == target)
+            ::PostMessageW(::GetShellWindow(), WM_SYSCOMMAND, SC_TASKLIST, 0);
+    });
+    QJsonObject checks;
+    bool passed = true;
+    const auto check = [&](const QString& name, bool ok) {
+        checks.insert(name, ok);
+        passed &= ok;
+        if (!ok) qWarning().noquote() << "clipboard shell probe:" << name;
+    };
+    const auto saveChecks = qScopeGuard([&] {
+        report.insert(u"clipboard_shell"_s, checks);
+        report.insert(u"clipboard_shell_passed"_s, passed);
+    });
+    check(u"receiver_ready"_s, target && ::IsWindow(target));
+    if (!passed)
+        return false;
+    std::unique_ptr<QWindow> foreign;
+    if (!nativeShell) {
+        foreign.reset(QWindow::fromWinId(reinterpret_cast<WId>(target)));
+        win::bringToFront(foreign.get(), win::ShellFlyout::Preserve);
+    }
+    pump(100);
+    check(u"receiver_is_shell"_s, win::isShellFlyout(target));
+    check(u"receiver_in_front"_s, ::GetForegroundWindow() == target);
+    if (nativeShell) {
+        report.insert(u"qt_dpr"_s, QGuiApplication::primaryScreen()->devicePixelRatio());
+        report.insert(u"foreground_program"_s, foreground::programOf(target));
+        report.insert(u"foreground_class"_s, [&] { wchar_t name[128] {}; ::GetClassNameW(target, name, 128); return QString::fromWCharArray(name); }());
+    }
+    // Hit the same production WM_HOTKEY handler as Win+V and the custom key,
+    // without changing global key registration or sending the Windows key.
+    HWND messages = nullptr;
+    for (HWND candidate = nullptr; (candidate = ::FindWindowExW(nullptr, candidate, L"WinShun.MessageWindow", nullptr));) {
+        DWORD pid = 0;
+        ::GetWindowThreadProcessId(candidate, &pid);
+        if (pid == ::GetCurrentProcessId()) { messages = candidate; break; }
+    }
+    check(u"message_window"_s, messages != nullptr);
+    if (!passed)
+        return false;
+    ClipboardDisplay* display = nullptr;
+    if (splitDisplay) {
+        ::PostMessageW(messages, WM_HOTKEY, 3, 0);
+        QElapsedTimer warming;
+        warming.start();
+        while (warming.elapsed() < 5000) {
+            pump(25);
+            for (QWindow* window : QGuiApplication::topLevelWindows())
+                if (auto* peer = qobject_cast<ClipboardDisplay*>(window->property("displayController").value<QObject*>()))
+                    display = peer;
+            if (display && display->ready()) break;
+        }
+        check(u"display_ready"_s, display && display->ready());
+        check(requireUiAccess ? u"real_uiaccess"_s : u"probe_is_not_uiaccess"_s,
+            display && display->uiAccess() == requireUiAccess);
+        if (requireUiAccess && display && display->ready()) {
+            using GetBand = BOOL(WINAPI*)(HWND, DWORD*);
+            const auto getBand = reinterpret_cast<GetBand>(::GetProcAddress(::GetModuleHandleW(L"user32.dll"), "GetWindowBand"));
+            DWORD band = 0;
+            check(u"native_uiaccess_band"_s, getBand && getBand(display->handle(), &band) && band == 2);
+            report.insert(u"display_band"_s, int(band));
+            DWORD peerPid = 0; ::GetWindowThreadProcessId(display->handle(), &peerPid);
+            report.insert(u"display_pid"_s, int(peerPid));
+        }
+        if (display) report.insert(u"display_output"_s, display->probeOutput());
+        pump(500); // the first source frame must be revealed before its hotkey can close it
+        ::PostMessageW(messages, WM_HOTKEY, 3, 0);
+        pump(300);
+        for (QWindow* window : QGuiApplication::topLevelWindows())
+            if (window->property("displayController").value<QObject*>() == display)
+                check(u"warmup_closed"_s, !window->isVisible());
+        if (!passed) return false;
+    }
+    for (const auto& trigger : {QPair {3, u"winv"_s}, QPair {4, u"custom"_s}}) {
+        output.clear();
+        if (!nativeShell)
+            child.readAll();
+        ::PostMessageW(messages, WM_HOTKEY, WPARAM(trigger.first), 0);
+        pump(450);
+        QQuickWindow* clipboard = nullptr;
+        for (QWindow* window : QGuiApplication::topLevelWindows())
+            if (QByteArray(window->metaObject()->className()).startsWith("ClipboardWindow_"))
+                clipboard = qobject_cast<QQuickWindow*>(window);
+        check(trigger.second + u"_shown"_s, clipboard && clipboard->isVisible());
+        if (!clipboard)
+            break;
+        if (splitDisplay) {
+            check(trigger.second + u"_peer_active"_s, display->active());
+            if (!display->active()) { report.insert(u"display_output"_s, display->probeOutput()); break; }
+            RECT targetBounds {};
+            ::GetWindowRect(target, &targetBounds);
+            auto* placement = qobject_cast<Placement*>(clipboard->property("placement").value<QObject*>());
+            if (placement) placement->placeDisplay({targetBounds.left + 30, targetBounds.top + 100,
+                clipboard->width(), clipboard->height()}, 1000, false);
+            pump(150);
+        }
+        const HWND panel = splitDisplay ? display->handle() : reinterpret_cast<HWND>(clipboard->winId());
+        check(trigger.second + u"_native_visible"_s, ::IsWindowVisible(panel));
+        DWORD panelCloaked = 0;
+        ::DwmGetWindowAttribute(panel, DWMWA_CLOAKED, &panelCloaked, sizeof panelCloaked);
+        check(trigger.second + u"_uncloaked"_s, panelCloaked == 0);
+        RECT panelRect {}, targetRect {};
+        ::GetWindowRect(panel, &panelRect);
+        ::GetWindowRect(target, &targetRect);
+        if (nativeShell) {
+            const QRect all = win::shellFlyoutBounds(target);
+            check(trigger.second + u"_shell_bounds_valid"_s, !all.isEmpty()
+                && all.contains(QRect(targetRect.left, targetRect.top, targetRect.right - targetRect.left, targetRect.bottom - targetRect.top)));
+            targetRect = {all.x(), all.y(), all.x() + all.width(), all.y() + all.height()};
+        }
+        RECT overlap {};
+        if (splitDisplay)
+            check(trigger.second + u"_overlays_receiver"_s, ::IntersectRect(&overlap, &panelRect, &targetRect));
+        else
+            check(trigger.second + u"_not_covered"_s, !::IntersectRect(&overlap, &panelRect, &targetRect));
+        bool hitVisible = true;
+        QJsonArray blockers;
+        for (int x : {1, 2, 3})
+            for (int y : {1, 2, 3}) {
+                const POINT point {panelRect.left + (panelRect.right - panelRect.left) * x / 4,
+                    panelRect.top + (panelRect.bottom - panelRect.top) * y / 4};
+                const HWND hit = ::WindowFromPoint(point);
+                hitVisible &= hit && ::GetAncestor(hit, GA_ROOT) == panel;
+                if (hit && ::GetAncestor(hit, GA_ROOT) != panel) {
+                    const HWND root = ::GetAncestor(hit, GA_ROOT);
+                    RECT rect {};
+                    ::GetWindowRect(root, &rect);
+                    blockers.append(QJsonObject {{u"program"_s, foreground::programOf(root)},
+                        {u"rect"_s, QJsonArray {int(rect.left), int(rect.top), int(rect.right), int(rect.bottom)}}});
+                }
+            }
+        check(trigger.second + u"_hit_test_visible"_s, hitVisible);
+        if (!blockers.isEmpty()) checks.insert(trigger.second + u"_blockers"_s, blockers);
+        checks.insert(trigger.second + u"_panel_rect"_s, QJsonArray {int(panelRect.left), int(panelRect.top), int(panelRect.right), int(panelRect.bottom)});
+        checks.insert(trigger.second + u"_shell_rect"_s, QJsonArray {int(targetRect.left), int(targetRect.top), int(targetRect.right), int(targetRect.bottom)});
+        if (!nativeShell && !splitDisplay) {
+            // The initial stdout is cleared between triggers, so locate the
+            // fixture's deliberately separate sidebar by its fixed title.
+            const HWND side = ::FindWindowW(L"WinShun.KeyRouterTest", L"WinShun shell companion test");
+            RECT sideRect {};
+            check(trigger.second + u"_companion_avoided"_s,
+                side && ::GetWindowRect(side, &sideRect) && !::IntersectRect(&overlap, &panelRect, &sideRect));
+        }
+        check(trigger.second + u"_focus_kept"_s, ::GetForegroundWindow() == target);
+        check(trigger.second + u"_passive"_s, (::GetWindowLongPtrW(panel, GWL_EXSTYLE) & WS_EX_NOACTIVATE) != 0);
+        QObject* model = clipboard->property("clipboard").value<QObject*>();
+        check(trigger.second + u"_keys_routed"_s, model && model->property("keysRouted").toBool());
+        auto* controller = qobject_cast<Clipboard*>(model);
+        check(trigger.second + u"_paste_target"_s, controller && controller->target() == target);
+        check(trigger.second + u"_saved_width_kept"_s, model && model->property("listWidth").toInt() == 480);
+        if ((!nativeShell || requireUiAccess) && ::GetForegroundWindow() == target && model && model->property("keysRouted").toBool()) {
+            INPUT keys[2] {};
+            keys[0].type = keys[1].type = INPUT_KEYBOARD;
+            keys[0].ki.wVk = keys[1].ki.wVk = 'A';
+            keys[1].ki.dwFlags = KEYEVENTF_KEYUP;
+            check(trigger.second + u"_input_sent"_s, ::SendInput(2, keys, sizeof(INPUT)) == 2);
+            pump(150);
+            check(trigger.second + u"_search_works"_s, model && model->property("query").toString() == u"a");
+            if (splitDisplay) {
+                checks.insert(trigger.second + u"_query"_s, model->property("query").toString());
+                checks.insert(trigger.second + u"_routed_after_key"_s, model->property("keysRouted").toBool());
+                checks.insert(trigger.second + u"_foreground_after_key"_s, foreground::programOf(::GetForegroundWindow()));
+                DWORD foregroundPid = 0;
+                ::GetWindowThreadProcessId(::GetForegroundWindow(), &foregroundPid);
+                checks.insert(trigger.second + u"_foreground_pid_after_key"_s, int(foregroundPid));
+                checks.insert(trigger.second + u"_source_pid"_s, int(::GetCurrentProcessId()));
+                report.insert(u"display_output"_s, report.value(u"display_output"_s).toString() + display->probeOutput());
+            }
+        }
+        if (splitDisplay && (!nativeShell || requireUiAccess) && controller && display->active() && ::GetForegroundWindow() == target) {
+            const auto key = [&](WORD vk, WORD modifier = 0) {
+                if (::GetForegroundWindow() != target) return false;
+                for (const int held : {VK_SHIFT, VK_CONTROL, VK_MENU, VK_LWIN, VK_RWIN})
+                    if (::GetAsyncKeyState(held) & 0x8000) return false;
+                std::vector<INPUT> inputs;
+                const auto append = [&](WORD code, bool release) {
+                    INPUT input {}; input.type = INPUT_KEYBOARD; input.ki.wVk = code;
+                    input.ki.dwFlags = release ? KEYEVENTF_KEYUP : 0;
+                    inputs.push_back(input);
+                };
+                if (modifier) append(modifier, false);
+                append(vk, false); append(vk, true);
+                if (modifier) append(modifier, true);
+                const bool sent = ::SendInput(UINT(inputs.size()), inputs.data(), sizeof(INPUT)) == inputs.size();
+                pump(250);
+                return sent;
+            };
+            check(trigger.second + u"_clear_search_sent"_s, key('A', VK_CONTROL) && key(VK_BACK));
+            check(trigger.second + u"_search_cleared"_s, controller->query().isEmpty());
+            check(trigger.second + u"_select_all_sent"_s, key('A', VK_CONTROL));
+            check(trigger.second + u"_selected_all"_s, controller->items()->selectedCount() >= 2);
+            check(trigger.second + u"_clear_selection_sent"_s, key(VK_ESCAPE));
+            check(trigger.second + u"_selection_cleared"_s, controller->items()->selectedCount() == 0 && display->active());
+            const int before = controller->items()->count();
+            check(trigger.second + u"_remove_sent"_s, key(VK_DELETE));
+            check(trigger.second + u"_remove_applied"_s, controller->items()->count() == before - 1 && controller->canUndo());
+            check(trigger.second + u"_undo_sent"_s, key('Z', VK_CONTROL));
+            check(trigger.second + u"_undo_applied"_s, controller->items()->count() == before);
+            check(trigger.second + u"_preview_sent"_s, key('P', VK_MENU));
+            check(trigger.second + u"_preview_preference"_s, controller->previewOpen());
+            RECT preview {}; ::GetWindowRect(display->handle(), &preview);
+            check(trigger.second + u"_preview_widened"_s, preview.right - preview.left > panelRect.right - panelRect.left);
+            ::PostMessageW(messages, WM_HOTKEY, WPARAM(trigger.first), 0);
+            pump(300);
+            ::PostMessageW(messages, WM_HOTKEY, WPARAM(trigger.first), 0);
+            pump(450);
+            RECT reopened {}; ::GetWindowRect(display->handle(), &reopened);
+            check(trigger.second + u"_preview_restored_on_reopen"_s, display->active()
+                && controller->previewOpen() && reopened.right - reopened.left > panelRect.right - panelRect.left);
+            check(trigger.second + u"_preview_closed_sent"_s, key('P', VK_MENU));
+            pump(300);
+            RECT collapsed {}; ::GetWindowRect(display->handle(), &collapsed);
+            check(trigger.second + u"_preview_collapsed_stays"_s, !controller->previewOpen()
+                && collapsed.right - collapsed.left == panelRect.right - panelRect.left);
+            check(trigger.second + u"_menu_sent"_s, key(VK_APPS));
+            const auto peerMenu = [&] {
+                DWORD peerPid = 0; ::GetWindowThreadProcessId(display->handle(), &peerPid);
+                for (HWND candidate = nullptr; (candidate = ::FindWindowExW(nullptr, candidate, nullptr, nullptr));) {
+                    DWORD pid = 0; ::GetWindowThreadProcessId(candidate, &pid);
+                    if (pid == peerPid && candidate != display->handle() && ::IsWindowVisible(candidate)
+                        && (::GetWindowLongPtrW(candidate, GWL_STYLE) & WS_POPUP)
+                        && !(::GetWindowLongPtrW(candidate, GWL_EXSTYLE) & WS_EX_TRANSPARENT)) return candidate;
+                }
+                return HWND(nullptr);
+            };
+            const HWND menu = peerMenu();
+            check(trigger.second + u"_peer_menu_visible"_s, menu != nullptr);
+            if (requireUiAccess && menu) {
+                using GetBand = BOOL(WINAPI*)(HWND, DWORD*);
+                const auto getBand = reinterpret_cast<GetBand>(::GetProcAddress(::GetModuleHandleW(L"user32.dll"), "GetWindowBand"));
+                DWORD band = 0;
+                RECT rect {}; ::GetWindowRect(menu, &rect);
+                const POINT center {(rect.left + rect.right) / 2, (rect.top + rect.bottom) / 2};
+                check(trigger.second + u"_menu_uiaccess_band"_s, getBand && getBand(menu, &band) && band == 2);
+                check(trigger.second + u"_menu_on_top"_s, ::GetAncestor(::WindowFromPoint(center), GA_ROOT) == menu);
+            }
+            check(trigger.second + u"_menu_closed_sent"_s, key(VK_ESCAPE));
+            check(trigger.second + u"_menu_closed_only"_s, peerMenu() == nullptr && display->active());
+            check(trigger.second + u"_interaction_focus_kept"_s, ::GetForegroundWindow() == target);
+            QGuiApplication::primaryScreen()->grabWindow(0, panelRect.left, panelRect.top,
+                panelRect.right - panelRect.left, panelRect.bottom - panelRect.top)
+                .save(out.filePath(u"peer-"_s + trigger.second + u".png"_s));
+        }
+        clipboard->grabWindow().save(out.filePath(u"clipboard-"_s + trigger.second + u".png"_s));
+        if (nativeShell) {
+            QGuiApplication::primaryScreen()->grabWindow(0)
+                .save(out.filePath(u"desktop-"_s + trigger.second + u".png"_s));
+        }
+        // The same hotkey closes the clipboard only, leaving the target up.
+        ::PostMessageW(messages, WM_HOTKEY, WPARAM(trigger.first), 0);
+        pump(200);
+        check(trigger.second + u"_closed"_s, !clipboard->isVisible());
+        if (splitDisplay) check(trigger.second + u"_peer_closed"_s, !::IsWindowVisible(display->handle()));
+        check(trigger.second + u"_target_kept"_s, ::IsWindowVisible(target) && ::GetForegroundWindow() == target);
+        if (!nativeShell) {
+            output += child.readAll();
+            if (splitDisplay) checks.insert(trigger.second + u"_receiver_output"_s, QString::fromUtf8(output));
+            check(trigger.second + u"_no_escape_or_activation"_s,
+                !output.contains("down:27") && !output.contains("deactivated"));
+        }
+    }
+    if (splitDisplay && !requireUiAccess && display && display->ready()) {
+        ::PostMessageW(messages, WM_HOTKEY, 3, 0);
+        pump(400);
+        check(u"peer_reopened"_s, display->active());
+        DWORD pid = 0;
+        ::GetWindowThreadProcessId(display->handle(), &pid);
+        // This exact peer is the medium-token process this probe created.
+        // Never terminate an installed UIAccess helper or the user's instance.
+        const HANDLE process = pid && !display->uiAccess() ? ::OpenProcess(PROCESS_TERMINATE, FALSE, pid) : nullptr;
+        check(u"probe_peer_terminated"_s, process && ::TerminateProcess(process, 0));
+        if (process) ::CloseHandle(process);
+        pump(500);
+        check(u"peer_loss_detected"_s, !display->ready() && !display->active());
+        for (QWindow* window : QGuiApplication::topLevelWindows()) {
+            auto* clipboard = qobject_cast<QQuickWindow*>(window);
+            if (!clipboard || clipboard->property("displayController").value<QObject*>() != display) continue;
+            DWORD cloaked = 0;
+            const HWND fallback = reinterpret_cast<HWND>(clipboard->winId());
+            ::DwmGetWindowAttribute(fallback, DWMWA_CLOAKED, &cloaked, sizeof cloaked);
+            check(u"ordinary_fallback_shown"_s, clipboard->isVisible() && ::IsWindowVisible(fallback) && !cloaked);
+            check(u"fallback_passive"_s, (::GetWindowLongPtrW(fallback, GWL_EXSTYLE) & WS_EX_NOACTIVATE) != 0);
+            const auto* model = qobject_cast<Clipboard*>(clipboard->property("clipboard").value<QObject*>());
+            check(u"fallback_target_and_routing_kept"_s, model && model->target() == target && model->keysRouted());
+        }
+        ::PostMessageW(messages, WM_HOTKEY, 3, 0);
+        pump(150);
+        report.insert(u"display_output"_s, report.value(u"display_output"_s).toString() + display->probeOutput());
+    }
+    return passed;
+}
+
+// Exercise the real App -> plugin host -> capture process path, with keyboard
+// input confined to an owned foreground fixture and the plugin's own overlay.
+bool probeCaptureHotkeys(App& app, const QStringList& args, const QDir& out, QJsonObject& report)
+{
+    QJsonObject checks;
+    bool passed = true;
+    const auto check = [&](bool ok, const QString& name) {
+        checks.insert(name, ok);
+        report.insert(u"capture_hotkey_checks"_s, checks);
+        if (!ok) { qWarning().noquote() << "capture hotkeys:" << name; passed = false; }
+        return ok;
+    };
+    const auto wait = [&](const auto& condition) {
+        QElapsedTimer timer; timer.start();
+        while (!condition() && timer.elapsed() < 8000) pump(20);
+        return condition();
+    };
+    app.showSettings();
+    pump(100);
+    SettingsEditor* editor = nullptr;
+    for (auto* window : QGuiApplication::allWindows()) {
+        if (auto* found = window->property("editor").value<SettingsEditor*>()) {
+            editor = found;
+            window->hide();
+            break;
+        }
+    }
+    if (!check(editor != nullptr, u"settings_model"_s)) return false;
+    editor->plugins()->setDeveloperMode(true);
+    const HWND previous = ::GetForegroundWindow();
+    const HWND fixture = ::CreateWindowExW(WS_EX_TOOLWINDOW, L"STATIC", L"WinShun issue 183 keyboard fixture",
+        WS_OVERLAPPEDWINDOW, 80, 80, 640, 400, nullptr, nullptr, ::GetModuleHandleW(nullptr), nullptr);
+    if (!check(fixture != nullptr, u"owned_foreground_fixture"_s)) return false;
+    ::ShowWindow(fixture, SW_SHOWMAXIMIZED);
+    const auto cleanup = qScopeGuard([&] {
+        ::DestroyWindow(fixture);
+        if (previous && ::IsWindow(previous)) ::SetForegroundWindow(previous);
+    });
+    const auto captureWindow = [&]() -> HWND {
+        HWND found = nullptr;
+        const QString root = QDir::toNativeSeparators(Settings::profile() + u"/plugins/winshun.capture/"_s);
+        while ((found = ::FindWindowExW(HWND_MESSAGE, found, L"WinShun.Capture.Messages", nullptr))) {
+            DWORD pid = 0; ::GetWindowThreadProcessId(found, &pid);
+            win32::UniqueHandle process(::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid));
+            wchar_t path[32768]; DWORD size = DWORD(std::size(path));
+            if (process.valid() && ::QueryFullProcessImageNameW(process.get(), 0, path, &size)
+                && QString::fromWCharArray(path, size).startsWith(root, Qt::CaseInsensitive)) return found;
+        }
+        return nullptr;
+    };
+    const auto windowOf = [&](bool settings) -> HWND {
+        DWORD pid = 0; ::GetWindowThreadProcessId(captureWindow(), &pid);
+        struct Find { DWORD pid; bool settings; HWND found = nullptr; } find {pid, settings};
+        ::EnumWindows([](HWND window, LPARAM data) -> BOOL {
+            auto& f = *reinterpret_cast<Find*>(data);
+            DWORD owner = 0; ::GetWindowThreadProcessId(window, &owner);
+            if (!f.pid || owner != f.pid || !::IsWindowVisible(window)) return TRUE;
+            wchar_t text[256]; ::GetWindowTextW(window, text, int(std::size(text)));
+            const QString title = QString::fromWCharArray(text);
+            const bool isSettings = title.contains(u"截图设置") || title.contains(u"Screenshot settings", Qt::CaseInsensitive);
+            if (f.settings ? isSettings : !isSettings && (title.startsWith(u"截图") || title.startsWith(u"Screenshot"))) {
+                f.found = window; return FALSE;
+            }
+            return TRUE;
+        }, reinterpret_cast<LPARAM>(&find));
+        return find.found;
+    };
+    const auto freeKey = [&](const QString& shortcut) {
+        UINT modifiers = 0, vk = 0;
+        if (!MessageWindow::parseHotkey(shortcut, &modifiers, &vk)) return false;
+        if (!::RegisterHotKey(nullptr, 0x7119, modifiers, vk)) return false;
+        ::UnregisterHotKey(nullptr, 0x7119);
+        return true;
+    };
+    const auto keyEvent = [](WORD vk, bool up) {
+        INPUT input {}; input.type = INPUT_KEYBOARD; input.ki.wVk = vk;
+        input.ki.dwFlags = up ? KEYEVENTF_KEYUP : 0;
+        return ::SendInput(1, &input, sizeof input) == 1;
+    };
+    const auto fire = [&](const QString& shortcut, const QString& name) {
+        ::SetForegroundWindow(fixture);
+        pump(100);
+        if (!check(::GetForegroundWindow() == fixture, name + u"_foreground")) return false;
+        UINT modifiers = 0, vk = 0;
+        MessageWindow::parseHotkey(shortcut, &modifiers, &vk);
+        const std::pair<UINT, WORD> modifierKeys[] {{MOD_CONTROL, VK_CONTROL}, {MOD_ALT, VK_MENU},
+            {MOD_SHIFT, VK_SHIFT}, {MOD_WIN, VK_LWIN}};
+        for (const auto& [flag, key] : modifierKeys) if (modifiers & flag) keyEvent(key, false);
+        const bool sent = keyEvent(WORD(vk), false);
+        pump(30);
+        keyEvent(WORD(vk), true);
+        for (auto it = std::rbegin(modifierKeys); it != std::rend(modifierKeys); ++it)
+            if (modifiers & it->first) keyEvent(it->second, true);
+        if (!check(sent && wait([&] { return windowOf(false) != nullptr; }), name + u"_overlay")) return false;
+        const HWND overlay = windowOf(false);
+        check(wait([&] { return ::GetForegroundWindow() == overlay; }), name + u"_focus");
+        if (::GetForegroundWindow() != overlay) return false;
+        if (name == u"after_settings")
+            // Capture windows exclude themselves from screen capture. This
+            // records the fixture behind it, not proof of the overlay's pixels.
+            QGuiApplication::primaryScreen()->grabWindow(WId(overlay)).save(out.filePath(u"foreground-fixture.png"_s));
+        keyEvent(VK_ESCAPE, false); keyEvent(VK_ESCAPE, true);
+        return check(wait([&] { return !windowOf(false); }), name + u"_cancel");
+    };
+    const QString original = valueAfter(args, u"--probe-hotkey", u"F1"_s);
+    if (!check(wait([&] { return captureWindow() && !freeKey(original); }), u"registered_at_startup"_s)) return false;
+    pump(500); // older plugins briefly expose an overlay while warming it
+    if (!check(wait([&] { return !windowOf(false); }), u"idle_overlay_hidden"_s)) return false;
+    const auto integrityOf = [](HANDLE process) -> DWORD {
+        HANDLE raw = nullptr;
+        if (!::OpenProcessToken(process, TOKEN_QUERY, &raw)) return 0;
+        win32::UniqueHandle token(raw);
+        alignas(TOKEN_MANDATORY_LABEL) BYTE buffer[128]; DWORD size = 0;
+        if (!::GetTokenInformation(token.get(), TokenIntegrityLevel, buffer, sizeof buffer, &size)) return 0;
+        const PSID sid = reinterpret_cast<TOKEN_MANDATORY_LABEL*>(buffer)->Label.Sid;
+        return *::GetSidSubAuthority(sid, *::GetSidSubAuthorityCount(sid) - 1);
+    };
+    DWORD pid = 0; ::GetWindowThreadProcessId(captureWindow(), &pid);
+    win32::UniqueHandle process(::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid));
+    report.insert(u"host_integrity_rid"_s, int(integrityOf(::GetCurrentProcess())));
+    report.insert(u"capture_integrity_rid"_s, int(integrityOf(process.get())));
+    if (!fire(original, u"before_settings"_s)) return false;
+    editor->plugins()->showSettings(u"winshun.capture"_s);
+    if (!check(wait([&] { return windowOf(true) != nullptr; }), u"open_capture_settings"_s)) return false;
+    ::PostMessageW(windowOf(true), WM_CLOSE, 0, 0);
+    check(wait([&] { return !windowOf(true); }), u"close_capture_settings"_s);
+    if (!fire(original, u"after_settings"_s)) return false;
+    editor->plugins()->setEnabled(u"winshun.capture"_s, false);
+    check(wait([&] { return freeKey(original); }), u"disable_releases_shortcut"_s);
+    check(wait([&] { return !captureWindow(); }), u"disabled_process_exits"_s);
+    const QString rebound = u"Ctrl+Alt+Shift+F23"_s;
+    if (!check(freeKey(rebound), u"rebound_shortcut_available"_s)) return false;
+    {
+        QSettings config(Settings::profile() + u"/plugins/winshun.capture.data/capture.ini"_s, QSettings::IniFormat);
+        config.setValue(u"Capture/Hotkey"_s, rebound); config.sync();
+    }
+    editor->plugins()->setEnabled(u"winshun.capture"_s, true);
+    check(wait([&] { return captureWindow() && !freeKey(rebound); }), u"reenable_registers_rebound"_s);
+    check(freeKey(original), u"old_shortcut_released"_s);
+    fire(rebound, u"rebound"_s);
+    editor->plugins()->setEnabled(u"winshun.capture"_s, false);
+    check(wait([&] { return freeKey(rebound); }), u"final_release"_s);
+    report.insert(u"capture_hotkey_checks"_s, checks);
+    report.insert(u"capture_hotkeys_passed"_s, passed);
+    QFile pluginLog(Settings::profile() + u"/plugins.log"_s);
+    if (pluginLog.open(QIODevice::ReadOnly)) {
+        QFile copy(out.filePath(u"capture-hotkey-plugins.log"_s));
+        if (copy.open(QIODevice::WriteOnly)) copy.write(pluginLog.readAll());
+    }
+    return passed;
+}
+
 int runRuntime(const QStringList& args)
 {
     const QDir out(valueAfter(args, kRuntimeFlag));
@@ -4356,6 +6041,11 @@ int runRuntime(const QStringList& args)
     settings.proxyMode = u"none"_s; // loopback/file fixtures never use the user's proxy
     settings.mcp = false;
     settings.clipboard = args.contains(u"--with-clipboard"_s);
+    if (args.contains(u"--clipboard-shell-probe"_s)) {
+        settings.clipboard = true;
+        settings.clipboardImages = false;
+        settings.clipboardHoldToStep = false;
+    }
     settings.clipboardWinV = false;
     settings.clipboardHotkey.clear();
     settings.pluginConfig(u"winshun.switches"_s).enabled = false; // optional unless --runtime-plugins installs it
@@ -4379,6 +6069,8 @@ int runRuntime(const QStringList& args)
     }
     QDir().mkpath(settings.indexFolders.front());
     if (typingProbe) {
+        settings.opusTypingScope = args.contains(u"--opus-everywhere"_s) ? u"all"_s : u"folder"_s;
+        settings.save();
         const QDir files(settings.indexFolders.front());
         for (int i = 1; i <= 3; ++i) {
             QFile file(files.filePath(u"follow_%1.txt"_s.arg(i)));
@@ -4421,7 +6113,26 @@ int runRuntime(const QStringList& args)
             }
         }
     }
+    if (args.contains(u"--web-plugin-check"_s)) {
+        settings.theme = args.contains(u"--dark"_s) ? u"dark"_s : u"light"_s;
+        settings.transparency = u"off"_s; // A grabWindow image cannot capture the desktop's Mica material.
+        settings.webShortcuts = {{u"wsweb"_s, u"网页测试"_s, u"https://example.invalid/search?q=%s"_s, u"http://127.0.0.1:9/"_s}};
+        settings.webShortcuts[0].suggest = valueAfter(args, u"--web-suggest-url");
+        settings.webSuggestions = !settings.webShortcuts[0].suggest.isEmpty();
+    }
     settings.save(); // prepared profiles normally skip onboarding
+    if (args.contains(u"--clipboard-display-probe"_s) || args.contains(u"--clipboard-display-service-probe"_s)) {
+        ClipStore store(Settings::dataDir() + u"/clipboard"_s);
+        const qint64 now = QDateTime::currentMSecsSinceEpoch();
+        if (!store.open(now)) return 4;
+        for (const QString& text : {u"alpha clipboard display fixture"_s, u"beta clipboard display fixture"_s}) {
+            ClipCapture clip;
+            clip.text = text;
+            clip.source = u"Display probe"_s;
+            if (!store.add(clip, now)) return 4;
+        }
+        store.flush();
+    }
     if (onboardingAction == u"fresh")
         QFile::remove(Settings::filePath()); // only this probe's private profile
     if (onboardingAction == u"legacy") {
@@ -4474,10 +6185,28 @@ int runRuntime(const QStringList& args)
         App app;
         QElapsedTimer since;
         since.start();
-        if (!app.start({.background = true}))
+        if (!app.start({.background = true, .clipboardDisplayProbe = args.contains(u"--clipboard-display-probe"_s)}))
             return 4;
+        if (args.contains(u"--capture-hotkey-probe"_s) && !probeCaptureHotkeys(app, args, out, report)) {
+            QFile failed(out.filePath(u"capture-hotkey-failed.json"_s));
+            if (failed.open(QIODevice::WriteOnly)) failed.write(QJsonDocument(report).toJson());
+            return 4;
+        }
+        if (args.contains(u"--web-plugin-check"_s) && !probeWebPlugin(app, args, out, report)) {
+            QFile failed(out.filePath(u"web-plugin-failed.json"_s));
+            if (failed.open(QIODevice::WriteOnly)) failed.write(QJsonDocument(report).toJson());
+            return 4;
+        }
         report.insert(u"start_ms"_s, static_cast<double>(since.elapsed()));
         pump(std::clamp(valueAfter(args, u"--settle-ms", u"3000"_s).toInt(), 100, 60000));
+        if (args.contains(u"--clipboard-shell-probe"_s)) {
+            const bool ok = probeClipboardShell(valueAfter(args, u"--clipboard-shell-probe"_s), out, report,
+                args.contains(u"--clipboard-display-probe"_s) || args.contains(u"--clipboard-display-service-probe"_s),
+                args.contains(u"--clipboard-display-service-probe"_s));
+            QFile result(out.filePath(u"clipboard-shell.json"_s));
+            if (result.open(QIODevice::WriteOnly)) result.write(QJsonDocument(report).toJson());
+            return ok ? 0 : 4;
+        }
         if ((settings.dialogBar && !probeFileDialog(args, out, dialogSample, report))
             || (typingProbe && !probeFolderTyping(app, out, QDir::toNativeSeparators(settings.indexFolders.front()), report))) {
             QFile failed(out.filePath(u"runtime.json"_s));
@@ -4692,6 +6421,8 @@ void note(const QString& line)
 
 void prepare(const QStringList& args)
 {
+    if (args.contains(u"--composited-frame"_s))
+        win::useCompositedFramesForPreview();
     if (args.contains(kRuntimeFlag))
         qputenv("QT_D3D_NO_VBLANK_THREAD", "1"); // the production startup's renderer setting
     const bool resultsMode = args.contains(kResultsFlag);
@@ -4716,13 +6447,14 @@ void prepare(const QStringList& args)
         qunsetenv("QT_QUICK_BACKEND"); // the same native text path as the launcher
     else
         qputenv("QT_QUICK_BACKEND", "software"); // renders without a window on screen
-    qputenv("QT_QPA_PLATFORM", webForm && !nativeWeb ? "windows:fontengine=gdi" : "windows:fontengine=freetype");
+    qputenv("QT_QPA_PLATFORM", resultsMode || nativeWeb ? "windows:fontengine=freetype" : "windows:fontengine=gdi");
     // Nothing of the user's is read or written: a profile folder of its own.
     Settings::useProfile(QDir::temp().filePath(u"WinShun-preview-"_s + QUuid::createUuid().toString(QUuid::WithoutBraces).left(8)));
 }
 
 int run(const QStringList& args)
 {
+    QQuickWindow::setTextRenderType(QQuickWindow::NativeTextRendering);
     const bool settingsMode = args.contains(kSettingsFlag);
     const bool resultsMode = args.contains(kResultsFlag);
     const bool cardsMode = args.contains(kAiCardsFlag);
@@ -4737,7 +6469,7 @@ int run(const QStringList& args)
             QDir(profile).removeRecursively();
     });
     if (valueAfter(args, runtimeMode ? kRuntimeFlag : resultsMode ? kResultsFlag : cardsMode ? kAiCardsFlag : settingsMode ? kSettingsFlag : kFlag).isEmpty()) {
-        std::fprintf(stderr, "usage: WinShun --preview-plugins <file.png> [--dark] [--scale 1.5] [--dialog] [--page ai]\n"
+        std::fprintf(stderr, "usage: WinShun --preview-plugins <file.png> [--dark] [--scale 1.5] [--dialog | --dialog-allow] [--updates] [--page ai]\n"
                              "       WinShun --preview-settings <folder> [--dark] [--scale 1.5] [--tree] [--edges] [--renderer d3d11]\n");
         return 2;
     }

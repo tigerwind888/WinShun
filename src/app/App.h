@@ -9,6 +9,7 @@
 #include "platform/HoldWatch.h"
 #include "platform/KeyListener.h"
 #include "platform/KeyRouter.h"
+#include "platform/NumberKeys.h"
 #include "platform/TaskbarSearch.h"
 #include "platform/TaskbarSearchBox.h"
 
@@ -54,6 +55,7 @@ class AppCatalog;
 class ClipImportJob;
 class ClipStore;
 class Clipboard;
+class ClipboardDisplay;
 class OcrPackage;
 class ComWorker;
 class DialogBar;
@@ -78,6 +80,7 @@ enum class Front : std::uint8_t;
 }
 class Launcher;
 class MessageWindow;
+class PluginHotkeys;
 class MissingFiles;
 class NetworkNotifier;
 class Onboarding;
@@ -89,10 +92,10 @@ class SwitchPlugin;
 class TypeToSearch;
 class LauncherKeysWatch;
 class Updater;
+class PluginUpdates;
 class Backup;
 class VolumeNotifier;
 class WindowFrame;
-class WindowLogo;
 namespace win {
 class TextCaret;
 }
@@ -131,6 +134,7 @@ public:
         QString query;
         bool settings = false; // open the settings window
         QString settingsAt; // there (SettingsWindow.showPlace), after a restart from the settings
+        bool clipboardDisplayProbe = false; // isolated runtime QA only; never claims UIAccess
     };
 
     App();
@@ -149,9 +153,10 @@ public:
     // `inBox`: over Win顺's box there, its field drawn in the box when the
     // box is wide enough for it.
     // `on`: the screen to open on (typed in an Explorer window there), else
-    // the one under the mouse.
+    // the one under the mouse. `avoid`: the window typed in, which it opens
+    // beside; `inside`: in its bottom right corner instead (Placement::avoidNative).
     void showLauncher(const QString& query = {}, const std::optional<taskbar::Spot>& spot = {}, bool inBox = false,
-        QScreen* on = nullptr, HWND avoid = nullptr);
+        QScreen* on = nullptr, HWND avoid = nullptr, bool inside = false);
     void showFolderSearch(HWND root, HWND tab, bool opus, const QString& folder);
     void hideLauncher();
     // The launcher as the search panel (Launcher::panel): the window sized
@@ -199,13 +204,16 @@ private:
     bool createWindow();
     bool createClipWindow();
     QQuickWindow* createPreviewWindow(); // FilePreview's, the first time it is wanted
-    void openWebSearch(const QString& query); // the default web search (defaultWebSearchUrl)
+    bool openWebSearch(const QString& query); // false when the optional provider is unavailable
+    const WebShortcuts& activeWebShortcuts() const;
+    void applyWebSearch();
     // The screenshot and recording are a plugin of the plugin library
     // (winshun.capture, GitHub #138). What such a plugin, with windows of
     // its own, does with Win顺's: a submenu of the tray menu (trayMenu,
     // asked for as the tray icon is pressed, so the menu waits for nothing),
     // 贴到屏幕 and 编辑 on pictures (`pictures`), a 设置 button on its card
     // (settingsWindow), Win顺's look (appearance).
+    void updateScreenshotPlugin();
     bool screenshotPluginOn() const; // installed, on and allowed: the screenshot history works
     // The plugin on and running that does `verb` ("pin", "edit") with
     // pictures; empty: none, and the entries are not offered.
@@ -247,6 +255,7 @@ private:
     // through KeyRouter: from its showing until it goes or takes the focus
     // after all (activateClipboard).
     bool startKeyRouting(HWND target);
+    void avoidClipboardShellFlyout(HWND foreground);
     void stopKeyRouting();
     void routedKey(const KeyRouter::Key& key);
     void routedForeground(HWND window);
@@ -283,9 +292,18 @@ private:
     QQuickItem* focusedField() const; // a text field of Win顺's own with the keyboard
     void returnToField(QQuickItem* field); // from the clipboard (Clipboard::fieldRequested)
     void updateCompanions(); // our windows that go with a file dialog (DialogJump)
-    // Ctrl+1… on the launcher and the dialog bar: as one of them comes to
-    // the front, which digits other programs hold (numberkeys::heldMask).
+    // Ctrl+1… on the launcher, the dialog bar and the clipboard: which
+    // digits are Win顺's own shortcuts (ownNumberDigits), and as one of them
+    // comes to the front, the hook that takes the digits other programs hold
+    // (numberkeys::Hook, GitHub #175).
     void updateNumberKeys();
+    void updateNumberKeyHook();
+    void numberKeyHooked(const numberkeys::Hook::Key& key);
+    // 1 << n for each digit n whose chord with the number keys `keys`
+    // ("ctrl", "alt") is one of Win顺's own shortcuts: the launcher's, the
+    // clipboard's, the folder menu's, a plugin's. They stay shortcuts in
+    // Win顺's windows too, and those rows show the chord struck through.
+    unsigned ownNumberDigits(const QString& keys) const;
     void applySettings(bool initial);
     void applyKeyListener(bool force = false);
     ClipboardWatcher::Options clipboardOptions() const;
@@ -349,9 +367,11 @@ private:
     void giveBackWinKey(const QString& letter); // "S" or "V": out of DisabledHotkeys, whoever put it there
     void setClipboardPaused(bool paused);
     void showClipboardSettings(); // the settings window on its 剪贴板 page
+    void showShortcutSettings(); // ... on its overview of all shortcuts (the shortcut panels' last row)
     void showWebSettings(); // ... on its 网页搜索 page (a web row's menu)
     void showFileTypeSettings(); // ... on its 结果列表 page, at the file types (the + of the launcher's strip)
     void showFavoriteSettings(const QString& path); // ... on its 收藏夹 page, at that favorite (a row's menu)
+    void showPluginUpdates(); // 设置 › 插件库, only the ones with a newer version
     void showPluginSettings(const QString& pluginId); // ... on that plugin's card ("winshun:settings")
     void applyHotkey();
     void applyDialogs(); // Ctrl+G, the bar and going by themselves in file dialogs
@@ -557,6 +577,7 @@ private:
     std::unique_ptr<mcp::McpServer> m_mcpServer;
     std::unique_ptr<plugin::AiBridge> m_aiBridge; // with the server: the plugins' commands among its tools
     std::unique_ptr<plugin::Tools> m_pluginTools; // before the host, whose bridge calls it
+    std::unique_ptr<PluginHotkeys> m_pluginKeyRelay; // outlives the host's exit notifications
     std::unique_ptr<plugin::Host> m_pluginHost; // before the launcher, which asks it
     std::unique_ptr<OcrPackage> m_ocrPackage;
     // The system switches' states (docs/design-system-switches.md); likewise.
@@ -664,6 +685,7 @@ private:
     QString m_clipboardShortcut; // what opens the clipboard: "Win+V", another shortcut, or nothing
     std::unique_ptr<MessageWindow> m_messages;
     std::unique_ptr<Updater> m_updater;
+    std::unique_ptr<PluginUpdates> m_pluginUpdates; // after m_updater; goes before the plugin host
     std::unique_ptr<Backup> m_backup; // of the settings, into a folder chosen
     std::unique_ptr<VolumeNotifier> m_volumeNotifier; // after m_messages, whose window it uses
     std::unique_ptr<NetworkNotifier> m_network; // after m_index, whose shares it tells
@@ -686,8 +708,15 @@ private:
     std::unique_ptr<WindowFrame> m_frame; // the launcher's header and footer drag it
     std::unique_ptr<Placement> m_clipPlacement; // likewise for the clipboard window
     std::unique_ptr<WindowFrame> m_clipFrame;
+    std::unique_ptr<ClipboardDisplay> m_clipDisplay;
+    bool m_clipDisplayWanted = false;
+    bool m_clipDisplayProbe = false;
     std::unique_ptr<win::TextCaret> m_textCaret; // where another program's caret is: the clipboard opens there
     std::unique_ptr<KeyRouter> m_keyRouter; // while the clipboard is over a program that keeps the focus
+    std::unique_ptr<numberkeys::Hook> m_numberKeyHook; // while a window of Win顺's with number keys is in front
+    std::uint64_t m_numberKeyRun = 0; // which hook a drained note belongs to
+    std::unique_ptr<numberkeys::Hook> m_drainingNumberKeyHook; // done, until the digits it took are let go (Hook::drain)
+    std::uint64_t m_drainingNumberKeyRun = 0;
     HWND m_keyRouterTarget = nullptr; // that program's window
     std::uint64_t m_keyRouterRun = 0; // which routing its posted keys belong to
     std::unique_ptr<KeyRouter> m_drainingRouter; // done, until the keys it took are let go (KeyRouter::drain)
@@ -749,9 +778,7 @@ private:
     // history (jt, Enter) is pasted.
     HWND m_launcherTarget = nullptr;
     QPointer<QQuickWindow> m_window;
-    WindowLogo* m_launcherLogo = nullptr; // m_window's
     QPointer<QQuickWindow> m_clipWindow; // the clipboard's; created a moment after the start
-    WindowLogo* m_clipLogo = nullptr; // m_clipWindow's
     QPointer<QQuickWindow> m_settingsWindow; // created on demand, deleted when closed
     QPointer<QQuickWindow> m_barWindow; // the dialog bar's; created with the first file dialog
     QPointer<SettingsEditor> m_settingsEditor; // owned by m_settingsWindow

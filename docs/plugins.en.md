@@ -10,15 +10,17 @@ For a new plugin in the Library, choose **Install and enable** and review its pe
 | **Once** (a process per query) | any language; the query comes in environment variables, the rows go to stdout | small tools, used now and then |
 | **Resident** | any language; JSON-RPC lines on stdio | anything queried on every key, anything with state, PowerShell (slow to start) |
 
-The plugins that come with Win顺 are in `<install dir>\plugins\` (all off until you turn them on under Settings → Plugins): `winshun.tools` (calculator, units, colours, timestamps, UUIDs, Base64, hashes; C++), `winshun.kill` (end a process; PowerShell), `winshun.web` and `winshun.go` (zero-code).
+The plugins that come with Win顺 are in `<install dir>\plugins\` (all off until you turn them on under Settings → Plugins): `winshun.tools` (calculator, units, colours, timestamps, UUIDs, Base64, hashes; C++), `winshun.kill` (end a process; PowerShell), `winshun.go` (zero-code).
 
 Win顺's other own plugins are not in the setup but in the plugin library, to install when you want them (Settings → Plugins → Library; sources in `src\<name>-plugin\`, the manifest and README in its `package\`): `winshun.capture` (screenshots and recording; C++ on Win顺's own Qt, see "Resident plugins with windows of their own" below), `winshun.semantic` (search by meaning: `? a sentence` finds documents by what they are about, with the embedding model you pick — Ollama on this PC or a cloud service's key; C++, resident, takes the text Win顺 already read through `winshun:content`), `winshun.localsend` (LAN transfer: phones and computers on the same network send each other files and text, works with the LocalSend app; `传` or `ls`, or 用局域网发送… on a file's menu; C++, resident and eager, uses `network:listen`, `notifications` and the `files` trigger), `winshun.break` (break reminder: a short break every 20 minutes and a long one every other time, a small bar before, then every monitor dimmed with a countdown; `休息` or `break`; C++, resident and eager, only `ui`, draws its own windows and holds the keyboard with a hook during a break), `winshun.translate` (`tr sentence` with your own DeepL or OpenAI-compatible API key; C++, resident, `debounceMs` 300, a "Translating…" row first), `winshun.bookmarks` (`bm words` searches Chrome and Edge bookmarks; C++, once). One that came with an earlier Win顺 and that you had on is installed from the library after the upgrade, settings kept. Each is a working example with a README.
 
-Plugins by other people, and a place to share yours: [WinShun-plugins](https://github.com/LingCore/WinShun-plugins) (install and update them right from Settings → Plugins → Library: each download is checked against the list's size and sha256, then installed as an archive would be; or download a `.wsplugin` yourself and install it from the archive on the Installed tab; see its CONTRIBUTING to submit one). The Library goes online only when its tab is opened (at most once in ten minutes), when Refresh is pressed, or to install; the last list is kept in the data folder as `plugin-index.json`.
+Plugins by other people, and a place to share yours: [WinShun-plugins](https://github.com/LingCore/WinShun-plugins) (install and update them right from Settings → Plugins → Library: each download is checked against the list's size and sha256, then installed as an archive would be; or download a `.wsplugin` yourself and install it from the archive on the Installed tab; see its CONTRIBUTING to submit one). The Library goes online when its tab is opened (at most once in ten minutes), when Refresh is pressed, or to install; with Automatic updates on and plugins from the library installed, it also checks for updates once a day in the background. The last list is kept in the data folder as `plugin-index.json`.
 
 The Chinese version, [plugins.md](plugins.md), is the reference; this one follows it.
 
 The six official native library plugins require WinShun 0.17.0 (`minWinShun`). Their `.wsplugin` packages are built by the main repository's release script and published on the existing WinShun-plugins repository, with `bundled: false`. Registry validation permits only their named executables and capture's named DLL from that repository; community submission rules are unchanged. Never replace a published package with different contents: bump the plugin version. See the registry's [maintainer instructions](https://github.com/LingCore/WinShun-plugins/blob/main/CONTRIBUTING.md#维护者).
+
+**Web search** is now the optional `winshun.web` 2.0 library plugin (`src/web-plugin/package`). It declares a host capability and starts no extra process. Its card manages sites and suggestions. Upgrades merge the former built-in settings and enabled legacy sample keywords once; uninstalling keeps the settings. Fresh profiles start disabled; existing profiles use plugin recovery, retaining their data if the library is offline.
 
 ## Quick start
 
@@ -161,6 +163,7 @@ Top level:
 | `keyword` | a string or an array. **Keyword + space** enters keyword mode; the keyword alone puts the command's hint row first (Enter or Tab enters, ↓ reaches the names found); two or more characters a keyword begins with (`uu` for `uuid`) add a row after the apps, before the files (the keyboard stays where it is; Tab completes to `uuid ` from any row; two rows at most, none when too many keywords qualify); the user may change it |
 | `triggers` | beyond the keyword: `{"regex": "…", "minLength": 1, "maxLength": 64}` (the whole input matches: rows are pushed into 全部; `match` carries the groups), `{"push": {"minLength": 2, "maxItems": 3}}` (every key; resident + eager only), `{"files": {"kind": "any", "max": 1000, "extensions": ["jpg"], "title": {"zh": "用局域网发送…", "en": "Send over LAN…"}}}` (an entry `title` in the menu of file and folder rows, for the whole selection when several are selected; `kind` is `file` / `folder` / `any`, `max` 20 by default and 1000 at most, `extensions` apply to files only. Chosen: one `action` with `trigger` `files`, `action` `files` and `files` the full paths, no item) |
 | `mode` | `list` (default) or `instant` (the keyword alone runs it) |
+| `contentSearch` | `true`: a content-search provider; requires `runtime` and receives `trigger: "content"`. See “Content-search providers” below. |
 | `actions` | `[{"id": "kill", "title": "Kill", "key": "Enter"}, …]`: the order gives Enter / Ctrl+Enter / Shift+Enter; the menu lists all; none means one `default` |
 | `run` | zero-code only: `url` (`%s` is the text, URL-encoded; `home` for the keyword alone), `program` (`%VAR%` expanded; `%s` in `args`), `folder`, `search` (`{"query": "ext:pdf %s", "scope": "all | files | folders | content"}`), `items` (item objects; `%VAR%` in `open.path` expanded) |
 | `cache` | `{"seconds": 60}`: how long the same text's answer is reused |
@@ -256,8 +259,11 @@ plugin → {"jsonrpc":"2.0","method":"winshun/hotkeys","params":{"keys":["Win+Sh
 
 And tools for plugins, not for AI (called with `winshun/tool` as the others, held to the permissions):
 
+When `initialize.capabilities.hostHotkeys` is true, a resident plugin with `ui` permission can report its reserved keys with `winshun/hotkeys`, then call `register_hotkeys` with all its `keys` (up to 32; `[]` releases them). The response is `{errors: {shortcut: WindowsErrorCode}}`, omitting successful keys; an unsupported key is 87 (`ERROR_INVALID_PARAMETER`) and the other keys still register. A press arrives as `hotkey` with `{key}`, with foreground activation allowed. Release while recording a shortcut and register again afterwards; the host cleans up on disable, exit and crash. Older hosts retain the plugin's own registration path. Registration uses the host's existing integrity level while the plugin keeps its normal rights. An ordinary host still cannot override a higher-integrity foreground application with an unmodified function key.
+
 | Tool | Permission | Arguments | What it does |
 |---|---|---|---|
+| `register_hotkeys` | `ui` | `keys` | replaces this plugin's global shortcuts, accepting recorder-supported shortcuts and PrintScreen; returns per-key registration errors |
 | `clipboard_add_image` | `clipboard:write` | `file`, `project` (optional), `copy` (default true), `screenshot` | puts a picture in the plugin's data folder (and its annotation project) into the clipboard history; with `copy` false it is recorded but not put on the clipboard. Win顺 deletes both files once read. Answers `{kept}`: false while the clipboard history or its pictures are off or paused |
 | `clipboard_copy` | `clipboard:write` | `text` | text onto the clipboard (at most a million characters), into the history as any copy |
 | `clipboard_copy_entry` | `clipboard:write` | `id` | an entry of the clipboard history onto the clipboard again, moved to the top |
@@ -302,9 +308,15 @@ Resident queries receive `params.filters`; once queries receive JSON in `WS_FILT
  "minSize":1048576,"maxSize":null,"kinds":["documents"],"extensions":["pdf","docx"],"folder":"C:\\Docs"}
 ```
 
-The date interval includes its lower bound and excludes its upper bound. Both size bounds are inclusive. Null bounds, empty arrays and an empty folder mean no restriction; ordinary searches send `{}`. Plugins can apply these conditions to their data source. WinShun also filters known returned metadata, extensions and local open paths. Output metadata with Python `item(..., modified=..., created=..., size=...)`, PowerShell `New-WinShunItem -Modified ... -Created ... -Size ...`, or C++ `withModified / withCreated / withSize`.
+The date interval includes its lower bound and excludes its upper bound. Both size bounds are inclusive. Null bounds, empty arrays and an empty folder mean no restriction. Ordinary searches may also include content and exclusion settings; ignore unknown keys. Plugins can apply these conditions to their data source. WinShun also filters known returned metadata, extensions and local open paths. Output metadata with Python `item(..., modified=..., created=..., size=...)`, PowerShell `New-WinShunItem -Modified ... -Created ... -Size ...`, or C++ `withModified / withCreated / withSize`.
 
 `kinds` may contain several categories, such as `["pictures","videos"]`. `extensions` is their combined extension list. Categories use OR, while date, size and folder conditions still apply together. Plugins should read the entire array.
+
+### Content-search providers
+
+Declare `"contentSearch": true` on a command; a `keyword` may coexist. A host built with this capability sends `query` with `trigger: "content"` only in Content or content-enabled All. File/folder searches and exclusive keyword lists do not dispatch providers. `text` contains the content query. Keyword queries keep their existing protocol and remain available in older hosts. Hosts up to 0.17.0 have no content providers; the official image text search plugin sets `minWinShun` to the host version it is built with.
+
+In addition to panel filters, `filters` includes `contentEnabled`, `contentWords`, `contentPick` (selected folder), `excludedExtensions` and `excludedFileNames` (wildcards). Verify terms across the entire file and return stable IDs, the original `open.path`, date/size metadata and a matching snippet. Up to 200 provider rows follow native results without consuming the ordinary 3/6 push quota; existing native file paths are deduplicated. Return an empty array for no matches, keeping setup hints out of content results. See the [image text search plugin](../src/ocr-search-plugin/package/README.md).
 
 ### System switch providers
 
@@ -331,7 +343,7 @@ A state has numeric `availability` (0 unknown, 1 ready, 2 no device, 3 denied, 4
 | (always) not administrator | the plugin runs with your normal rights | **yes** | the token loses the Administrators group and the privileges; `normal` medium integrity, `strict` low; memory limit, a job that ends with Win顺 |
 | `processes` | child processes, or having Win顺 open a program / a non-web link | **yes** | without it the job's `ActiveProcessLimit = 1` (`CreateProcess` fails with 1816), and Win顺 will not carry out an `open` of a program, a script, a non-web URL, or one with args/cwd on its behalf (item and `open` effects, and `open_item`, all alike: only folders, ordinary files and http/https/mailto, with a footer notice when refused); with it the children are in the job and `open` is unrestricted |
 | `clipboard:read` / `clipboard:write` | the clipboard directly | **yes** | job UI restrictions; `GetClipboardData` returns nothing without it |
-| `ui` | own windows, other windows | partly | without it the job restricts the desktop and USER handles |
+| `ui` | own windows, other windows | partly | without it the job restricts the desktop and USER handles, and legacy extension points are disabled; UI plugins retain legacy input-method extension points while other process mitigations and job limits still apply |
 | `system:settings` | Windows user settings: theme, Explorer, radios, volume and keep-awake | **no** | declared only, with normal user rights; required for system switch providers; does not grant administrator rights |
 | `winshun:search` / `winshun:open` / `winshun:history` | Win顺's tools | **yes** | `winshun/tool` is gated |
 | `winshun:content` | the text Win顺 took out of documents and text files (`list_documents`, `read_file_text`) | **yes** | `winshun/tool` is gated; no Word or PDF parsing of its own, and the disk is not read again |
@@ -342,6 +354,8 @@ A state has numeric `availability` (0 unknown, 1 ready, 2 no device, 3 denied, 4
 | `notifications` | system notifications (`toast` in `winshun/notify`) | **yes** | without it Win顺 shows them as footer notices; with it, one every 2 seconds at most |
 
 **More permissions need your OK again.** You turned on a plugin, and then a newer version arrives: an update from the 插件库, a zip or folder installed over it, or an edited `plugin.json`. If the newer version asks for any permission you did not allow, the plugin pauses. It is not started, answers no queries, is not offered to the AI and sends no notifications. Its card names the new permissions. Turn its switch on: the usual list of all its permissions appears, with the new ones marked. Allow them and it runs again; until you do, it stays off. The same or fewer permissions change nothing. Plugins installed with Win顺 come with its updates and stay trusted. Only permission names are compared: other `files:read` paths or `network:listen` ports are not asked about again.
+
+**Plugin updates.** With Automatic updates on (Settings → Advanced → Updates, the default), WinShun checks the plugins you installed against the Library list once a day; the list is signed and verified through `index.json.sig`. A newer version whose permissions, read paths and ports are unchanged is put in place at once when the plugin is not running; a running one is kept aside and swapped in at the next start (or press Update now in the Library). A version that asks for new permissions is never installed by itself: for a plugin that is on you get one tray notification per version, the number on the Plugins entry in Settings and the tray line "N plugin updates available…" lead to the Library filtered to updates, and Update and allow installs the new version and accepts its new permissions in one step, leaving the plugin on. Cancel keeps the installed version running, and that version is no longer counted or announced. The Library's Update all only does the updates that need no new permission. An unsigned or wrongly signed list, developer mode, and a copy in development (a link to its source) are only announced, never replaced.
 
 Install plugins only from sources you trust.
 
@@ -381,3 +395,11 @@ wsbench --mcp-host --plugins D:\plugins                                 # serve 
 - **Icons missing.** PNG / JPG / ICO inside the plugin folder only; no SVG.
 - **Keyword taken.** It clashed with a Web search keyword or another plugin's; the user's own wins and the card says so. Pick another.
 - **Can the plugin folder be changed?** A `normal` plugin runs as you and can change what you can — that is what developer mode's reload relies on. Use `strict` to keep a plugin from changing itself.
+
+### Web search host capability
+
+`webSearch: true` is reserved for official `winshun.web`: no `runtime`, an empty `commands` array, and sites from plugin settings. The host supplies URL handling, result rendering and a lazily loaded editor. An absent or disabled provider contributes no results or keywords and requests no suggestions. Legacy official URL manifests are adapted in memory without rewriting user files. Packaging sets `minWinShun` to the current host version.
+
+## Asynchronous C++ queries
+
+The C++ SDK supports `queryAsync(const Query&, std::function<void(Json)>)`. Its default calls `queryResult` synchronously. An asynchronous implementation snapshots settings and locale on the protocol thread, replies exactly once, handles `cancel(queryId)`, and joins workers in `shuttingDown()` and the derived destructor. A worker can send `partial()` results while the request is pending. The wire protocol is unchanged.

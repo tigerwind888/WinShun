@@ -28,6 +28,7 @@
 namespace ws {
 
 class SettingsEditor;
+class PluginUpdates;
 
 namespace plugin {
 class Host;
@@ -59,6 +60,7 @@ public:
         QVariantList settings; // [{key, type, title, hint, value, options, optionIndex}]
         bool hasReadme = false;
         bool settingsWindow = false; // the plugin draws its own settings window (manifest settingsWindow): 设置 on the card
+        bool webSearch = false;
         bool hasData = false;
         bool aiExpose = false; // the manifest offers its commands to the AI (ai.expose): the card shows the switch
         bool aiEnabled = true; // the switch: [Plugin.<id>] Ai=
@@ -89,6 +91,7 @@ public:
         AiExposeRole,
         AiEnabledRole,
         AiNoteRole,
+        WebSearchRole,
     };
 
     using QAbstractListModel::QAbstractListModel;
@@ -175,6 +178,7 @@ public:
     ~PluginSettings() override;
 
     void setHost(plugin::Host* host); // the app's; null for none
+    void setUpdates(PluginUpdates* updates); // the background updates: told what is changed here, asked before a plugin is
     void setLocale(const QString& locale);
     // Without a host: five made-up plugins in every state, for the
     // offscreen preview of the page (main.cpp --preview-plugins).
@@ -182,6 +186,7 @@ public:
 
     PluginListModel* list() { return &m_list; }
     int count() const { return m_list.rowCount(); }
+    Q_INVOKABLE QStringList searchTerms(int row) const;
     PluginLogModel* log() { return &m_log; }
     QVariantList logPlugins() const;
     QString logFilter() const { return m_log.filter(); }
@@ -207,6 +212,9 @@ public:
     // install(), for a package downloaded from the 插件库: it must be
     // `expectedId`, and is called `name` in what is said of it.
     void installFrom(const QString& path, const QString& expectedId, const QString& name, bool enableAfterInstall = false);
+    // 全部更新's: the package at `path` put over the installed `id` without a question, when the list's `version` is not
+    // wider than what the user allowed (plugin::updates::review). Empty on success, else why not.
+    QString installUpdate(const QString& path, const QString& id, const QString& version);
 
     // The switch: turning on asks first (confirmationNeeded) when the plugin
     // was never confirmed or asks for more permissions than it did.
@@ -225,6 +233,7 @@ public:
     Q_INVOKABLE void install(const QString& path); // installQuestion() when the id is installed already
     Q_INVOKABLE void confirmInstall();
     Q_INVOKABLE void cancelInstall();
+    Q_INVOKABLE void declineInstall(); // the answer no to 更新并允许: the installed version stays, and this one stops being counted
     // Removing: uninstallQuestion() first (whether to take its data too).
     Q_INVOKABLE void uninstall(const QString& id);
     Q_INVOKABLE void confirmUninstall(const QString& id, bool withData);
@@ -251,6 +260,7 @@ public:
     Q_INVOKABLE QString permissionsNote() const;
 
 signals:
+    void webSettingsRequested();
     void listChanged();
     void logPluginsChanged();
     void logFilterChanged();
@@ -275,13 +285,17 @@ private:
     PluginListModel::Card cardFor(const QString& id) const;
     void setMessage(const QString& message);
     void readMemory(); // the resident processes' working sets, into the status lines
-    void finishInstall(plugin::install::Candidate candidate, bool enableAfterInstall = false);
+    void finishInstall(plugin::install::Candidate candidate, bool enableAfterInstall = false, bool allow = false);
+    void releaseClaim(); // the plugin an install here has been changing
     QString pluginName(const QString& id) const;
     QVariantList permissionRows(const QString& id) const; // [{name, text, enforced, note}]
+    QVariantList permissionRows(const plugin::Manifest& manifest) const;
     void applyPluginSettings(const QString& id); // the host hears the values (secrets included)
 
     SettingsEditor* m_editor;
     QPointer<plugin::Host> m_host;
+    QPointer<PluginUpdates> m_updates;
+    QString m_installClaim; // the plugin of m_pendingInstall, or being installed
     QString m_locale = QStringLiteral("zh");
     QString m_userDir;
     QString m_dataRoot;
@@ -297,6 +311,8 @@ private:
     bool m_recordingHotkey = false;
     std::optional<plugin::install::Candidate> m_pendingInstall; // waiting for the user's answer
     bool m_pendingEnable = false;
+    bool m_pendingAllow = false; // ... and the question is 更新并允许 (a yes also confirms the new permissions)
+    bool m_pendingFromLibrary = false; // ... for a package the 插件库 downloaded: a no also stops that version being counted
     std::unique_ptr<Preview> m_preview; // loadPreview(): no host
     PluginGallery m_gallery {this};
 };

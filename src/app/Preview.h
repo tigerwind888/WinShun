@@ -13,6 +13,7 @@
 //     [--web-form] [--compact]: exercise adding/editing web shortcuts, focus,
 //     validation and scrolling at 920x720 or the minimum 760x420 window.
 //     Add --renderer d3d11 for the GPU path (default: software).
+//     --composited-frame shows Windows 10's square frame on any OS.
 //     --wsl-folders checks WSL folder identity and renders stopped/running
 //     cards; --english and --compact cover translation and minimum size.
 //     --backup-settings checks the real backup worker and success/failure
@@ -58,6 +59,10 @@
 //   src/capture-plugin/CapturePreview.h).
 //
 //   WinShun.exe --probe-runtime <folder> [--with-clipboard]
+//     --clipboard-shell-probe <SearchHost.exe|native> checks both clipboard
+//     hotkey handlers, foreground preservation and flyout avoidance. The fixture
+//     is tst_keyrouter.exe renamed SearchHost.exe; native uses the real Start
+//     menu. Neither mode writes the system clipboard or changes global hotkeys.
 //     [--runtime-plugins <folder>] [--settle-ms 3000] [--renderer d3d11]
 //     A separate production startup probe: real App::start, temporary profile,
 //     process-local HKCU redirection, no global shortcuts/service/shell setup.
@@ -66,12 +71,16 @@
 //     checks first-run gating and choices in the real guide. Capture cases use
 //     WINSHUN_PLUGIN_INDEX local fixtures; approval still uses PluginDialog.
 //     runtime.json exports resource and lifecycle checks. Plugin fixtures are
+//     --web-plugin-check checks the real optional web provider's keyword/name/
+//     pinyin search, disable/enable and uninstall/reinstall on this profile;
+//     --web-suggest-url <loopback URL with %s> adds a live suggestion fixture.
 //     copied to the profile, enabled there, and stopped on exit. The reusable
 //     tools/verify-plugin-recovery.ps1 drives recovery and permission cases,
 //     including native hotkey readiness, with local packages and test data.
 //     --folder-typing opens a test-owned Explorer window over temporary files,
 //     exercises the real App/QML search, avoidance and focus-preserving selection,
-//     checks cancellation and nested results, and closes only that fixture.
+//     checks same-count result replacements, cancellation and nested results,
+//     and closes only that fixture.
 //     --file-dialog-window <HWND> --file-dialog-pid <PID>
 //     --file-dialog-sample <fixture.blend> --file-dialog-state <observer.json>
 //     Opt-in real dialog-bar search/selection test against an isolated Blender

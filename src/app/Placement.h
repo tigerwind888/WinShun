@@ -115,7 +115,12 @@ public:
     void setContentSize(QSize size);
     void placeOn(QScreen* screen); // before showing the window there, at its spot
     // A temporary spot beside the file manager typed in; never saved as home.
-    void avoidNative(const QRect& window, QScreen* screen);
+    // `inside`: in its bottom right corner rather than beside it.
+    void avoidNative(const QRect& window, QScreen* screen, bool inside = false);
+    // Geometry supplied by the ordinary-process peer to its UIAccess display.
+    void placeDisplay(const QRect& geometry, int room, bool above);
+    // A user move in the display peer; retain the usual temporary/home rules.
+    void adoptDisplayGeometry(const QRect& geometry);
     // Before showing it, by `box` (logical pixels, on `screen`; none: the
     // screen at the box's centre).
     void attach(const QRect& box, QScreen* screen = nullptr);
@@ -142,11 +147,6 @@ public:
     void slideOut(std::function<void()> done);
     bool sliding() const { return m_slide.state() == QAbstractAnimation::Running; }
     QPointF contentShift() const { return m_contentShift; }
-    // For what goes with the window (WindowLogo), after each step of a slide
-    // (slideStepped): how far it is off its place (physical pixels), and how
-    // faded.
-    QPoint slideOffset() const { return m_offset; }
-    qreal slideOpacity() const { return m_opacity; }
     static bool animationsOn(); // the system's "animation effects"
 
     // The search panel (Launcher::panel): the window as large as its user
@@ -165,6 +165,9 @@ public:
 
     // Glides back to the home spot and stays there from now on.
     Q_INVOKABLE void moveHome();
+    // Centre on the current monitor's work area, preserving size and content.
+    // Also detaches temporary taskbar/file-manager placement; saved per mode.
+    Q_INVOKABLE void centerOnScreen();
     // Its rows and type changed size (界面大小): a window up now (the
     // clipboard, pinned) is fitted on its screen again.
     void resized();
@@ -198,7 +201,6 @@ signals:
     void aboveChanged();
     void anchorWidthChanged();
     void contentShiftChanged();
-    void slideStepped();
     void boxWidthChanged();
     void sizingChanged();
     void widthReset(); // resetWidth() changed it
@@ -277,6 +279,7 @@ private:
     int m_anchorWidth = 0;
     std::optional<QRect> m_box; // attached to it
     std::optional<QRect> m_avoid; // native bounds of the file manager typed in
+    bool m_avoidInside = false; // the corner of m_avoid, not beside it
     int m_boxGap = 0; // ... this far off it, logical pixels
     std::optional<TaskbarBox> m_taskbar; // over it
     std::optional<taskbar::Spot> m_taskbarSpot; // ... as attachTaskbar was given it

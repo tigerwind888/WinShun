@@ -115,8 +115,8 @@ class Launcher : public QObject {
     Q_PROPERTY(QString numberKeys READ numberKeys NOTIFY resultOptionsChanged FINAL)
     Q_PROPERTY(QString numberHints READ numberHints NOTIFY resultOptionsChanged FINAL)
     Q_PROPERTY(QString previewHotkey READ previewHotkey NOTIFY resultOptionsChanged FINAL)
-    // Bits 1 << n of the digits n left to another program's global hotkey
-    // (numberkeys::heldMask): their rows show the chord struck through.
+    // Bits 1 << n of the digits n left to one of Win顺's own shortcuts
+    // (App::ownNumberDigits): their rows show the chord struck through.
     Q_PROPERTY(int numberKeysLeft READ numberKeysLeft NOTIFY resultOptionsChanged FINAL)
     // Opened over Win顺's search box on the taskbar (taskbar::SearchBox):
     // what is typed shows there, its own field is out of sight (SearchBar.qml
@@ -371,7 +371,7 @@ public:
     void setFolderTypingOnly(bool only);
     QString typingFolder() const;
     bool typingFolderOnly() const { return !m_typingPrefix.isEmpty() && m_typingOnly; }
-    // Ctrl+D, or the caption's or hint's link: this time only the folder
+    // Ctrl+Shift+D, or the caption's or hint's link: this time only the folder
     // typed in, or its rows first and then the rest (not the setting).
     // False when the box is not for a folder typed in (nothing to switch).
     Q_INVOKABLE bool switchTypingFolder();
@@ -606,6 +606,11 @@ public:
     // launcher. closePreview: true when there was one to close.
     void setPreview(FilePreview* preview);
     Q_INVOKABLE void togglePreview(int row);
+    // The mouse rests on a row: an open preview shows its file, the current
+    // row keeps the selection (the next move of it shows its file again).
+    Q_INVOKABLE void previewHover(int row);
+    // Ctrl+C with text picked in the preview: true when it was copied.
+    Q_INVOKABLE bool copyPreviewSelection();
     Q_INVOKABLE bool closePreview();
     // A folder opened by Enter or a click (one row, not as administrator) is
     // offered here first: true when it was taken there instead of a new
@@ -633,9 +638,10 @@ public:
     bool regexMode() const { return m_regexMode; }
     void setRegexMode(bool on);
     Q_INVOKABLE void toggleRegexMode(); // Ctrl+R: says so in the footer
-    // The search icon clicked (not dragged, WindowFrame::handleClicked):
+    // The search logo left-clicked (not dragged, WindowFrame::handleClicked):
     // the settings window (settingsRequested).
     Q_INVOKABLE void openSettings() { emit settingsRequested(); }
+    Q_INVOKABLE void openShortcutSettings() { emit shortcutSettingsRequested(); } // the shortcut panel's last row
     int dateChoice() const { return m_dateChoice; }
     QString dateFrom() const { return m_dateFrom; }
     QString dateTo() const { return m_dateTo; }
@@ -718,6 +724,7 @@ signals:
     void panelToggleRequested();
     void pinnedChanged();
     void settingsRequested();
+    void shortcutSettingsRequested(); // the settings' overview of all shortcuts
     void folderSettingsRequested(); // the settings' page of the chosen folders
     void shareSettingsRequested(); // the settings' section of network and WSL folders (GitHub #114)
     void folderAddRequested(const QString& path); // a folder not indexed, to be (the app adds it as the settings do)

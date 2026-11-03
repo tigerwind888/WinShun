@@ -1,5 +1,7 @@
 #include "LongCapture.h"
+#include "IdleGraphics.h"
 
+#include "CaptureExclusion.h"
 #include "DiagnosticLog.h"
 #include "Geometry.h" // placeBeside
 #include "Grabber.h"
@@ -110,11 +112,8 @@ public:
         for (HWND& strip : m_strips) {
             strip = ::CreateWindowExW(WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TOPMOST,
                 kBorderClass, L"", WS_POPUP, 0, 0, 1, 1, nullptr, nullptr, ::GetModuleHandleW(nullptr), nullptr);
-            if (strip) {
+            if (strip)
                 ::SetWindowLongPtrW(strip, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(owner));
-                // Never in a picture of the screen (it lies outside the region besides).
-                ::SetWindowDisplayAffinity(strip, WDA_EXCLUDEFROMCAPTURE);
-            }
         }
     }
 
@@ -153,6 +152,17 @@ public:
         for (HWND strip : m_strips)
             if (strip)
                 ::ShowWindow(strip, SW_HIDE);
+    }
+
+    // Outside the region, except where it meets the screen's edge: there
+    // longCaptureBorder keeps a strip on the screen, inside the selection,
+    // and it would be stitched in (a maximized window: a line down the
+    // picture). Such a strip is left out of the frames; it has no shadow.
+    void exclude(const QRect& region, bool running)
+    {
+        for (HWND strip : m_strips)
+            if (strip && (!running || ::IsWindowVisible(strip)))
+                excludeFromCapture(strip, region, running, 0);
     }
 
 private:
@@ -312,22 +322,46 @@ QQuickWindow* LongCapture::panel()
         delete object;
         return nullptr;
     }
+    releaseIdleGraphics(window);
     window->create();
     win::styleFramelessWindow(window, false);
-    // Never in a picture of the screen, never the window with the keys.
+    win::disableTransitions(window); // no fade-out for the engine's last frames to catch
+    // Left out of the frames only while it is in them (updateExclusion).
     const HWND hwnd = reinterpret_cast<HWND>(window->winId());
-    ::SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE);
     ::SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ::GetWindowLongPtrW(hwnd, GWL_EXSTYLE) | WS_EX_NOACTIVATE);
     m_panel = window;
     m_previewWindow = window->findChild<QQuickWindow*>(u"longCapturePreview"_s);
+    for (QQuickWindow* shown : {m_panel.data(), m_previewWindow.data()}) {
+        if (!shown)
+            continue;
+        for (auto changed : {&QWindow::xChanged, &QWindow::yChanged, &QWindow::widthChanged, &QWindow::heightChanged})
+            connect(shown, changed, this, &LongCapture::updateExclusion);
+        connect(shown, &QWindow::visibleChanged, this, &LongCapture::updateExclusion);
+    }
     if (m_previewWindow) {
+        releaseIdleGraphics(m_previewWindow);
         m_previewWindow->create();
         win::styleFramelessWindow(m_previewWindow, false);
+        win::disableTransitions(m_previewWindow);
         const HWND preview = reinterpret_cast<HWND>(m_previewWindow->winId());
-        ::SetWindowDisplayAffinity(preview, WDA_EXCLUDEFROMCAPTURE);
         ::SetWindowLongPtrW(preview, GWL_EXSTYLE, ::GetWindowLongPtrW(preview, GWL_EXSTYLE) | WS_EX_NOACTIVATE);
     }
     return window;
+}
+
+// The panel, the preview and the border are left out of the frames while the
+// capture runs and they lie over its region; otherwise they show in a
+// screenshot. Running until ended(): after 完成 the engine still takes frames
+// (up to kMoveWaitMs), so a window hidden meanwhile keeps its setting until then.
+void LongCapture::updateExclusion()
+{
+    const bool running = m_run != nullptr;
+    const QRect region = running ? m_run->region : QRect();
+    for (QQuickWindow* window : {m_panel.data(), m_previewWindow.data()})
+        if (window && (!running || window->isVisible()))
+            excludeFromCapture(reinterpret_cast<HWND>(window->winId()), region, running);
+    if (m_border)
+        m_border->exclude(region, running);
 }
 
 // Keep the controls by the original selection, as the capture toolbar was.
@@ -421,6 +455,7 @@ void LongCapture::start(const QRect& wanted, HMONITOR monitor, double dpr)
     m_border->show(region, toRect(info.rcMonitor), dpr, window->property("edgeColor").value<QColor>());
     placePanel(region, monitor);
     window->show();
+    updateExclusion();
     // Explicitly raise the control strip without taking the target's focus.
     ::SetWindowPos(reinterpret_cast<HWND>(window->winId()), HWND_TOPMOST, 0, 0, 0, 0,
         SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
@@ -527,10 +562,7 @@ void LongCapture::wrapUp()
     m_copiedTimer.stop();
     m_preview = QImage();
     emit previewChanged();
-    if (m_panel)
-        m_panel->releaseResources(); // hidden: what it drew with goes (as the editing window's)
-    if (m_previewWindow)
-        m_previewWindow->releaseResources();
+    // Both windows release their scene graphs after the idle interval.
     if (!m_run)
         return;
     QString text;
@@ -555,6 +587,7 @@ void LongCapture::ended(const QImage& picture, const QString& how)
     const QPoint origin = m_run->region.topLeft();
     wrapUp();
     m_run.reset();
+    updateExclusion(); // hidden by now
     qInfo().noquote() << u"Long screenshot: %1, %2x%3"_s.arg(how).arg(picture.width()).arg(picture.height());
     emit changed();
     if (!picture.isNull() && m_hooks.done)

@@ -435,9 +435,10 @@ void SettingsEditor::setClipboardQuickPasteError(const QString& error)
 namespace {
 
 // What the user should know of the number keys `keys` ("ctrl", "alt"):
-// those another program holds as global hotkeys, and those that are one of
-// Win顺's own shortcuts. Win顺 leaves both alone (numberkeys::heldMask,
-// KeyRouter::heldAsHotkey), and their rows show the chord struck through.
+// those another program holds as global hotkeys, which are Win顺's while its
+// window is in front (numberkeys::Hook, KeyRouter), and those that are one
+// of Win顺's own shortcuts, which stay that (their rows show the chord
+// struck through).
 QString describeNumberKeys(const QString& keys, const Settings& settings)
 {
     if (keys != u"ctrl" && keys != u"alt")
@@ -460,7 +461,7 @@ QString describeNumberKeys(const QString& keys, const Settings& settings)
     }
     QStringList parts;
     if (!others.isEmpty())
-        parts.append(SettingsEditor::tr("%1 是别的程序的快捷键，留给它用，对应的行不标序号。")
+        parts.append(SettingsEditor::tr("%1 也是别的程序的快捷键：Win顺 的窗口在前面时按它选这里的行，其余时候仍归那个程序。")
                          .arg(others.join(SettingsEditor::tr("、"))));
     if (!own.isEmpty())
         parts.append(SettingsEditor::tr("%1 是你给 Win顺 设的快捷键，按它仍是打开或关闭窗口，对应的行不标序号。")
@@ -841,14 +842,6 @@ void SettingsEditor::setTaskbarIcon(const QString& style)
     commit();
 }
 
-void SettingsEditor::setSearchLogo(bool on)
-{
-    if (m_settings.searchLogo == on)
-        return;
-    m_settings.searchLogo = on;
-    commit();
-}
-
 void SettingsEditor::setUiSize(const QString& size)
 {
     if (m_settings.uiSize == size || (size != u"compact" && size != u"standard" && size != u"roomy"))
@@ -1138,6 +1131,14 @@ void SettingsEditor::setOpusTyping(bool on)
     commit();
 }
 
+void SettingsEditor::setOpusTypingScope(const QString& scope)
+{
+    if (m_settings.opusTypingScope == scope || (scope != u"folder" && scope != u"all"))
+        return;
+    m_settings.opusTypingScope = scope;
+    commit();
+}
+
 void SettingsEditor::setFolderTyping(const QString& how)
 {
     if (m_settings.folderTyping == how || (how != u"first" && how != u"only"))
@@ -1261,7 +1262,7 @@ QString SettingsEditor::saveCaptureKeyword(const QString& keyword)
         return tr("请填写关键词");
     if (!isValidWebKeyword(word))
         return tr("关键词里不能有空格或引号");
-    const KeywordClaim claim = keywordClaim(word, m_settings.webShortcuts, -1, {},
+    const KeywordClaim claim = keywordClaim(word, m_settings.webShortcutsInUse(), -1, {},
         [this](const QString& keyword) { return m_favorites->keywordOwner(keyword); });
     if (claim.by == KeywordClaim::By::WebShortcut)
         return tr("关键词“%1”已经给了网页搜索“%2”").arg(word, claim.owner);
@@ -1274,12 +1275,14 @@ QString SettingsEditor::saveCaptureKeyword(const QString& keyword)
     return {};
 }
 
-void SettingsEditor::setScreenshotHistory(bool on)
+void SettingsEditor::setScreenshotPlugin(bool installed, bool on, const QStringList& hotkeys)
 {
-    if (m_screenshotHistory == on)
+    if (m_screenshotInstalled == installed && m_screenshotHistory == on && m_screenshotHotkeys == hotkeys)
         return;
+    m_screenshotInstalled = installed;
     m_screenshotHistory = on;
-    emit screenshotHistoryChanged();
+    m_screenshotHotkeys = hotkeys;
+    emit screenshotPluginChanged();
 }
 
 QString SettingsEditor::captureKeywordTaken(const QString& keyword) const
@@ -1488,6 +1491,15 @@ void SettingsEditor::setClipboardKeepPlace(bool on)
     if (m_settings.clipboardKeepPlace == on)
         return;
     m_settings.clipboardKeepPlace = on;
+    commit();
+}
+
+void SettingsEditor::setClipboardUiSize(const QString& size)
+{
+    if (m_settings.clipboardUiSize == size
+        || (size != u"follow" && size != u"dense" && size != u"compact" && size != u"standard" && size != u"roomy"))
+        return;
+    m_settings.clipboardUiSize = size;
     commit();
 }
 

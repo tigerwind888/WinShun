@@ -267,8 +267,17 @@ std::vector<Entry> buildCatalog()
                     "Off by default and independent of Explorer typing. Punctuation, shortcuts, menus and edit fields "
                     "stay in Opus."},
         &Settings::opusTyping));
+    {
+        Entry& e = add(choice({"Launcher/OpusTypingScope", QT_TRANSLATE_NOOP("AiSettings", "Directory Opus 里打字搜索的范围"),
+                                  "files_and_dialogs", 2,
+                                  "What typing in a Directory Opus file display searches: that tab's folder (the words go after its path, the folder's results first), or the whole PC with nothing before the words."},
+            &Settings::opusTypingScope,
+            {{u"folder"_s, u"the tab's folder first"_s, QT_TRANSLATE_NOOP("AiSettings", "当前文件夹")},
+                {u"all"_s, u"the whole PC, no folder before the words"_s, QT_TRANSLATE_NOOP("AiSettings", "整个电脑")}}));
+        e.rowTitle = QT_TRANSLATE_NOOP("AiSettings", "在 Directory Opus 里搜索的范围");
+    }
     add(choice({"Launcher/FolderTyping", QT_TRANSLATE_NOOP("AiSettings", "在文件夹里打字时"), "files_and_dialogs", 2,
-                   "What typing in a File Explorer or Directory Opus folder window lists. The folder and its subfolders come first and the rest of the PC under them (like Listary), or only that folder. Ctrl+D switches between the two for one search."},
+                   "What typing in a File Explorer or Directory Opus folder window lists. The folder and its subfolders come first and the rest of the PC under them (like Listary), or only that folder. Ctrl+Shift+D switches between the two for one search."},
         &Settings::folderTyping,
         {{u"first"_s, u"that folder's results first, then everywhere else"_s, QT_TRANSLATE_NOOP("AiSettings", "当前文件夹优先")},
             {u"only"_s, u"only that folder and its subfolders"_s, QT_TRANSLATE_NOOP("AiSettings", "只搜当前文件夹")}}));
@@ -372,9 +381,6 @@ std::vector<Entry> buildCatalog()
         &Settings::taskbarIcon,
         {{u"color"_s, u"in colour"_s, QT_TRANSLATE_NOOP("AiSettings", "彩色")},
             {u"mono"_s, u"one colour, black or white as the taskbar is"_s, QT_TRANSLATE_NOOP("AiSettings", "单色")}}));
-    add(boolean({"Appearance/SearchLogo", QT_TRANSLATE_NOOP("AiSettings", "搜索框显示 Logo"), "appearance", -1,
-        "The logo peeking out from behind the search box, the clipboard window and the bar by file dialogs."},
-        &Settings::searchLogo));
     add(choice({"Appearance/Language", QT_TRANSLATE_NOOP("AiSettings", "语言"), "appearance", -1, "The language Win顺 is shown in."},
         &Settings::language,
         {{u"system"_s, u"the language Windows is shown in"_s, QT_TRANSLATE_NOOP("AiSettings", "跟随系统")},
@@ -583,7 +589,6 @@ std::vector<Entry> buildCatalog()
         Entry e = base({"WebSearch/Shortcuts", QT_TRANSLATE_NOOP("AiSettings", "网页搜索关键词"), "web", -1,
                            "Keywords that open or search a web page from the search box: 'gh' opens GitHub, 'gh WinShun' searches it. Change with add ({keyword, name?, url, home?}; url is an http(s) address, %s where the searched words go) or remove (keywords). A keyword another shortcut or a favorite has is refused."},
             Type::WebShortcuts);
-        e.rowTitle = QT_TRANSLATE_NOOP("AiSettings", "关键词");
         e.access = Access::AlwaysAsk;
         e.field = &Settings::webShortcuts;
         add(std::move(e));
@@ -602,6 +607,14 @@ std::vector<Entry> buildCatalog()
     add(boolean({"Clipboard/KeepPlace", QT_TRANSLATE_NOOP("AiSettings", "粘贴后保持位置"), "clipboard", 0,
                     "Pasting an entry from the history leaves it where it is in the list; off: it moves to the top."},
         &Settings::clipboardKeepPlace));
+    add(choice({"Clipboard/UiSize", QT_TRANSLATE_NOOP("AiSettings", "剪贴板大小"), "clipboard", 0,
+                   "Type and row heights of the clipboard window alone: follows the interface size, or its own (dense: one line per entry)."},
+        &Settings::clipboardUiSize,
+        {{u"follow"_s, u"the same as the interface size"_s, QT_TRANSLATE_NOOP("AiSettings", "跟随界面大小")},
+            {u"dense"_s, u"one small line per entry"_s, QT_TRANSLATE_NOOP("AiSettings", "密集")},
+            {u"compact"_s, u"smaller type and rows"_s, QT_TRANSLATE_NOOP("AiSettings", "紧凑")},
+            {u"standard"_s, u"the usual size"_s, QT_TRANSLATE_NOOP("AiSettings", "标准")},
+            {u"roomy"_s, u"larger type and rows"_s, QT_TRANSLATE_NOOP("AiSettings", "宽松")}}));
     add(boolean({"Clipboard/LargePictures", QT_TRANSLATE_NOOP("AiSettings", "大图片缩略图"), "clipboard", 0,
                     "Pictures on taller rows, thumbnails large enough to make out."},
         &Settings::clipboardLargePictures));
@@ -674,7 +687,7 @@ std::vector<Entry> buildCatalog()
                 return u"The keyword must not have spaces or quotes."_s;
             if (const QString problem = textProblem(value, kMaxNameChars, u"The keyword"_s); !problem.isEmpty())
                 return problem;
-            const KeywordClaim claim = keywordClaim(value, s.settings.webShortcuts, -1, {}, env.keywordOwner);
+            const KeywordClaim claim = keywordClaim(value, s.settings.webShortcutsInUse(), -1, {}, env.keywordOwner);
             if (claim.by == KeywordClaim::By::WebShortcut)
                 return u"The keyword '%1' is already the web search '%2'."_s.arg(value, claim.owner);
             if (claim.by == KeywordClaim::By::Favorite)
@@ -708,8 +721,8 @@ std::vector<Entry> buildCatalog()
     }
 
     // ---- 高级 ----
-    add(boolean({"Update/Automatic", QT_TRANSLATE_NOOP("AiSettings", "自动检查更新"), "advanced", -1,
-                    "Looks for new versions of Win顺 on GitHub now and then."},
+    add(boolean({"Update/Automatic", QT_TRANSLATE_NOOP("AiSettings", "自动更新"), "advanced", -1,
+                    "Checks for new versions of Win顺 now and then, and installs plugin updates that ask for no new permissions."},
         &Settings::autoUpdate));
     {
         add(choice({"Launcher/Renderer", QT_TRANSLATE_NOOP("AiSettings", "界面绘制方式"), "advanced", -1,
@@ -718,6 +731,18 @@ std::vector<Entry> buildCatalog()
             {{u"software"_s, u"drawn by the processor, less memory"_s, QT_TRANSLATE_NOOP("AiSettings", "处理器绘制")},
                 {u"d3d11"_s, u"drawn by the graphics card, smoother"_s, QT_TRANSLATE_NOOP("AiSettings", "显卡加速")}},
             Effect::AppRestart));
+    }
+
+    // Rows the settings window has merged: found by the merged row's title.
+    for (Entry& e : t) {
+        if (e.key == u"Taskbar/SearchBox")
+            e.rowTitle = QT_TRANSLATE_NOOP("AiSettings", "任务栏上的 Win顺");
+        else if (e.key == u"Launcher/FolderMenuExplorer" || e.key == u"Launcher/FolderMenuDesktop" || e.key == u"Launcher/FolderMenuMiddle")
+            e.rowTitle = QT_TRANSLATE_NOOP("AiSettings", "触发位置与方式");
+        else if (e.key == u"Launcher/FolderMenuFavorites" || e.key == u"Launcher/FolderMenuRecent" || e.key == u"Launcher/FolderMenuWindows")
+            e.rowTitle = QT_TRANSLATE_NOOP("AiSettings", "菜单里列出的内容");
+        else if (e.key == u"Results/ShowModifiedTime")
+            e.rowTitle = QT_TRANSLATE_NOOP("AiSettings", "较早的日期也显示具体时间");
     }
 
     // ---- never seen: paths and shares (what leaves the PC), AI's own switches, plugins, bookkeeping ----
@@ -1387,11 +1412,11 @@ const std::vector<Section>& sections()
         {u"scope"_s, QT_TRANSLATE_NOOP("AiSettings", "搜索范围"), 2},
         {u"results"_s, QT_TRANSLATE_NOOP("AiSettings", "结果列表"), 3},
         {u"content"_s, QT_TRANSLATE_NOOP("AiSettings", "文件内容搜索"), 4},
-        {u"web"_s, QT_TRANSLATE_NOOP("AiSettings", "网页搜索"), 5},
-        {u"favorites"_s, QT_TRANSLATE_NOOP("AiSettings", "收藏夹"), 6},
-        {u"clipboard"_s, QT_TRANSLATE_NOOP("AiSettings", "剪贴板"), 7},
-        {u"advanced"_s, QT_TRANSLATE_NOOP("AiSettings", "高级"), 8},
-        {u"paste_file"_s, QT_TRANSLATE_NOOP("AiSettings", "粘贴为文件"), 10},
+        {u"web"_s, QT_TRANSLATE_NOOP("AiSettings", "网页搜索"), 9},
+        {u"favorites"_s, QT_TRANSLATE_NOOP("AiSettings", "收藏夹"), 5},
+        {u"clipboard"_s, QT_TRANSLATE_NOOP("AiSettings", "剪贴板"), 6},
+        {u"advanced"_s, QT_TRANSLATE_NOOP("AiSettings", "高级"), 7},
+        {u"paste_file"_s, QT_TRANSLATE_NOOP("AiSettings", "粘贴为文件"), 9},
     };
     return all;
 }

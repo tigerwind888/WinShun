@@ -136,10 +136,11 @@ Merge::Merge(RowSink& sink, const Catalog& catalog)
 {
 }
 
-void Merge::begin(std::uint64_t queryId, const QString& text, const QString& keywordPlugin, const QString& keywordCommand)
+void Merge::begin(std::uint64_t queryId, const QString& text, const QString& keywordPlugin, const QString& keywordCommand, bool contentOnly)
 {
     m_queryId = queryId;
     m_text = text;
+    m_contentOnly = contentOnly;
     m_keywordPlugin = keywordPlugin;
     m_keywordCommand = keywordCommand;
     m_namesReady = keywordMode(); // no name search to wait for
@@ -152,7 +153,7 @@ void Merge::begin(std::uint64_t queryId, const QString& text, const QString& key
 void Merge::namesShown()
 {
     m_namesReady = true;
-    if (!keywordMode())
+    if (!keywordMode() && !m_contentOnly)
         placeHint();
     for (auto it = m_held.begin(); it != m_held.end();) {
         if (it->second.complete) {
@@ -161,6 +162,38 @@ void Merge::namesShown()
         } else
             ++it;
     }
+}
+
+// A content provider's complete answer with a row apply() keeps: one that
+// opens a file (it may still turn out a file already listed).
+bool Merge::answerHeld() const
+{
+    return std::ranges::any_of(m_held, [this](const auto& held) {
+        const Batch& batch = held.second;
+        if (!batch.complete)
+            return false;
+        const Entry* entry = m_catalog.find(batch.pluginId);
+        const Command* command = entry && entry->manifest ? entry->manifest->command(batch.commandId) : nullptr;
+        return command && command->contentSearch
+            && std::ranges::any_of(batch.items, [](const Item& item) { return item.open.kind == Open::Kind::Path; });
+    });
+}
+
+bool Merge::contentRow(const SearchResult& row) const
+{
+    if (!row.isPlugin())
+        return false;
+    const Entry* entry = m_catalog.find(row.plugin->pluginId);
+    const Command* command = entry && entry->manifest ? entry->manifest->command(row.plugin->commandId) : nullptr;
+    return command && command->contentSearch;
+}
+
+int Merge::contentEnd() const
+{
+    int end = m_sink.count();
+    while (end > 0 && contentRow(m_sink.row(end - 1)))
+        --end;
+    return end;
 }
 
 // A list command's keyword typed alone: a row offering it, first and
@@ -312,6 +345,19 @@ void Merge::apply(const Batch& batch)
     if (!command)
         return;
     SearchResults rows = rowsOf(*entry, *command, batch.items, true);
+    const bool content = command->contentSearch;
+    if (content) {
+        rows.removeIf([&](const SearchResult& row) {
+            if (!row.plugin || row.plugin->openKind != PluginRow::OpenKind::Path)
+                return true;
+            for (int i = 0; i < m_sink.count(); ++i) {
+                const SearchResult& other = m_sink.row(i);
+                if (!other.isPlugin() && other.path.compare(row.plugin->openTarget, Qt::CaseInsensitive) == 0)
+                    return true;
+            }
+            return false;
+        });
+    }
 
     // The quota: this plugin's other commands and the other plugins count.
     int samePlugin = 0;
@@ -321,6 +367,8 @@ void Merge::apply(const Batch& batch)
         const SearchResult& r = m_sink.row(i);
         if (!r.isPlugin() || isHintRow(r))
             continue; // the hint row is nobody's answer: outside the quota
+        if (!content && contentRow(r))
+            continue;
         if (r.plugin->pluginId != batch.pluginId)
             ++others;
         else if (r.plugin->commandId != batch.commandId)
@@ -328,7 +376,7 @@ void Merge::apply(const Batch& batch)
         else
             existing.emplace(r.path, i);
     }
-    const int cap = std::max(0, std::min(kPerPlugin - samePlugin, kTotal - others - samePlugin));
+    const int cap = content ? kMaxItems : std::max(0, std::min(kPerPlugin - samePlugin, kTotal - others - samePlugin));
     const bool cut = rows.size() > cap;
     rows.resize(std::min<qsizetype>(rows.size(), cap));
     if (cut) {
@@ -363,7 +411,7 @@ void Merge::apply(const Batch& batch)
     for (const SearchResult& r : rows) {
         if (kept.contains(r.path))
             continue;
-        const int at = placeFor(r.score);
+        const int at = content ? m_sink.count() : placeFor(r.score);
         m_betterFirstRow = m_betterFirstRow || (at == 0 && m_sink.currentRow() == 0);
         m_sink.insert(at, r);
     }

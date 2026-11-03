@@ -2,6 +2,21 @@
 <!DOCTYPE TS>
 <TS version="2.1" language="en" sourcelanguage="zh_CN">
 <context>
+    <name>CaptureSaveButton</name>
+    <message>
+        <source>另存为…（Ctrl+S）</source>
+        <translation>Save as… (Ctrl+S)</translation>
+    </message>
+    <message>
+        <source>更多保存选项</source>
+        <translation>More save options</translation>
+    </message>
+    <message>
+        <source>保存到旧路径</source>
+        <translation>Save to previous folder</translation>
+    </message>
+</context>
+<context>
     <name>AnnotateLayer</name>
     <message>
         <source>再按一次关掉 · [ ] 改粗细 · H 隐藏工具条</source>
@@ -255,6 +270,26 @@
 </context>
 <context>
     <name>AnnotateToolbar</name>
+    <message>
+        <source>另存为：选择保存位置</source>
+        <translation>Save as: choose where to save</translation>
+    </message>
+    <message>
+        <source>1 E 3 L P M T N B 或 1–9</source>
+        <translation>1 E 3 L P M T N B or 1–9</translation>
+    </message>
+    <message>
+        <source>每次移动选区 1 个物理像素；未框选时微调光标</source>
+        <translation>Move the area by 1 physical pixel; without a selection, fine-tune the pointer</translation>
+    </message>
+    <message>
+        <source>调整选区宽高，每次 1 个物理像素</source>
+        <translation>Resize the area by 1 physical pixel</translation>
+    </message>
+    <message>
+        <source>恢复最近选区：向前 / 向后循环，最多 10 个；使用当前画面</source>
+        <translation>Restore recent areas: cycle older / newer, up to 10; use the current picture</translation>
+    </message>
     <message>
         <source>按住拖动工具条</source>
         <translation>Drag to move the toolbar</translation>
@@ -990,6 +1025,22 @@
 <context>
     <name>CaptureOverlay</name>
     <message>
+        <source>R 最近选区</source>
+        <translation>R recent areas</translation>
+    </message>
+    <message>
+        <source>R 最近选区 %1/%2</source>
+        <translation>R recent area %1/%2</translation>
+    </message>
+    <message>
+        <source>WASD 移动 1 px · Shift+WASD 调整大小 · %1</source>
+        <translation>WASD move 1 px · Shift+WASD resize · %1</translation>
+    </message>
+    <message>
+        <source>WASD 微调光标 · %1</source>
+        <translation>WASD fine-tune pointer · %1</translation>
+    </message>
+    <message>
         <source>C 复制 · Shift 换格式</source>
         <translation>C copies · Shift changes the format</translation>
     </message>
@@ -1053,6 +1104,10 @@
     <message>
         <source>未设置</source>
         <translation>Not set</translation>
+    </message>
+    <message>
+        <source>点击设置快捷键</source>
+        <translation>Click to set hotkey</translation>
     </message>
 </context>
 <context>
@@ -1232,6 +1287,26 @@ The unfinished recording is kept at: %1</translation>
 </context>
 <context>
     <name>RecordingPanel</name>
+    <message>
+        <source>录屏</source>
+        <translation>Screen recording</translation>
+    </message>
+    <message>
+        <source>选区</source>
+        <translation>Area</translation>
+    </message>
+    <message>
+        <source>全屏</source>
+        <translation>Full screen</translation>
+    </message>
+    <message>
+        <source>录制原来选择的区域</source>
+        <translation>Record the originally selected area</translation>
+    </message>
+    <message>
+        <source>录制选区所在的整个屏幕，包含任务栏</source>
+        <translation>Record the entire screen containing the selection, including the taskbar</translation>
+    </message>
     <message>
         <source>点击高亮：%1</source>
         <translation>Click highlight: %1</translation>
@@ -1514,6 +1589,14 @@ The unfinished recording is kept at: %1</translation>
 <context>
     <name>ws::capture::Capture</name>
     <message>
+        <source>保存截图</source>
+        <translation>Save screenshot</translation>
+    </message>
+    <message>
+        <source>PNG 图片</source>
+        <translation>PNG image</translation>
+    </message>
+    <message>
         <source>找不到“屏幕截图”文件夹</source>
         <translation>The Screenshots folder was not found</translation>
     </message>
@@ -1598,6 +1681,18 @@ The unfinished recording is kept at: %1</translation>
 </context>
 <context>
     <name>ws::capture::CaptureSession</name>
+    <message>
+        <source>先完成或放弃标注，再恢复选区</source>
+        <translation>Finish or discard annotations before restoring an area</translation>
+    </message>
+    <message>
+        <source>还没有最近选区，完成一次截图后即可恢复</source>
+        <translation>No recent area yet. Complete a capture to remember its area</translation>
+    </message>
+    <message>
+        <source>最近选区所在的显示器已断开</source>
+        <translation>The monitors for recent areas are disconnected</translation>
+    </message>
     <message>
         <source>还没有上次的选区</source>
         <translation>No last selection yet</translation>
@@ -1807,6 +1902,14 @@ click here to cancel</translation>
 </context>
 <context>
     <name>ws::capture::Recorder</name>
+    <message>
+        <source>录制屏幕不可用，请重新选择录屏区域。</source>
+        <translation>The recording screen is unavailable. Select a recording area again.</translation>
+    </message>
+    <message>
+        <source>屏幕布局已改变，请重新选择录屏区域。</source>
+        <translation>The screen layout has changed. Select a recording area again.</translation>
+    </message>
     <message>
         <source>无法启用点击高亮，请关闭该选项后重试。</source>
         <translation>Could not enable click highlights. Turn off this option and try again.</translation>

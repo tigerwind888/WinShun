@@ -201,24 +201,32 @@ struct StdHandles {
 // Starts `command` with the desktop shell's own token: the user's normal
 // rights and environment. Invalid when there is no shell to take them from.
 // `io`: the program's standard handles, and no console window (a console
-// program started from a program of ours would open one).
-win32::UniqueHandle startWithShellToken(
-    std::wstring command, const std::wstring& dir, DWORD flags = 0, const StdHandles* io = nullptr)
+// program started from a program of ours would open one). `failure`: which
+// step failed, for the log (GitHub #172).
+win32::UniqueHandle startWithShellToken(std::wstring command, const std::wstring& dir, DWORD flags = 0,
+    const StdHandles* io = nullptr, StartFailure* failure = nullptr)
 {
+    const auto failed = [failure](const char* step, DWORD error) {
+        if (failure)
+            *failure = {step, error};
+        return win32::UniqueHandle();
+    };
     DWORD pid = 0;
     const HWND shellWindow = ::GetShellWindow();
     if (!shellWindow || !::GetWindowThreadProcessId(shellWindow, &pid) || pid == 0)
-        return {};
+        return failed("no desktop shell", 0);
     const win32::UniqueHandle process(::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid));
+    if (!process.valid())
+        return failed("OpenProcess (shell)", ::GetLastError());
     HANDLE shellToken = nullptr;
-    if (!process.valid() || !::OpenProcessToken(process.get(), TOKEN_DUPLICATE, &shellToken))
-        return {};
+    if (!::OpenProcessToken(process.get(), TOKEN_DUPLICATE, &shellToken))
+        return failed("OpenProcessToken (shell)", ::GetLastError());
     const win32::UniqueHandle source(shellToken);
     HANDLE primaryToken = nullptr;
     if (!::DuplicateTokenEx(source.get(),
             TOKEN_QUERY | TOKEN_DUPLICATE | TOKEN_ASSIGN_PRIMARY | TOKEN_ADJUST_DEFAULT | TOKEN_ADJUST_SESSIONID,
             nullptr, SecurityImpersonation, TokenPrimary, &primaryToken))
-        return {};
+        return failed("DuplicateTokenEx", ::GetLastError());
     const win32::UniqueHandle token(primaryToken);
     STARTUPINFOW startup {sizeof(STARTUPINFOW)};
     if (io) {
@@ -238,11 +246,58 @@ win32::UniqueHandle startWithShellToken(
     if (environment.create(token.get(), false))
         flags |= CREATE_UNICODE_ENVIRONMENT;
     PROCESS_INFORMATION started {};
-    if (!::CreateProcessWithTokenW(token.get(), 0, nullptr, command.data(), flags, environment.get(),
-            dir.empty() ? nullptr : dir.c_str(), &startup, &started))
-        return {};
+    // WINSHUN_TEST_NO_SECLOGON (live tests): as if Secondary Logon were turned off.
+    static const bool noSecondaryLogon = qEnvironmentVariableIsSet("WINSHUN_TEST_NO_SECLOGON");
+    if (!noSecondaryLogon && ::CreateProcessWithTokenW(token.get(), 0, nullptr, command.data(), flags,
+            environment.get(), dir.empty() ? nullptr : dir.c_str(), &startup, &started)) {
+        ::CloseHandle(started.hThread);
+        return win32::UniqueHandle(started.hProcess);
+    }
+    const DWORD error = noSecondaryLogon ? DWORD(ERROR_SERVICE_DISABLED) : ::GetLastError();
+    if (io)
+        return failed("CreateProcessWithTokenW", error);
+    // It needs the Secondary Logon service, which tuning tools turn off (error
+    // 1058): the shell as the parent instead, whose token the program then
+    // gets (as winv::restartExplorer does).
+    if (flags & CREATE_NO_WINDOW) {
+        // A console program with explorer.exe as its parent takes it for a
+        // double-click in a folder window (startsConsole, GitHub #139), and
+        // rundll32 would give it a console to see: Win顺's own helper in
+        // between (hiddenHelper), which creates it with no window, as the
+        // usual way would. The handle is the helper's.
+        wchar_t exe[MAX_PATH] = {};
+        const DWORD n = ::GetModuleFileNameW(nullptr, exe, MAX_PATH);
+        if (n == 0 || n >= MAX_PATH)
+            return failed("CreateProcessWithTokenW", error);
+        command = L'"' + std::wstring(exe, n) + L"\" "
+            + reinterpret_cast<const wchar_t*>(commandlaunch::kHiddenSwitch) + L' ' + command;
+    }
+    const win32::UniqueHandle parent(::OpenProcess(PROCESS_CREATE_PROCESS, FALSE, pid));
+    SIZE_T size = 0;
+    ::InitializeProcThreadAttributeList(nullptr, 1, 0, &size);
+    std::vector<std::byte> buffer(size);
+    auto* attributes = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(buffer.data());
+    if (!parent.valid() || !::InitializeProcThreadAttributeList(attributes, 1, 0, &size))
+        return failed("CreateProcessWithTokenW", error);
+    HANDLE parentHandle = parent.get();
+    STARTUPINFOEXW extended {};
+    extended.StartupInfo.cb = sizeof extended;
+    extended.lpAttributeList = attributes;
+    const bool ok = ::UpdateProcThreadAttribute(attributes, 0, PROC_THREAD_ATTRIBUTE_PARENT_PROCESS, &parentHandle,
+                        sizeof parentHandle, nullptr, nullptr)
+        && ::CreateProcessW(nullptr, command.data(), nullptr, nullptr, FALSE, flags | EXTENDED_STARTUPINFO_PRESENT,
+            environment.get(), dir.empty() ? nullptr : dir.c_str(), &extended.StartupInfo, &started);
+    ::DeleteProcThreadAttributeList(attributes);
+    if (!ok)
+        return failed("CreateProcessWithTokenW", error); // the first one's: what keeps it from the usual way
     ::CloseHandle(started.hThread);
-    return win32::UniqueHandle(started.hProcess);
+    win32::UniqueHandle created(started.hProcess);
+    // The helper ends as soon as it created the program, 1 when it could not.
+    DWORD code = 0;
+    if ((flags & CREATE_NO_WINDOW) && ::WaitForSingleObject(created.get(), 5000) == WAIT_OBJECT_0
+        && ::GetExitCodeProcess(created.get(), &code) && code != 0)
+        return failed("CreateProcessW (helper)", code);
+    return created;
 }
 
 // A folder, shell location or URI ("shell:AppsFolder\<id>", "::{CLSID}",
@@ -779,22 +834,29 @@ filemanager::Kind fileManager()
     return g_fileManager.load();
 }
 
-win32::UniqueHandle startUnelevated(const std::wstring& program, const std::wstring& args, const std::wstring& cwd)
+win32::UniqueHandle startUnelevated(
+    const std::wstring& program, const std::wstring& args, const std::wstring& cwd, StartFailure* failure)
 {
-    if (program.find(L'"') != std::wstring::npos)
+    if (program.find(L'"') != std::wstring::npos) {
+        if (failure)
+            *failure = {"quote in the path", 0};
         return {}; // cannot be quoted on the command line (no path has one)
+    }
     std::wstring command = L'"' + program + L'"';
     if (!args.empty())
         command += L' ' + args;
     if (integrity::processElevated())
-        return startWithShellToken(std::move(command), cwd);
+        return startWithShellToken(std::move(command), cwd, 0, nullptr, failure);
     // Not elevated: our own rights are the user's (CreateProcessWithTokenW
     // needs a privilege only administrators have, error 1314).
     STARTUPINFOW startup {sizeof(STARTUPINFOW)};
     PROCESS_INFORMATION started {};
     if (!::CreateProcessW(program.c_str(), command.data(), nullptr, nullptr, FALSE, 0, nullptr,
-            cwd.empty() ? nullptr : cwd.c_str(), &startup, &started))
+            cwd.empty() ? nullptr : cwd.c_str(), &startup, &started)) {
+        if (failure)
+            *failure = {"CreateProcessW", ::GetLastError()};
         return {};
+    }
     ::CloseHandle(started.hThread);
     return win32::UniqueHandle(started.hProcess);
 }

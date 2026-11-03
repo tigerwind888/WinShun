@@ -309,12 +309,13 @@ void Clipboard::setNumberKeys(const QString& keys)
     emit numberKeysChanged();
 }
 
-void Clipboard::setRowOptions(bool clickToPaste, bool largePictures)
+void Clipboard::setRowOptions(bool clickToPaste, bool largePictures, const QString& uiSize)
 {
-    if (clickToPaste == m_clickToPaste && largePictures == m_largePictures)
+    if (clickToPaste == m_clickToPaste && largePictures == m_largePictures && uiSize == m_uiSize)
         return;
     m_clickToPaste = clickToPaste;
     m_largePictures = largePictures;
+    m_uiSize = uiSize;
     emit rowOptionsChanged();
     refreshStatus(); // pinned, it says how to paste
 }
@@ -983,12 +984,12 @@ void Clipboard::paste(int row, bool plainText)
     startPaste(std::move(write), Into::Program, std::move(touched), {});
 }
 
-void Clipboard::quickPaste(int number, bool plainText)
+void Clipboard::quickPaste(int row, bool plainText)
 {
-    if (number < 1 || number > m_model.count())
+    if (row < 0 || row >= m_model.count())
         return;
     m_model.clearSelection();
-    paste(number - 1, plainText);
+    paste(row, plainText);
 }
 
 void Clipboard::copy(int row)
