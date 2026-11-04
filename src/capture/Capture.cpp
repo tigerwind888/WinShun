@@ -64,6 +64,16 @@ QRect monitorRect(HMONITOR monitor)
     return QRect(r.left, r.top, r.right - r.left, r.bottom - r.top);
 }
 
+// The monitor without its taskbar (and other docked bars), physical.
+QRect workRect(HMONITOR monitor)
+{
+    MONITORINFO info {sizeof info};
+    if (!monitor || !::GetMonitorInfoW(monitor, &info))
+        return {};
+    const RECT& r = info.rcWork;
+    return QRect(r.left, r.top, r.right - r.left, r.bottom - r.top);
+}
+
 // Windows' "Screenshots" folder (Pictures\Screenshots, or where the user
 // moved it), made when missing.
 QString screenshotsFolder()
@@ -93,7 +103,8 @@ QString outcomeName(CaptureSession::Action action)
     case CaptureSession::Action::Copy: return u"copied"_s;
     case CaptureSession::Action::CopyPin: return u"copied_pinned"_s;
     case CaptureSession::Action::Save:
-    case CaptureSession::Action::SavePrevious: return u"saved"_s;
+    case CaptureSession::Action::SavePrevious:
+    case CaptureSession::Action::SaveAs: return u"saved"_s;
     case CaptureSession::Action::Pin: return u"pinned"_s;
     case CaptureSession::Action::Ocr:
     case CaptureSession::Action::OcrCopy:
@@ -172,6 +183,10 @@ Capture::Capture(QQmlEngine* engine, Callbacks callbacks, QObject* parent)
     connect(&m_session, &CaptureSession::colorFormatChanged, this, [this](ColorFormat format) {
         if (m_callbacks.colorFormatChanged)
             m_callbacks.colorFormatChanged(colorFormatName(format));
+    });
+    connect(&m_session, &CaptureSession::keyHintsKept, this, [this](bool on) {
+        if (m_callbacks.keyHintsKept)
+            m_callbacks.keyHintsKept(on);
     });
     m_countTimer.setSingleShot(true);
     m_countTimer.setTimerType(Qt::PreciseTimer);
@@ -313,6 +328,7 @@ void Capture::trigger()
 
 void Capture::start()
 {
+    const bool quiet = std::exchange(m_quietStart, false);
     if (m_overlays.empty())
         return;
     m_clock.start();
@@ -348,6 +364,7 @@ void Capture::start()
             continue;
         }
         overlay.model->setGeometry(shot->rect, overlay.window->devicePixelRatio(), overlay.window->size());
+        overlay.model->setWorkArea(workRect(overlay.monitor)); // the taskbar may have moved since the last capture
         overlay.model->setImage(shot->image);
         screens.push_back(overlay.model);
     }
@@ -392,6 +409,8 @@ void Capture::start()
     forgetHistory();
     m_liveWindows = windows;
     m_session.begin(byIndex, std::move(windows));
+    if (quiet)
+        m_session.quietKeyHints(); // a delayed capture is for a passing moment (KeyHintPolicy rule 7)
 
     if (flyout) {
         sendEscape();
@@ -452,6 +471,7 @@ void Capture::show()
         m_historyIds = m_history.ids();
         prefetchHistory(0);
     }
+    m_session.setHistoryAvailable(m_history.enabled() && !m_historyIds.isEmpty()); // the key hints' , .
 }
 
 void Capture::startWatch()
@@ -1189,6 +1209,7 @@ void Capture::fireCountdown()
     ::DwmFlush();
     ::DwmFlush();
     qInfo() << "Screen capture: the countdown is over after" << m_countClock.elapsed() << "ms";
+    m_quietStart = true;
     start();
 }
 

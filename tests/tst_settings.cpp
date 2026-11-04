@@ -28,6 +28,28 @@ class SettingsTest : public QObject {
     Q_OBJECT
 
 private slots:
+    void keyboardHints()
+    {
+        QTemporaryDir profile;
+        QVERIFY(profile.isValid());
+        ws::Settings::useProfile(profile.path());
+        ws::Settings settings;
+        settings.load();
+        QVERIFY(settings.shortcutHelp);
+        QVERIFY(settings.footerHints);
+        for (const bool help : {false, true}) {
+            for (const bool footer : {false, true}) {
+                settings.shortcutHelp = help;
+                settings.footerHints = footer;
+                settings.save();
+                ws::Settings restored;
+                restored.load();
+                QCOMPARE(restored.shortcutHelp, help);
+                QCOMPARE(restored.footerHints, footer);
+            }
+        }
+    }
+
     void retiredExteriorLogoSetting_data()
     {
         QTest::addColumn<bool>("oldValue");
@@ -750,6 +772,58 @@ private slots:
         ws::Settings none;
         none.load();
         QVERIFY(none.folderMenuFavorites && none.folderMenuRecent && none.folderMenuWindows);
+    }
+
+    // The double click is a choice of its own (GitHub #196): on as it always
+    // was, and off stays off with the middle button on.
+    void folderMenuTriggers()
+    {
+        QTemporaryDir profile;
+        QVERIFY(profile.isValid());
+        ws::Settings::useProfile(profile.path());
+        ws::Settings fresh;
+        fresh.load();
+        QVERIFY(fresh.folderMenuDouble && !fresh.folderMenuMiddle);
+
+        fresh.folderMenuDouble = false;
+        fresh.folderMenuMiddle = true;
+        fresh.save();
+        ws::Settings again;
+        again.load();
+        QVERIFY(!again.folderMenuDouble && again.folderMenuMiddle);
+
+        // A hand-edited file with no trigger or no place gets them back.
+        {
+            QSettings ini(ws::Settings::filePath(), QSettings::IniFormat);
+            ini.setValue(u"Launcher/FolderMenuDouble"_s, false);
+            ini.setValue(u"Launcher/FolderMenuMiddle"_s, false);
+            ini.setValue(u"Launcher/FolderMenuExplorer"_s, false);
+            ini.setValue(u"Launcher/FolderMenuDesktop"_s, false);
+        }
+        ws::Settings none;
+        none.load();
+        QVERIFY(none.folderMenuDouble && none.folderMenuExplorer && none.folderMenuDesktop);
+    }
+
+    // The actions under the menu's lists (GitHub #200): all on as before, each
+    // kept on its own.
+    void folderMenuItems()
+    {
+        QTemporaryDir profile;
+        QVERIFY(profile.isValid());
+        ws::Settings::useProfile(profile.path());
+        ws::Settings fresh;
+        fresh.load();
+        QVERIFY(fresh.folderMenuItemSearch && fresh.folderMenuItemCmd && fresh.folderMenuItemPowerShell
+            && fresh.folderMenuItemFavorite && fresh.folderMenuItemSettings);
+
+        fresh.folderMenuItemCmd = false;
+        fresh.folderMenuItemSettings = false;
+        fresh.save();
+        ws::Settings again;
+        again.load();
+        QVERIFY(again.folderMenuItemSearch && !again.folderMenuItemCmd && again.folderMenuItemPowerShell
+            && again.folderMenuItemFavorite && !again.folderMenuItemSettings);
     }
 
     // What a new install leaves off until wanted: the folder menu, the dialog

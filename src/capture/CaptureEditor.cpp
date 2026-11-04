@@ -756,6 +756,16 @@ bool CaptureEditor::keyPressed(int key, int modifiers)
         close();
         return true;
     }
+    // The user's keys for saving and pinning; the fixed keys below stay as they are.
+    // The validator keeps these clear of them, so the order does not matter.
+    if (m_keys.matches(KeyAction::Save, key, mods)) {
+        act(static_cast<int>(Action::Save));
+        return true;
+    }
+    if (m_keys.matches(KeyAction::Pin, key, mods)) {
+        act(static_cast<int>(Action::Pin));
+        return true;
+    }
     if (alt)
         return false;
     switch (key) {
@@ -769,14 +779,6 @@ bool CaptureEditor::keyPressed(int key, int modifiers)
         if (!ctrl)
             return false;
         done();
-        return true;
-    case Qt::Key_S:
-        if (!ctrl)
-            return false;
-        act(static_cast<int>(Action::Save));
-        return true;
-    case Qt::Key_F3:
-        act(static_cast<int>(Action::Pin));
         return true;
     case Qt::Key_Z:
         if (ctrl)
@@ -868,9 +870,13 @@ void CaptureEditor::act(int action)
         done();
         break;
     case Action::Save:
-    case Action::SavePrevious: {
+    case Action::SavePrevious:
+    case Action::SaveAs: {
+        // A save folder chosen: Save goes straight into it, 另存为… asks (#194).
+        const bool pick = static_cast<Action>(action) == Action::SaveAs
+            || (static_cast<Action>(action) == Action::Save && !m_model.saveDirect());
         QString path;
-        if (static_cast<Action>(action) == Action::Save) {
+        if (pick) {
             if (!m_hooks.chooseSavePath)
                 break;
             m_choosingSave = true;

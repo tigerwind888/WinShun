@@ -143,6 +143,7 @@ Item {
     ShownRows {
         id: shownRows
         view: list
+        tracking: numberHints.hintOpacity > 0 // not per frame of a scroll while no number shows
     }
     // A chord that is one of Win顺's own shortcuts stays that (Clipboard.numberKeysLeft):
     // the row still shows it, struck through (ClipRow.hintTaken).
@@ -221,6 +222,11 @@ Item {
         hoverPos = globalPos
         if (!previewOpen || previewSizing || list.rowDragging || (Qt.application.keyboardModifiers & (Qt.ControlModifier | Qt.ShiftModifier)))
             return
+        // Counted from entering the row, not from the last move: a hand
+        // never holds quite still, so restarting on each move kept the
+        // preview waiting.
+        if (index === hoverCandidate && hoverTimer.running)
+            return
         hoverCandidate = index
         if (index === previewIndex)
             hoverTimer.stop()
@@ -229,7 +235,7 @@ Item {
     }
     Timer {
         id: hoverTimer
-        interval: 100
+        interval: 60 // a sweep across rows (a row in well under that) shows none of them
         onTriggered: {
             if (page.previewOpen && !page.previewSizing && !list.rowDragging && !(Qt.application.keyboardModifiers & (Qt.ControlModifier | Qt.ShiftModifier))
                     && page.hoverCandidate >= 0 && page.hoverCandidate < list.count)

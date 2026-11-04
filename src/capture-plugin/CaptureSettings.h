@@ -1,8 +1,11 @@
 #pragma once
 
+#include "CaptureKeys.h"
+
 #include <QObject>
 #include <QString>
 #include <QStringList>
+#include <QVariantMap>
 #include <QtQml/qqmlregistration.h>
 
 #include <algorithm>
@@ -20,6 +23,7 @@ struct CaptureOptions {
     QString printScreenBefore; // what PrtScn did before, put back when no longer taken
     bool copyOnSelect = false;
     bool magnifier = true;
+    bool keyHints = true; // the shortcut hints in a corner of the capture (CaptureKeyHints.qml)
     bool pinOnCopy = false;
     QString mouseDoubleLeft = QStringLiteral("copy");
     QString mouseRight = QStringLiteral("back");
@@ -43,6 +47,7 @@ struct CaptureOptions {
     QString pinsHotkey;
     QString pinsRestoreHotkey;
     QString lastPinHotkey;
+    QString presentHotkey; // the presenter (#189): open, close; from Through, draw again
     QString saveFolder;
     QString recordingFolder;
     bool recordingSystemAudio = false;
@@ -55,6 +60,9 @@ struct CaptureOptions {
     QString recordingKeys = QStringLiteral("off");
     bool recordingMouseButtons = false;
     QString pinDoubleClick = QStringLiteral("reset");
+    // The pin and save keys and the pin window's keys (#187): Capture/Keys/<id>,
+    // only those not at their default; an empty value is no key.
+    capture::CaptureKeys keys;
 
     static CaptureOptions load(const QString& file);
     void save(const QString& file) const;
@@ -76,6 +84,7 @@ class CaptureSettings : public QObject {
     Q_PROPERTY(bool capturePauseInFullScreen READ capturePauseInFullScreen WRITE setCapturePauseInFullScreen NOTIFY changed FINAL)
     Q_PROPERTY(bool captureCopyOnSelect READ captureCopyOnSelect WRITE setCaptureCopyOnSelect NOTIFY changed FINAL)
     Q_PROPERTY(bool captureMagnifier READ captureMagnifier WRITE setCaptureMagnifier NOTIFY changed FINAL)
+    Q_PROPERTY(bool captureKeyHints READ captureKeyHints WRITE setCaptureKeyHints NOTIFY changed FINAL)
     Q_PROPERTY(bool capturePinOnCopy READ capturePinOnCopy WRITE setCapturePinOnCopy NOTIFY changed FINAL)
     Q_PROPERTY(QString captureMouseDoubleLeft READ captureMouseDoubleLeft WRITE setCaptureMouseDoubleLeft NOTIFY changed FINAL)
     Q_PROPERTY(QString captureMouseRight READ captureMouseRight WRITE setCaptureMouseRight NOTIFY changed FINAL)
@@ -95,13 +104,19 @@ class CaptureSettings : public QObject {
     Q_PROPERTY(QString capturePinsHotkey READ capturePinsHotkey WRITE setCapturePinsHotkey NOTIFY changed FINAL)
     Q_PROPERTY(QString capturePinsRestoreHotkey READ capturePinsRestoreHotkey WRITE setCapturePinsRestoreHotkey NOTIFY changed FINAL)
     Q_PROPERTY(QString captureLastPinHotkey READ captureLastPinHotkey WRITE setCaptureLastPinHotkey NOTIFY changed FINAL)
+    Q_PROPERTY(QString capturePresentHotkey READ capturePresentHotkey WRITE setCapturePresentHotkey NOTIFY changed FINAL)
     Q_PROPERTY(QString captureSaveFolder READ captureSaveFolder WRITE setCaptureSaveFolder NOTIFY changed FINAL)
     Q_PROPERTY(QString capturePinDoubleClick READ capturePinDoubleClick WRITE setCapturePinDoubleClick NOTIFY changed FINAL)
     Q_PROPERTY(QString captureHotkeyError READ captureHotkeyError NOTIFY problemsChanged FINAL)
     Q_PROPERTY(QString capturePinsHotkeyError READ capturePinsHotkeyError NOTIFY problemsChanged FINAL)
     Q_PROPERTY(QString capturePinsRestoreHotkeyError READ capturePinsRestoreHotkeyError NOTIFY problemsChanged FINAL)
     Q_PROPERTY(QString captureLastPinHotkeyError READ captureLastPinHotkeyError NOTIFY problemsChanged FINAL)
+    Q_PROPERTY(QString capturePresentHotkeyError READ capturePresentHotkeyError NOTIFY problemsChanged FINAL)
     Q_PROPERTY(QString captureNote READ captureNote NOTIFY problemsChanged FINAL)
+    // The keys of the capture and the pin window (#187), by CaptureKeys' ids:
+    // {text ("Ctrl+S"; empty: none), changed (not the default), defaultText,
+    // conflict (one of the plugin's own hotkeys is the same key now)}.
+    Q_PROPERTY(QVariantMap captureKeys READ captureKeys NOTIFY changed FINAL)
     // A hotkey box records: the plugin's hotkeys are let go of meanwhile.
     Q_PROPERTY(bool recordingHotkey READ recordingHotkey WRITE setRecordingHotkey NOTIFY recordingHotkeyChanged FINAL)
 
@@ -123,6 +138,8 @@ public:
     void setCaptureCopyOnSelect(bool v) { change(m_options.copyOnSelect, v); }
     bool captureMagnifier() const { return m_options.magnifier; }
     void setCaptureMagnifier(bool v) { change(m_options.magnifier, v); }
+    bool captureKeyHints() const { return m_options.keyHints; }
+    void setCaptureKeyHints(bool v) { change(m_options.keyHints, v); }
     bool capturePinOnCopy() const { return m_options.pinOnCopy; }
     void setCapturePinOnCopy(bool v) { change(m_options.pinOnCopy, v); }
     QString captureMouseDoubleLeft() const { return m_options.mouseDoubleLeft; }
@@ -161,6 +178,8 @@ public:
     void setCapturePinsRestoreHotkey(const QString& v) { change(m_options.pinsRestoreHotkey, v.trimmed()); }
     QString captureLastPinHotkey() const { return m_options.lastPinHotkey; }
     void setCaptureLastPinHotkey(const QString& v) { change(m_options.lastPinHotkey, v.trimmed()); }
+    QString capturePresentHotkey() const { return m_options.presentHotkey; }
+    void setCapturePresentHotkey(const QString& v) { change(m_options.presentHotkey, v.trimmed()); }
     QString captureSaveFolder() const { return m_options.saveFolder; }
     void setCaptureSaveFolder(const QString& v) { change(m_options.saveFolder, v.trimmed()); }
     QString capturePinDoubleClick() const { return m_options.pinDoubleClick; }
@@ -170,9 +189,10 @@ public:
     QString capturePinsHotkeyError() const { return m_pinsHotkeyError; }
     QString capturePinsRestoreHotkeyError() const { return m_pinsRestoreHotkeyError; }
     QString captureLastPinHotkeyError() const { return m_lastPinHotkeyError; }
+    QString capturePresentHotkeyError() const { return m_presentHotkeyError; }
     QString captureNote() const { return m_note; }
     struct Problems {
-        QString hotkey, pinsHotkey, pinsRestoreHotkey, lastPinHotkey, note;
+        QString hotkey, pinsHotkey, pinsRestoreHotkey, lastPinHotkey, presentHotkey, note;
     };
     void setProblems(const Problems& problems);
 
@@ -180,6 +200,22 @@ public:
     void setRecordingHotkey(bool on);
 
     Q_INVOKABLE QString pickFolder(const QString& title);
+
+    QVariantMap captureKeys() const;
+    // A key pressed in a key box (HotkeyRecorder's keyMode): taken, and
+    // nothing said; or refused, and why in words for the user. scanCode
+    // finds the key under a shifted digit for the pin window, which hears keys, not characters.
+    Q_INVOKABLE QString setCaptureKey(const QString& id, int key, int modifiers, int scanCode = 0);
+    Q_INVOKABLE void clearCaptureKey(const QString& id);
+    Q_INVOKABLE void resetCaptureKey(const QString& id);
+    // Whether no program holds this key as a global hotkey (RegisterHotKey's
+    // modifiers and virtual key): the plugin asks the system (CaptureApp).
+    // None set: not asked.
+    void setHotkeyProbe(std::function<bool(unsigned modifiers, unsigned vk)> probe) { m_probe = std::move(probe); }
+    // Why `key` would never reach the capture or a pin: one of the plugin's
+    // own hotkeys is the same key, or (askSystem) another program's or
+    // Win顺's global hotkey holds it. Empty: none.
+    QString hotkeyConflict(QKeyCombination key, bool askSystem) const;
 
 signals:
     void changed();
@@ -195,13 +231,15 @@ private:
         commit();
     }
     void setMouse(QString& field, const QString& action, bool allowBack);
+    void setKey(const QString& id, const std::function<QKeyCombination(capture::KeyAction)>& key);
     void commit();
 
     const QString m_file;
     CaptureOptions m_options;
-    QString m_hotkeyError, m_pinsHotkeyError, m_pinsRestoreHotkeyError, m_lastPinHotkeyError, m_note;
+    QString m_hotkeyError, m_pinsHotkeyError, m_pinsRestoreHotkeyError, m_lastPinHotkeyError, m_presentHotkeyError, m_note;
     bool m_recordingHotkey = false;
     QObject* m_window = nullptr;
+    std::function<bool(unsigned, unsigned)> m_probe;
 };
 
 } // namespace ws::captureplugin

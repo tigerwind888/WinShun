@@ -59,6 +59,7 @@ qt_add_executable(WinShun WIN32
     PieLabels.cpp PieLabels.h
     Phosphor.cpp Phosphor.h
     Preview.cpp Preview.h
+    ClipScrollBench.cpp ClipScrollBench.h
     ContentPaneProbe.cpp ContentPaneProbe.h
     RecentFolders.cpp RecentFolders.h
     Settings.cpp Settings.h
@@ -68,6 +69,7 @@ qt_add_executable(WinShun WIN32
     SwitchPlugin.cpp SwitchPlugin.h
     TextField.cpp TextField.h
     ThumbnailProvider.cpp ThumbnailProvider.h
+    ClipThumbnailProvider.cpp ClipThumbnailProvider.h
     TriggerJournal.cpp TriggerJournal.h
     TrayMenu.cpp TrayMenu.h
     WebSuggester.cpp WebSuggester.h
@@ -172,6 +174,9 @@ set(qml_files
     qml/SettingsSearchBox.qml
     qml/TitleBar.qml
     qml/SettingsSection.qml
+    qml/SettingsContext.qml
+    qml/SettingsPage.qml
+    qml/PageSlot.qml
     qml/FileTypesSection.qml
     qml/SettingRow.qml
     qml/PageTabs.qml
@@ -302,8 +307,9 @@ qt_add_qml_module(WinShun
         SettingsSearch.cpp SettingsSearch.h
         SoundClip.cpp SoundClip.h
         SystemTheme.cpp SystemTheme.h
+        PhosphorGlyph.cpp PhosphorGlyph.h
         UiSize.h
-        Updater.cpp Updater.h UpdatePackage.cpp UpdatePackage.h
+        Updater.cpp Updater.h UpdatePackage.cpp UpdatePackage.h UninstallCleanup.cpp UninstallCleanup.h
         Backup.cpp Backup.h BackupFiles.cpp BackupFiles.h
         WindowFrame.cpp WindowFrame.h
 )

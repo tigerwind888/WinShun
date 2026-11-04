@@ -10,6 +10,7 @@
 #include "Unc.h"
 #include "WebDav.h"
 #include "Win32Util.h"
+#include "ExplorerLanguage.h" // windowsIsChinese
 
 #include <QCoreApplication>
 #include <QDir>
@@ -639,10 +640,8 @@ QString Settings::resolveLanguage(const QString& language)
 {
     if (language == u"zh" || language == u"en")
         return language;
-    // The language Windows itself is shown in. Not QLocale::uiLanguages(): that
-    // follows the preferred-languages list, which can put English first on a
-    // Chinese Windows.
-    return PRIMARYLANGID(::GetUserDefaultUILanguage()) == LANG_CHINESE ? u"zh"_s : u"en"_s;
+    // The language Windows itself is shown in (core/ExplorerLanguage.h).
+    return explorerlang::windowsIsChinese() ? u"zh"_s : u"en"_s;
 }
 
 FileTypes Settings::defaultFileTypes()
@@ -808,6 +807,7 @@ void Settings::load()
         = readOrDefault(s, u"Launcher/DoubleCtrlPauseInFullScreen"_s, d.doubleCtrlPauseInFullScreen);
     doubleCtrlExcludedApps = readOrDefault(s, u"Launcher/DoubleCtrlExcludedApps"_s, d.doubleCtrlExcludedApps);
     hotkey = readOrDefault(s, u"Launcher/Hotkey"_s, d.hotkey);
+    adminTapHinted = readOrDefault(s, u"Launcher/AdminTapHinted"_s, d.adminTapHinted);
     shortcutAgain = readOrDefault(s, u"Launcher/ShortcutAgain"_s, d.shortcutAgain).trimmed().toLower();
     if (shortcutAgain != u"panel")
         shortcutAgain = d.shortcutAgain;
@@ -852,12 +852,22 @@ void Settings::load()
         folderMenu = folderMenuBefore;
     folderMenuExplorer = readOrDefault(s, u"Launcher/FolderMenuExplorer"_s, d.folderMenuExplorer);
     folderMenuDesktop = readOrDefault(s, u"Launcher/FolderMenuDesktop"_s, d.folderMenuDesktop);
+    folderMenuDouble = readOrDefault(s, u"Launcher/FolderMenuDouble"_s, d.folderMenuDouble);
     folderMenuMiddle = readOrDefault(s, u"Launcher/FolderMenuMiddle"_s, d.folderMenuMiddle);
+    if (!folderMenuDouble && !folderMenuMiddle) // no way left to open it: the double click back (#196)
+        folderMenuDouble = true;
+    if (!folderMenuExplorer && !folderMenuDesktop) // nowhere left: both back
+        folderMenuExplorer = folderMenuDesktop = true;
     folderMenuFavorites = readOrDefault(s, u"Launcher/FolderMenuFavorites"_s, d.folderMenuFavorites);
     folderMenuRecent = readOrDefault(s, u"Launcher/FolderMenuRecent"_s, d.folderMenuRecent);
     folderMenuWindows = readOrDefault(s, u"Launcher/FolderMenuWindows"_s, d.folderMenuWindows);
     if (!folderMenuFavorites && !folderMenuRecent && !folderMenuWindows) // a menu of nothing: back to all (#51)
         folderMenuFavorites = folderMenuRecent = folderMenuWindows = true;
+    folderMenuItemSearch = readOrDefault(s, u"Launcher/FolderMenuItemSearch"_s, d.folderMenuItemSearch);
+    folderMenuItemCmd = readOrDefault(s, u"Launcher/FolderMenuItemCmd"_s, d.folderMenuItemCmd);
+    folderMenuItemPowerShell = readOrDefault(s, u"Launcher/FolderMenuItemPowerShell"_s, d.folderMenuItemPowerShell);
+    folderMenuItemFavorite = readOrDefault(s, u"Launcher/FolderMenuItemFavorite"_s, d.folderMenuItemFavorite);
+    folderMenuItemSettings = readOrDefault(s, u"Launcher/FolderMenuItemSettings"_s, d.folderMenuItemSettings);
     folderMenuHotkey = readOrDefault(s, u"Launcher/FolderMenuHotkey"_s, d.folderMenuHotkey).trimmed();
     folderMenuOpusBefore = readOrDefault(s, u"Launcher/FolderMenuOpusBefore"_s, d.folderMenuOpusBefore);
     dropPie = readOrDefault(s, u"Favorites/DropPie"_s, d.dropPie);
@@ -899,6 +909,8 @@ void Settings::load()
     numberHints = readOrDefault(s, u"Results/NumberHints"_s, d.numberHints).trimmed().toLower();
     if (numberHints != u"held" && numberHints != u"always" && numberHints != u"off")
         numberHints = d.numberHints;
+    shortcutHelp = readOrDefault(s, u"Results/ShortcutHelp"_s, d.shortcutHelp);
+    footerHints = readOrDefault(s, u"Results/FooterHints"_s, d.footerHints);
     previewWith = readOrDefault(s, u"Results/PreviewWith"_s, d.previewWith).trimmed().toLower();
     if (previewWith != u"builtin")
         previewWith = d.previewWith;
@@ -1177,6 +1189,7 @@ bool Settings::saveChecked() const
     s.setValue(u"Launcher/DoubleCtrlPauseInFullScreen"_s, doubleCtrlPauseInFullScreen);
     s.setValue(u"Launcher/DoubleCtrlExcludedApps"_s, doubleCtrlExcludedApps);
     s.setValue(u"Launcher/Hotkey"_s, hotkey);
+    s.setValue(u"Launcher/AdminTapHinted"_s, adminTapHinted);
     s.setValue(u"Launcher/ShortcutAgain"_s, shortcutAgain);
     s.setValue(u"Launcher/Renderer"_s, renderer);
     s.setValue(u"Proxy/Mode"_s, proxyMode);
@@ -1200,10 +1213,16 @@ bool Settings::saveChecked() const
     s.setValue(u"Launcher/FolderMenu"_s, folderMenu);
     s.setValue(u"Launcher/FolderMenuExplorer"_s, folderMenuExplorer);
     s.setValue(u"Launcher/FolderMenuDesktop"_s, folderMenuDesktop);
+    s.setValue(u"Launcher/FolderMenuDouble"_s, folderMenuDouble);
     s.setValue(u"Launcher/FolderMenuMiddle"_s, folderMenuMiddle);
     s.setValue(u"Launcher/FolderMenuFavorites"_s, folderMenuFavorites);
     s.setValue(u"Launcher/FolderMenuRecent"_s, folderMenuRecent);
     s.setValue(u"Launcher/FolderMenuWindows"_s, folderMenuWindows);
+    s.setValue(u"Launcher/FolderMenuItemSearch"_s, folderMenuItemSearch);
+    s.setValue(u"Launcher/FolderMenuItemCmd"_s, folderMenuItemCmd);
+    s.setValue(u"Launcher/FolderMenuItemPowerShell"_s, folderMenuItemPowerShell);
+    s.setValue(u"Launcher/FolderMenuItemFavorite"_s, folderMenuItemFavorite);
+    s.setValue(u"Launcher/FolderMenuItemSettings"_s, folderMenuItemSettings);
     s.setValue(u"Launcher/FolderMenuHotkey"_s, folderMenuHotkey);
     s.setValue(u"Launcher/FolderMenuOpusBefore"_s, folderMenuOpusBefore);
     s.setValue(u"Favorites/DropPie"_s, dropPie);
@@ -1229,6 +1248,8 @@ bool Settings::saveChecked() const
     s.setValue(u"Launcher/ClearOnOpen"_s, clearOnOpen);
     s.setValue(u"Results/NumberKeys"_s, numberKeys);
     s.setValue(u"Results/NumberHints"_s, numberHints);
+    s.setValue(u"Results/ShortcutHelp"_s, shortcutHelp);
+    s.setValue(u"Results/FooterHints"_s, footerHints);
     s.setValue(u"Results/PreviewWith"_s, previewWith);
     s.setValue(u"Results/PreviewHotkey"_s, previewHotkey);
     s.setValue(u"Appearance/Theme"_s, theme);

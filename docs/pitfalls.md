@@ -1,5 +1,15 @@
 # 踩坑记录
 
+## 以管理员身份运行插件：先校验再按路径启动是不够的（2026-11-03）
+
+- **原因**：插件文件夹是用户能写的。“比对哈希，一样就 `CreateProcess` 插件文件夹里的 exe”中间有空子：校验后、启动前可以换文件；就算一直拿着句柄不让改，插件运行中还会按需加载 DLL，往文件夹里**加**一个 `version.dll` 是挡不住的。开机自启的管理员 Win顺 就成了一个不用 UAC 的提权入口。
+- **做法**：以管理员身份运行的永远是 `%ProgramFiles%\WinShun Elevated Plugins\<SID>\…` 里的副本（exe、cwd、`WS_PLUGIN_DIR`、清单都来自它，清单还要和目录里的一样）。放 Program Files 而不是 ProgramData：ProgramData 下普通用户能抢先建文件夹、占为己有、留着带 WRITE_DAC 的句柄，逐级收紧也收不回来。每一级只在不存在时由提权的 Win顺 建（属主 Administrators、普通用户连读都不能），已存在的只查不修：按句柄查（`FILE_FLAG_OPEN_REPARSE_POINT`，不是链接，最终路径一致，属主和 DACL），从检查到进程起来一直开着（不共享删除）。副本只在提权的 Win顺 里、用户点“确认”（插件库的插件从签名列表核对过的包）或从签名列表更新时做；普通权限装的东西不能自动当真。比对插件文件夹只用来判断副本是否还是现在的样子，不关安全。
+- **环境变量也是输入**：`CreateEnvironmentBlock(令牌)` 会读 `HKCU\Environment`，普通权限能改；`COR_PROFILER_PATH`、`DOTNET_STARTUP_HOOKS`、`NODE_OPTIONS`、`PATH` 都能让管理员进程加载别人的代码。管理员 runner 用 `sandbox::elevatedEnvironment`：系统变量、去掉加载代码的、系统 PATH（只留普通权限加不了文件的文件夹：系统 PATH 里常有用户文件夹下的 Python、VS Code，放个同名程序进去就会以管理员身份运行）、`TEMP` 在副本旁边。
+- **两个 runner 的信号要分开**：都连到同一个 `onLine`/`onInstanceExited` 时，普通权限的 runner 能替 2^48 以上的实例说话；`connectRunner` 按 `runnerFor(instance)` 只认自己的。
+- **插件库页面的列表不验签名**（缓存还在用户目录里），能把它的包当确认副本的只有带签名的列表（`PluginUpdates::signedItem`，开发用的本地无签名文件也不算）。
+- **别的坑**：管理员 runner 的实例号从 2^48 起，runner 的 JSON 要原样写小于 1e15 的整数，否则按实例号分 runner 会错；管理员 runner 的管道只给 SYSTEM 和 Administrators、标签“高”，普通权限的进程连打开都不行。单测里“同样大小重写文件”可能和原来修改时间相同，哈希缓存（按大小和修改时间）会看不出变化：测试里把时间往后拨（`laterTime`）。生产里这只影响“副本是不是最新”，不影响安全。
+- **验证**：`tst_plugin::elevationRecord`、`elevatedPluginsFollowTheHost`；真机用提权的 `wsbench --plugin <文件夹> --query … [--confirm-elevated]` 起 `plugin_fake --once --whoami`：未确认 Medium，确认后 High 且路径在副本里，普通权限的进程改 exe 后回到 Medium（判定 changed），改回去又是 High。
+
 ## 图形插件的进程隔离也要覆盖输入法与内部工作进程（2026-11-01，#164）
 
 - **根因与证据**：截图插件未声明 `processes`，实际宿主给它的作业 `ActiveProcessLimit=1`，真实子进程探针返回 1816（`ERROR_NOT_ENOUGH_QUOTA`），与录屏启动报错一致。启动器还统一设置了 `EXTENSION_POINT_DISABLE_ALWAYS_ON`；[微软文档](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-updateprocthreadattribute) 明确该策略阻止传统输入法扩展。直接启动的 QML 预览不经过这个边界。
@@ -291,6 +301,12 @@
 - **Qt 自己的图片缓存只留 2 MB 没人用的图**（`cache_limit`，写死，30 秒淘汰四分之一）：48 像素的缩略图约 220 张。滚回去、再打一遍同样的字要立即出来，提供器自己按字节留一份（`QCache`，48 MB），没有缩略图的也记下。
 - **sourceSize**：image:// 提供器按逻辑像素写，Qt 乘设备像素比再请求；返回的图带着这个比，`implicitWidth` 就是“像素数 / 设备像素比”，`width: implicitWidth` 正好一个像素对一个像素（150% 实测与系统给的位图逐像素相同）。
 
+### 剪贴板图片行滚动时先灰后出图
+
+- **现象**：剪贴板里有几十张截图时，滚轮快速滚过再滚回来，图片行要先灰一会儿才出图；快速往回滚的测试里，灰着的行帧数 55–108。
+- **原因**：行里的 `Image` 写着 `cache: false`，Qt 又只有一条读图线程；每次行被复用、滚回去，整张文件都要重新解码一遍，后面的行排队等着。
+- **做法**：剪贴板行的图片走自己的提供器 `ClipThumbnailProvider`（`image://clipthumb/`）：自己的低优先级线程池（2–4 条），最新的行先解码，行滚走就取消；解码后缩小的图留在 32 MB 的 `QCache` 里，滚回去马上就有。缩放方式与 Qt 对 `sourceSize` 的做法一致，像素和原来逐点相同（`tst_clipimage` 的 `clipThumbnailsMatchQtAndAreKept` 比对）。地址里带版本戳（剪贴板记录的创建时间、或文件修改时间），同一路径重写后不会读到旧图。实测快速滚回去灰着的行帧 55–108 降到 0（`--preview-results --clipboard-scroll`）。
+
 ### 列表滚动时整行在抖
 
 - **现象**：结果列表滚动时（尤其是快停下的那段），行里的文字和图标轮流上下跳 1 像素，像在抖。
@@ -311,6 +327,13 @@
 - **弃用的做法**（0.2.3）：自己用 `WheelHandler` 加 `NumberAnimation` 接管滚轮，并在每次 `contentY` 变化时把它对齐到设备像素。问题有两个：触屏和拖动甩出走的是 Flickable 自己的惯性滚动，惯性过程中不能改 `contentY`（会重置它的 timeline），所以仍然会抖；而且滚动手感也不再是原生的。
 - **注意**：Windows 上 Qt 的滚轮事件 `pixelDelta` 永远是 0，精密触摸板也一样（`qwindowspointerhandler.cpp` 里传的是 `QPoint()`），不能靠它区分触摸板和鼠标滚轮。
 - **其他办法**：`Text.QtRendering` 或 `Text.CurveRendering` 不走 `textmask.vert` 的取整，但会失去 FreeType 的垂直 hinting，中文小字会变软。`QT_SCALE_FACTOR_ROUNDING_POLICY=Round` 会把 150% 变成 100% 或 200%。都没采用。
+
+### 往上滚轮每格回跳一帧
+
+- **现象**：搜索列表和剪贴板列表用滚轮往上滚时，每一格停下前会回跳一帧，最多约 4 逻辑像素，往下滚没有。
+- **原因**：`ListView` 在滚动中不会创建视野之外的行，往上滚时滚轮的目标位置只是一个单纯的距离，目标那一屏的行还不存在。旧的 `settleOnEdge` 在“停下的位置附近”选最近的行边，有时选到了身后那一条，于是滑行时倒着往上回滑。
+- **做法**：`settleOnEdge`（`ListWheelScroll.qml`）从目标出发，目标处的行一出现（滑行期间也算）就对齐到那一行的边，永远不逆着滚轮方向。测试 `tst_scrollalignment` 的 `snappedBurstNeverBouncesBack`：旧代码 16 次里失败 12 次。
+- **试过、没采用**：让滑行在速度上连续（Hermite 曲线）。抖动减半，但跟手的延迟翻倍（34–64 ms 变成 88–122 ms），手感不够利落，放弃。
 
 ## 窗口材质（Mica）
 
@@ -782,6 +805,7 @@
 - **现象**：2026-10-09 关掉 Defender 实时保护量第一次建立：文本 22 秒读完，文档却拖到 81 秒，平均每个 93 ms，还有一个超过 20 秒被当成超时结束（日志 `the document reader took too long`）。单独读同样的 5815 个文档（`wsbench --extract --sandbox --threads 8`）只要 17–19 秒，每个约 25 ms。
 - **原因**：提取进程带 `--background` 启动，自己设了 `PROCESS_MODE_BACKGROUND_BEGIN`，磁盘请求和内存页都降到最低。单独读时看不出差别（`--background` 17.1 秒、不带 19.3 秒）；建索引时十几个线程同时在读文件，提取进程读文档、把被挤出内存的页读回来，都排在最后。和上一条读线程的坑是同一回事，只是换了个进程。
 - **做法**：提取进程只降 CPU 优先级（建索引时 `IDLE_PRIORITY_CLASS`），不用后台模式；文档的句柄本来就设了 `IoPriorityHintLow`（低，不是极低）。改后每个文档约 25 ms，内容索引第一次建立 75 秒 → 34.5 秒。这类问题要在“同时还在干别的”的场景里量（`wsbench --service --content`），单独量看不出来。
+- **补充（2026-11-03）**：进程级后台模式还会给整个进程加 32 MB 的工作集硬上限（见“图片文字搜索插件”一节第一条）。这里“把被挤出内存的页读回来”很可能也有它的份。
 
 ### 合并时停住读线程，十几秒在干等
 
@@ -1515,6 +1539,13 @@
 - **现象**：测试脚本按系统的任务对话框（`#32770`、`TDM_CLICK_BUTTON`）找不到、也点不动安装程序的提示框；中文提示在 150% 下把“Win顺”拆成两行，或者把“关。”单独甩到下一行。
 - **原因**：6.7 的 `TaskDialogMsgBox` 是 VCL 窗口 `TTaskDialogForm`，按钮是 `TNewButton`；命令链接按钮的标题末尾带一个回车（“现在安装(&I)\r”，说明文字另放），英文的“重试”按钮写的是“&Try again”。正文按宽度自动折行，会在“Win”和“顺”之间断开。
 - **做法**：测试脚本按标题找按钮，给它的父窗口发 `WM_COMMAND`（`BN_CLICKED`）。文案里提到按钮时照按钮上的字写（英文写 Try again）。中文在该断的地方自己写 `%n`，在 150% 下截图看一遍。
+
+### Inno 自带的安装模式对话框不看账户是不是管理员
+
+- **现象**：普通（非管理员）账户运行安装程序，“为所有用户安装”排在第一个、默认选中；点下去要输入管理员密码，没有就装不了。
+- **原因**：`PrivilegesRequiredOverridesAllowed=dialog` 的对话框只按脚本的 `PrivilegesRequired` 排顺序（`admin` 就是所有用户在前，`lowest` 就是只为我在前），不看当前账户；它在任何 `[Code]` 之前弹出，脚本改不了（issrc `Setup.MainFunc.pas` 的 `HandlePrivilegesRequiredOverrides`）。只装过一种时它按卸载项（HKLM 或 HKCU）直接选那种（`UsePreviousPrivileges`），这段也在对话框的路径里。另外 `[Code]` 的 `Exec` 在开始安装之前不让运行安装程序自己（`IsProtectedSrcExe`，返回错误 5）；`InitializeSetup` 返回 False 时退出码总是 1，`GetCustomSetupExitCode` 不会被调用。
+- **做法**（`installer/InstallMode.iss`）：`PrivilegesRequired=lowest`、`PrivilegesRequiredOverridesAllowed=commandline`，在 `InitializeSetup` 里自己决定：命令行有 `/ALLUSERS`、`/CURRENTUSER`（应用内更新总带一个）就照它；只有一种卸载项就照那种；否则自己弹两个按钮的对话框，按令牌（`TokenElevationType`：管理员的拆分令牌或已提权 → 所有用户在前；普通账户 → 只为我在前，盾牌标在“所有用户”上）；静默安装不问，取排在前面的那个。选了所有用户，就用 `Exec('>', 完整命令行)` 以普通权限再运行一次自己，加上原参数、`/LANG`、`/ALLUSERS` 和一个标记文件参数，让 Inno 自己提权（不能用 runas，否则 `runasoriginaluser` 没有原用户可用，GitHub #21）；等它结束后用 `ExitProcess` 带着它的退出码退出（`/LOG` 文件这个进程还开着，新的那次写到 `名字.allusers.log`）。标记文件没被建出来、退出码又不是 0，就是没拿到管理员权限（UAC 取消时 Inno 以 2 退出），这时问要不要改为只为我安装（已经为所有用户装过的不问）。
+- **实测**（2026-11-04）：探针脚本 `installer/tests/InstallModeProbe.iss`（自己的 AppId，什么都不装，把每一步写进日志）。管理员账户：无旧版、只有 HKCU、只有 HKLM、两个都有、静默、`/ALLUSERS`、`/CURRENTUSER`、应用内更新的两条命令行、“所有用户”被拒（交互选“是”/静默/已有 HKLM）、带空格的 `/DIR=`、`/LOG`、`/LANG=english`，共 16 种，顺序、模式、退出码（提权那次的 7、5、3 原样传出来）都对。临时建的普通账户：只为我在前（截图看过），静默取只为我，真去提权时凭据框被取消，退出码 2，标记文件没有，问改为只为我安装。测完账户和它的配置文件都删了。探针加 `/DProbeInstall` 真装一个文件：静默、不带开关，重跑提权后装进 Program Files、写 HKLM 卸载项，`[Run]` 里 `runasoriginaluser` 的那条是 Medium（原用户），普通的那条是 High；以普通权限运行它的卸载程序，自己提权，卸载项和文件夹都删干净。
 
 ### `[Code]` 里以 `[` 开头的行会被当成段名
 
@@ -2606,6 +2637,7 @@
 - **原因**：UIPI。2026-10-14 用 scratchpad `uipi` 探针实测（管理员窗口在前，按键由管理员进程注入）：普通进程收不到键盘和鼠标 Raw Input、收不到低级钩子事件、收不到 `RegisterHotKey` 热键；`AttachThreadInput` 失败（1314），`WM_COPYDATA` 被挡（5），`SendInput` 往里送键不报错但对方收不到。可以的：`OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)` + `OpenProcessToken(TOKEN_QUERY)` 读对方完整性级别（0x3000）、`SetForegroundWindow`、进程外 WinEvent `EVENT_SYSTEM_FOREGROUND`。
 - **做法**：`platform/Integrity` 的 `higherThanOurs(hwnd)`：Win顺 自己提权时总是 false；读不出的当成更高。剪贴板不对这种窗口接管键盘（`App::startKeyRouting` 返回 false，窗口自己拿焦点），粘贴只复制并提示“回到它那里按 Ctrl+V”（`Clipboard::onWritten`），对话框栏不贴这种程序的文件对话框（`DialogJump`）。
 - **还没量的**：用户亲手按的键（不是注入的）在管理员窗口在前时，普通进程的低级钩子和 `RegisterHotKey` 收不收得到。探针的对照组没做成（普通进程的窗口抢不到前台），要人按。
+- **后来量清的**：带 Ctrl、Alt、Shift 或 Win 的 `RegisterHotKey` 热键照样触发，只有不带修饰键的收不到（2026-10-22，见“管理员窗口在前时，不带修饰键的全局热键收不到”）。双击 Ctrl 收不到时的一次性通知（`AdminTapHint`）就是让用户改按这种组合键。
 
 ### 不提权时启动程序：别再借资源管理器的令牌
 
@@ -4653,7 +4685,12 @@
 ### 图标换成 Phosphor（2026-10-29）
 - **现象**：系统图标字体随 Windows 版本变，老 Win10 缺图标（上一节）；用户要求直接用 Phosphor Icons。
 - **原因**：Phosphor 的编号也在私用区（E000–F8FF），和 Segoe 的重叠，同一个编号在两个字体里是不同图标。
-- **做法**：`third_party/phosphor` 的 Phosphor.ttf 和 Phosphor-Fill.ttf（2.1.2，MIT）编进资源，启动时 `phosphor::loadFonts()` 用 `addApplicationFontFromData` 注册（字体名取注册返回的，不写死）。代码里照旧写 Segoe 编号，`Phosphor.cpp` 的对照表（按 Segoe 编号排序，注释写两边的名字）换成 Phosphor 编号和字体；Phosphor 编号只经这张表读，绝不当 Segoe 编号用。“开”的状态用 Fill（已固定 = push-pin 实心，取消收藏 = 实心星），这时 `overlay` 不画（Phosphor 一个字就是完整图标）。三处画图标都走这张表：`Glyph.qml`（`SystemTheme.phosphorIcon`）、`FileIconProvider::glyphIcon`（插件的 `glyph:U+XXXX`）、`IconBadge`。窗口标题栏的最小化/最大化/关闭（`Glyph.caption`）保留 Windows 自己的字形。Phosphor 的图形只占字身约 82%，Segoe 几乎占满：`phosphor::kScale`（1.125）把字放大、框不变，三处共用。Phosphor 的行高（hhea/win 960+64）正好是字身，但 typo lineGap 是 64，`tst_appearance` 的 `phosphorIcons` 量了 Text 的高度。测试从资源读字体数据查每个映射的字都在（不按名字找，装了桌面版 Phosphor 会掩盖资源缺失）。新加图标：先在 phosphoricons.com 找名字，到 `@phosphor-icons/web` 的 `style.css` 查编号，加进表里。
+- **做法**：`third_party/phosphor` 的 Phosphor.ttf 和 Phosphor-Fill.ttf（2.1.2，MIT）编进资源，启动时 `phosphor::loadFonts()` 用 `addApplicationFontFromData` 注册（字体名取注册返回的，不写死）。代码里照旧写 Segoe 编号，`Phosphor.cpp` 的对照表（按 Segoe 编号排序，注释写两边的名字）换成 Phosphor 编号和字体；Phosphor 编号只经这张表读，绝不当 Segoe 编号用。“开”的状态用 Fill（已固定 = push-pin 实心，取消收藏 = 实心星），这时 `overlay` 不画（Phosphor 一个字就是完整图标）。三处画图标都走这张表：`Glyph.qml`（`SystemTheme.phosphorIcon`）、`FileIconProvider::glyphIcon`（插件的 `glyph:U+XXXX`）、`IconBadge`。窗口标题栏的最小化/最大化/关闭（`Glyph.caption`）保留 Windows 自己的字形。Phosphor 的图形只占字身约 82%，Segoe 几乎占满：`phosphor::kScale`（1.125）把字放大、框不变，三处共用。Phosphor 的行高（hhea/win 960+64）正好是字身，但 typo lineGap 是 64（图标现在不用 Text 画了，见下一节；`phosphorIcons` 改查 `PhosphorGlyph` 的字身）。测试从资源读字体数据查每个映射的字都在（不按名字找，装了桌面版 Phosphor 会掩盖资源缺失）。新加图标：先在 phosphoricons.com 找名字，到 `@phosphor-icons/web` 的 `style.css` 查编号，加进表里。
+
+### Phosphor 图标斜线一边虚一边实（2026-11-03）
+- **现象**：150% 下截图工具栏的“取消”（x）和保存按钮旁的下拉箭头看着是歪的：x 的两条斜线一条实一条虚，箭头一边粗一边细。100%、125%、175% 也有，只是轻一些。
+- **原因**：原生文字（FreeType、竖直微调）把笔的起点和基线都放在整设备像素上。Phosphor 的字身就是行高（ascent 960、descent 64，upem 1024），基线在字身顶下 15/16 em。字身横着居中、竖着跟基线，两个方向取整的位置相差 15E/16（E 是设备像素的字身），只有 E 是 16 的倍数时小数部分才一样。QFont 还把字身取整到逻辑像素（16 × 1.125 = 18，150% 是 27 px），27 px 时横 0.5、竖 0.19，图形相对理想位置偏 (+0.52, +0.20) 设备像素，横竖不一样，所以本该对称的 x、加号、箭头抗锯齿两边不一样。另外字身换成设备像素常常不是整数（18 px 在 125% 是 22.5，175% 是 31.5），这时即使字身左上角在整像素上，图标的对称轴也落在像素中心和边缘之间，左右照样不对称。量法：同一个图标转置后与自身比，平均差 0.27–0.41（加号 0.72，满分 1）；即使把 Text 摆到精确的小数位置也还有 0.32（字形光栅化本身就跟基线绑定），所以挪 Text 的位置修不好。`Text.CurveRendering` 位置准，但横笔画画粗（减号墨量 1.64 倍，100% 时还不对称）；`Text.QtRendering` 细笔画丢了；`Shape` 的 CurveRenderer 在测试里什么都不画；`QQuickPaintedItem` 纹理缩放又偏 0.25 px。设置页 125% 下 712 个图标里 399 个落在小数设备像素上，所以必须自己对齐像素。
+- **做法**：`PhosphorGlyph`（C++ `QQuickItem`）画 Phosphor 图标：用 `QRawFont`（1024 px、不微调）取轮廓，字身的中心放在像素中心或像素边缘上，横竖同一种（穿过中心的笔画宽 em/16，取整后是奇数放像素中心，偶数放边缘，这样加号、减号的横竖笔画清楚），`QPainter` 按设备像素填进一张 N×N 图，`QSGImageNode` 最近邻采样、可进图集；位置加 1/64 逻辑像素，避开最近邻采样的半像素平局。字身仍取 `label.fontInfo.pixelSize`（大小、`kScale` 不变）。`Glyph.qml` 里 Phosphor 走它，系统图标字体（标题栏按钮、插件的 `glyph:`）仍用 Text。改后真实截图工具栏（`--preview-capture-tools --toolbar-drag` 的 toolbar-editor.png）在 1–2 倍下：取消 x 的转置差 0.000–0.001（原来 0.014–0.031）、左右镜像差 ≤0.002（原来 0.027–0.104），保存箭头左右镜像差 ≤0.001（原来 0.026–0.108）；墨量多 1–2%，边缘半灰像素比例与原来相当（各缩放有升有降）；软件渲染和 d3d11 相同。代价：中心离框中心最多约 1 个设备像素（相位取整 ≤0.5，加上框本身在小数设备像素上时最近邻采样 ≤0.5；原来的原生文字实测也偏 0.4–1.0）；不再有 FreeType 自动微调，个别横笔画比原来软一点；缩放、旋转动画中（插件卡片的箭头、对话框弹出的 0.96 缩放）是最近邻，可能略有锯齿。`tst_appearance` 的 `phosphorAxesAlike` 在 1、1.25、1.5、1.75、2 倍下量 x、加号的转置差与横竖中心，以及 x、加号、下拉箭头的左右镜像差（改前工具栏量到的镜像差在 1、1.5、1.75 倍超过 0.05 的上限）。插件（截图、图片搜索）也编进了 `PhosphorGlyph.cpp`，测试程序里要 `qmlRegisterType<PhosphorGlyph>`。
 
 ## 跳过的文件名和 HDR 截图（GitHub #132、#133，2026-10-29）
 
@@ -4822,8 +4859,155 @@
 - **现象**：遮罩的不透明度是 240，休息画面上的字后面还隐约看得到下层文档里的字，像一道删除线。
 - **做法**：字的后面加一块径向渐变（`Graphics::glow`），中间 62% 用不透明的遮罩色，往外渐渐变透明。量像素：字附近原来 21–35 有起伏，改后是一片 21；渐变的边缘看不出圈。
 
+## Scoop 安装（2026-11-03）
+
+### Scoop 建不出带汉字的开始菜单快捷方式
+- **现象**：`scoop install winshun` 报“无法保存快捷方式 …\Win?.lnk”，快捷方式没有建成（安装本身继续，只是开始菜单里没有）。
+- **原因**：Scoop 用 `WScript.Shell` 建快捷方式，它按系统代码页（ACP）转换文件名；系统区域不是中文的电脑（ACP 1252）上，“顺”变成 `?`，保存失败。
+- **做法**：清单里的快捷方式名用 ASCII 的 `WinShun`。
+
+### `scoop update winshun` 看不到新版本，卸载钩子在更新时也会运行
+- **现象**：发布后马上 `scoop update winshun`，Scoop 说已是最新；以为卸载钩子只在 `scoop uninstall` 时运行，结果更新时也把自启、右键菜单清掉了。
+- **原因**：`scoop update <应用>` 只读本地已同步的 bucket，同步要靠不带参数的 `scoop update`（它还要求有 `main` bucket 的 git 仓库）。更新流程会先运行旧版本清单的 `pre_uninstall`，钩子里的变量 `$cmd` 是 Scoop 子命令名（`update` 或 `uninstall`）。更新时若有应用目录里的进程在运行，Scoop 只提示“skip updating”，退出码仍是 0。
+- **做法**：应用内的更新窗口先运行 `scoop update` 再运行 `scoop update winshun`，用 `current\scoop-manifest.json` 的版本是否变化判断成败；钩子只在 `$cmd -eq 'uninstall'` 时清理，并且只对带这个开关的版本运行（版本号比 0.18.0 新）。
+
+### 登记的路径要用 `current`，不能用版本文件夹
+- **现象**：`scoop update` 并 `scoop cleanup` 之后，开机自启、资源管理器右键菜单指向已被删除的版本文件夹。
+- **原因**：版本文件夹随更新改变，只有联接 `current` 一直有效；从 `current` 启动时 Qt 和 `GetModuleFileNameW` 报告的就是 `current` 路径，从版本文件夹启动则是版本路径（实测）。
+- **做法**：所有写进系统的路径过 `scoop::stablePath()`，比较两个路径用 `scoop::sameCopy()`。
+
 ### Blender 等桌面程序的工厂启动不等于测试隔离（2026-10-30）
 
 - **根因**：`--factory-startup` 只重置启动内容，仍可能读取用户最近目录；不存在的 `BLENDER_USER_*` 路径会导致隔离配置不生效。正常退出还可能向全局临时目录写入恢复文件。
 - **规则和边界**：启动前创建私有配置、脚本、扩展、数据和临时目录，并只给测试子进程设置环境；保留正在运行的用户实例。只对自建工厂场景夹具使用无恢复文件的退出方式，不能套到用户工作实例。
 - **验证**：`tools/verify-blender-dialog.ps1` 固定匹配自建实例 PID、观察器及窗口令牌。底层适配通过后，还要使用真实 `App`/`DialogBar` 搜索，独立观察 Blender 的目录和文件名，并检查搜索栏截图。原生消息模拟窗口的通过只证明协议覆盖，不能宣称未安装的 AutoCAD 已实机修复。
+
+## 资源管理器标签页插件（winshun.explorer-tabs，2026-11-03）
+
+### 资源管理器没有“在新标签页打开”的接口
+- **现象**：`Navigate2` 带 `navOpenInNewTab`（0x800）或 `navOpenInBackgroundTab`（0x1000）照样在原标签页打开；`IShellBrowser::BrowseObject` 带 `SBSP_NEWBROWSER` 开的是新窗口；`SBSP_SAMEBROWSER` 要阻塞 300–470 ms，也不更快。
+- **原因**：Windows 11 的标签页没有公开接口。能用的只有命令 ID：发给 `ShellTabWindowClass` 的 `WM_COMMAND 0xA21B` 开一个新标签页（Ctrl+T 的那个），发给顶层窗口的 `0xA221`（lParam 是从 1 数的位置）切标签页，发给标签页的 `0xA021`（lParam 1）关它。
+- **做法**：`0xA21B` 开标签页，等它在 ShellWindows 里登记，拿到它的 `IWebBrowser2`，用 ID 列表（`VT_ARRAY|VT_UI1` 的 SAFEARRAY）`Navigate2` 过去，路径里有 `#`、`::{GUID}` 也不出错。新标签页先加载“主文件夹”，这一段 700–900 ms 是下限，插件省不掉。
+- **注意**：`FindWindowEx` 找 `ShellTabWindowClass` 按 Z 序返回，当前标签页排第一。
+
+### 藏别的进程的窗口
+- **现象**：`DwmSetWindowAttribute(DWMWA_CLOAK)` 对资源管理器的窗口返回拒绝；在 SHOW 事件里 `SetWindowLong` 加 `WS_EX_LAYERED` 要阻塞 80–360 ms，窗口在这段时间里照样画出来。
+- **原因**：跨进程不能 cloak。改扩展样式会同步给窗口的线程发 `WM_STYLECHANGING`，SHOW 时资源管理器的线程正忙着建窗口，要等它。窗口登记（`WindowRegistered`）时同一调用只要 1–7 ms。
+- **做法**：`WS_EX_LAYERED` + `SetLayeredWindowAttributes` 透明度 0，任务栏按钮用 `ITaskbarList::DeleteTab` 拿掉，失败时 `AddTab` 还回去。每藏一个先写进 `<数据文件夹>\hidden.txt`，插件启动时、崩溃过滤器和 `std::terminate` 里都按它还原（只还原仍是 `CabinetWClass`、分层、透明度 0 的窗口；还原失败的行留着下次再试）。
+- **现状**（2026-11-03，限定在测试文件夹，经真实 runner，28 次）：先登记后显示的窗口（资源管理器预启动的）显示前就藏好，10 次一次也没露出来。先显示的窗口在 SHOW 时才能藏，18 次都露出来一下，中位约 220 ms、最长约 310 ms（1 ms 一次读窗口可见、不透明）。正式运行时 SHOW 就藏、不等标题，但 `SetWindowLong` 本身要等资源管理器的线程，估计差不多。
+- **试过、省不掉**（2026-11-03，`hideprobe` 实验：自己的一个线程 1.5 s 不处理消息的窗口）：`SetWindowLong`+透明度、`SetWindowRgn` 空区域、`SetWindowPos` 带 `SWP_NOSENDCHANGING` 挪到屏幕外，调用都要阻塞约 1.45 s；`SetWindowPos` 带 `SWP_ASYNCWINDOWPOS`（藏或挪走）和 `ShowWindowAsync` 立刻返回，但窗口照样在屏幕上留到那个线程处理消息为止（同样约 1.45 s）；`DWMWA_CLOAK` 返回 0x80070005。所以先显示的窗口那一下闪动由资源管理器的线程决定，插件缩短不了。
+- **藏和还原要排队**：藏的 `SetWindowLong` 可能正在等资源管理器，期间很快就决定了“不并”，还原先做完，晚到的藏又把窗口藏回去，B 就一直看不见。藏、还原、全部还原用同一把锁串行（`Hider::m_serial`）。
+
+### SHOW 时还不知道是哪个文件夹
+- **现象**：先显示的新窗口，SHOW 时标题是通用的“文件资源管理器”或“主文件夹”，过 100–250 ms 才改成文件夹名。`EVENT_OBJECT_CREATE` 比 SHOW 还晚，不能当早一点的信号。
+- **做法**：正式运行时，只要还有别的资源管理器窗口、没按 Ctrl+Shift、不是从资源管理器窗口要的新窗口（见下“谁要的新窗口”）、不是比我们权限高的窗口，就在 SHOW 时先藏；登记后知道了文件夹再决定，不并就马上还原。测试时限定在测试文件夹（`WINSHUN_TABS_TEST_ROOT`）下，标题里没有测试标记的窗口不能先藏，所以测试里先显示的窗口要等标题改名（`EVENT_OBJECT_NAMECHANGE`，只挂 Shell 那个 explorer 进程）或登记才藏，看到的闪动比正式运行长。
+
+### 窗口登记的事件里不能干活
+- **现象**：在 `DShellWindowsEvents::WindowRegistered` 的 `Invoke` 里直接读新窗口的文件夹、开标签页时，约 45 次里有 2 次打开文件夹的那一方（`ShellExecute`、`IShellDispatch2::ShellExecute`）卡了 40 秒才返回。
+- **原因**：资源管理器的线程同步地把事件发给每个订阅者，等它返回；新窗口和打开它的程序都在等。在里面再跨进程调用资源管理器，就可能互相等到超时。
+- **做法**：`Invoke` 只 `PostMessage` 给插件自己的窗口，事后再处理。改后 70 多次没再卡。代价是新窗口不再被事件“冻住”：读 ShellWindows 列表、查它的文件夹都要等它忙着的线程，要几百毫秒，先登记后显示的窗口在这期间会显示出来。所以处理登记时第一步不做跨进程调用，只按类名列出还不认识的 `CabinetWClass` 顶层窗口，按 SHOW 的同一条件先藏（`hideOnRegistration`）；已登记、还没决定的窗口（`undecided`）在 SHOW 时也照样能藏。改后先登记的窗口一次也没露出来。
+
+### 新标签页提前开（猜目标窗口）
+- **现象**：新窗口登记后要 300–600 ms 才知道它的文件夹、决定并到哪里，之后新标签页加载“主文件夹”又要 700–900 ms，两段串着走。
+- **做法**：新窗口一藏起来（登记或 SHOW 时），按决定时的同一规则先猜目标窗口，马上发 `0xA21B` 开标签页；决定下来如果正是这个窗口，标签页多半已登记，直接 `Navigate2`，导航成功以后才把目标窗口提到前面。猜错（窗口不并、并到别处、切到已开着的标签页）就把开出来的标签页关掉，不提到前面。决定的超时从确认时算起，不从猜的时候算。
+- **关标签页**：`0xA021` 和标签页自己的 `IWebBrowser2::Quit` 关的都是窗口的**当前**标签页，不是收到消息的那个（`quitprobe` 实测：备用标签页不在前面时，`Quit` 关掉的是原来的标签页）。所以只在它是当前标签页时发、一次只发一个（`SendMessageCallback`，有回复才发下一个），关掉以后才切到要切的标签页；最多 3 秒，shell 线程不等。
+- **效果**（2026-11-03，同一台机器、基线与新版交替跑，只算 CPU 低于 60% 的组）：从打开到标签页成为当前，基线 n=50 中位 1807 ms、p90 2640 ms，新版 n=52 中位 1649 ms、p90 2453 ms；另一轮较空闲时 1722/2407 → 1354/1833 ms。CPU 满载时两者都 2.4–6 s，差别量不出来。先显示的窗口的闪动不变（中位约 130–150 ms）。
+
+### 启动时不能等资源管理器
+- **现象**（2026-11-03 实测）：资源管理器忙、窗口分在好几个 explorer 进程里时，插件启动读一遍已开的窗口要好几秒，`initialized()` 迟迟不返回，wsbench 的查询超时（1500 ms），没有可执行的行就退出了，插件跟着被关掉，之后的测试全没生效。
+- **做法**：`Engine::start` 只等隐藏的消息窗口建好就返回；`connect()` 在 shell 线程里接着读。读完以前（`connected` 为假）WinEvent 里一个窗口也不当成新开的，免得把已开着的窗口藏起来。
+
+### 资源管理器自己的“已经开着”
+- **现象**：文件夹已经在某个窗口的非当前标签页里开着，再普通地打开它（`ShellExecute` 文件夹、`SHOpenFolderAndSelectItems`），资源管理器不开新窗口，只把那个窗口放到前面，标签页不切。
+- **原因**：资源管理器先在 ShellWindows 里找已开着的同一个文件夹，找到就激活那个顶层窗口。没有新窗口，插件看不到这次打开。
+- **现状**：插件的“文件夹已经开着就切过去”只在资源管理器确实开了新窗口时起作用（`explorer.exe /n,路径`、别的程序强制新窗口等），实测这条能切过去。
+
+### 插件拿不到 Win顺 的环境变量
+- **现象**：测试时给 WinShun.exe 或 wsbench 设的 `WINSHUN_TABS_*` 环境变量，插件进程里读不到。
+- **原因**：插件运行器用 `CreateEnvironmentBlock(受限令牌)` 给插件建环境，是用户的默认环境，不继承宿主的。
+- **做法**：测试开关写在测试用清单副本的 `runtime.env` 里。
+
+### wsbench --plugin 只打关键词不触发
+- **现象**：`wsbench --plugin <文件夹> --query "tabs"` 不调用插件。
+- **原因**：关键词命令要关键词后面有空格和文字才算触发。
+- **做法**：`--query "tabs x"`。另外 `--action noop` 也会送到插件的 `action()`，插件要按 `a.action == "default"` 判断，不能见到动作就切换暂停。
+### 还原要先显示、后删记录，还要还回任务栏按钮
+- **现象**：插件在合并中途被结束或崩溃后，重启的插件和崩溃处理都把窗口改回不透明，可窗口在任务栏上没有按钮（任务栏 UIA 名“文件资源管理器 - N 个运行窗口”的 N 不变）；另有一种顺序是先把 `hidden.txt` 改写掉再显示，正好在这中间退出，窗口就永远藏着。
+- **原因**：藏的时候用 `ITaskbarList::DeleteTab` 拿掉了按钮，只改透明度不会让任务栏重新加上。记录先删、窗口后显示，中间一断就没人知道它藏着。
+- **做法**：每条还原路径（决定不并、失败、`stop()`、启动时读记录、崩溃过滤器、`std::terminate`）都先去掉分层、透明度回 255，窗口可见就 `AddTab`（在调用线程上 `CoInitializeEx` 再建 `ITaskbarList`），成功后才改写记录。`stop()` 在 join 线程**之前**就全部显示一遍（`Hider::close()` 之后不再藏新的），join 卡住也不会留下藏着的窗口。实测结束插件 5 次，5 次窗口都回来且任务栏数 +1；旧版 5 次都没有按钮。
+- **注意**：MSVC 的 `std::set_terminate` 只管调用它的那个线程，每个自己起的线程（shell、WinEvent）开头都要再设一次。
+
+### 谁要的新窗口（Ctrl+N、“在新窗口中打开”不能并）
+- **现象**：从资源管理器窗口里按 Ctrl+N（开着“文件夹已经开着就切过去”时还被当成“已开着”切走）、右键“在新窗口中打开”、`explorer /n` 都被并成了标签页；原来靠“鼠标左键按着”判断拖出标签页，在桌面上双击文件夹时左键也可能还按着，误判成拖。
+- **做法**：WinEvent 线程挂 `EVENT_SYSTEM_FOREGROUND`，记最近几个前台窗口。新窗口出现时，往回找第一个“不是它自己、还活着、不是我们藏着的；若是资源管理器窗口，得是早就认识、已决定的”窗口：是资源管理器窗口、且不是插件自己刚提到前面的（之后没有键鼠输入，`GetLastInputInfo`），就保留新窗口；桌面、Win顺、别的程序照常并。设置“这些程序打开的仍是新窗口”按 exe 名加例外。不再看左键。
+- **坑**：前台事件报的常是标签页 `ShellTabWindowClass` 这个子窗口，要 `GetAncestor(GA_ROOT)`；同一批里刚开、还没决定的新窗口不能算“要的人”，不然连开 3 个时后两个都被当成“要窗口”。用户在插件工作时动鼠标键盘，“插件提到前面的”就不再算插件的，这时可能误判成“要窗口”（少并一次，不会丢）。
+
+### 关备用标签页要按窗口排队
+- **现象**：猜错的备用标签页还没关掉，同一个窗口又开了下一个标签页，关的命令落到了别的标签页上。
+- **做法**：`SpareCloser` 按窗口记“正在关的”；有关的在等，就不在这个窗口 `begin()` 新的合并，也不提前开备用标签页；关完（或 3 秒放弃）再接着来。决定时，正在关的标签页和这次合并自己开的标签页不算窗口原有的。
+
+### shell 线程的消息会重入
+- **现象**：处理一个消息时做跨进程 COM 调用（读 ShellWindows、`Navigate2`），STA 的消息循环会在里面又分发别的消息（新窗口登记、计时器），状态在半路被改，拿着的指针失效。
+- **做法**：`handle()` 记深度：深度大于 0 时计时器丢掉（下次还会来），登记、撤销、显示、重连这些先存起来，最外层处理完再依次处理；处理中只拿 HWND 和下标，COM 调用之后重新查，不拿容器元素的指针或迭代器。
+
+## 图片文字搜索插件（winshun.ocr-search，2026-11-03）
+
+### 后台模式顺带把进程工作集卡在 32 MB：识别慢 2.5 倍，HEIC／AVIF 读不出
+
+- **现象**：工作进程用 `PROCESS_MODE_BACKGROUND_BEGIN` 进后台模式后，HEIC、AVIF 图片一张也读不出（WIC 的 `CopyPixels` 返回 `E_OUTOFMEMORY`），同一张图在普通进程里能读。字多的 4000 万像素页面一页要 70–120 秒，三个文件缺页 2.6 亿次。任务管理器里工作集一直很小，看着像省内存。
+- **原因**：后台模式不只降 CPU、磁盘和内存优先级，还给整个进程加了 32 MB 的工作集硬上限（文档里没写）。`GetProcessWorkingSetSizeEx` 进入前是 0.2–1.3 MB、标志 `0xa`（上下限都不强制），进入后是 0.2–32 MB、标志 `0x6`（强制上限）。ONNX Runtime 推理要几百 MB，只能在 32 MB 里来回换页；Store 版 HEIF／AV1 解码器（`msheif_store.dll`、`HEVCDECODER_STORE.dll`）在进程多占约 16 MB 以后就分配失败（只分配不碰也算），多占 12 MB 时还行。
+- **做法**：进后台模式前用 `GetProcessWorkingSetSizeEx` 记下上下限和标志，进入后立刻用 `SetProcessWorkingSetSizeEx` 原样设回去（`OcrWorker.cpp` 的 `enterBackground()`），优先级照旧是低的。三个密集文件 68.8／121.5／97.7 秒 → 27.3／45.5／38.7 秒，认出的行数一样，缺页 2.62 亿 → 8700 万，提交内存峰值不变（587 MB）。`tst_ocrsearch` 的 `workerReadsPicturesOfStoreExtensions` 经真实工作进程读 HEIC 和 AVIF，带着上限就失败。整个项目只有这个工作进程用进程级后台模式；线程级后台模式（`THREAD_MODE_BACKGROUND_BEGIN`，内容索引、遍历线程等）有没有类似的上限，没查。
+
+### `QFile::read(上限)` 按上限分配，读 10 KB 的文件也占 128 MB
+
+- **现象**：读一张 10 KB 的图片，得到的 `QByteArray` 容量是 134,217,710 字节。插件进程和工作进程读每个文件时都多占约 128 MB，算在 768 MB 的沙盒内存上限里。
+- **原因**：`readFile()` 为了发现超过 100 MB 的文件，调用 `file.read(kMaxFile + 1)`。`QIODevice::read(maxSize)` 先按 `maxSize` 分配（再向上取整到 128 MB），读完只缩短长度，容量不收回。
+- **做法**：先看 `file.size()`，超过上限直接失败；没超过就 `read(size)` 正好读这么多，读完核对长度和 `file.size()`，中途变了就算读取不完整。
+
+### 一页字很密，识别超过 60 秒，被当成卡住跳过
+
+- **现象**：A0 扫描页、上万像素高的长截图，在后台优先级下一页要识别十几到六十多秒。插件 60 秒收不到进度，就把文件记成“60 秒没有进展”跳过。
+- **原因**：工作进程只在一页／一张图处理完时报告进度，一页里面再久也没有消息。
+- **做法**：`PaddleOcr::find()` 接受可选的进度回调（`OcrOptions`），每检测完一段条带、每认完一批文字行调用一次；工作进程把它转成进度行，插件照旧收到进度就重置 60 秒计时。不用定时线程代报心跳，否则真卡住也会被当成有进展。剪贴板和截图不传回调，行为不变。实测密集 A4 页报 14 次，最长沉默 2–5 秒；A1 扫描页报 64 次，最长 5.5 秒。
+
+### 长截图按 4096 缩小，字小得认不出
+
+- **现象**：1080×15000 的聊天长截图被缩成 295 像素宽，一个字也认不出。
+- **原因**：所有图片都按长边 4096 解码，长图的短边跟着缩得太小。
+- **做法**：长宽比超过 3 的图保留原宽度，总像素不超过识别上限 4000 万；照片照旧 4096。PDF 大页面按页上最大图片的分辨率渲染（最高 200 dpi）。要在 768 MB 里读 4000 万像素：算完指纹就把图转成 24 位交给识别，识别直接用 24 位图，大页面只存一份；关掉 ONNX Runtime 的内存模式（`DisableMemPattern`），长图的条带尺寸重复时，它预先规划的块比检测本身的峰值多约 135 MB，速度也没变快。改前三张密集大图都报 bad allocation，改后都能读完。
+
+### PDF 里转成曲线的字没有文字层，只看图片对象就整页漏掉
+
+- **现象**：设计图、CAD 导出的 PDF、盖章的页面，AnyTXT 能搜到上面的字，本插件搜不到。
+- **原因**：旧规则只渲染含图片对象的页。这些页的字是路径（转曲）、批注外观或没有 Unicode 的字形，页上没有图片，文字层里也没有这些字。
+- **做法**：没有图片的页也看文字层：可读的字少于 16 个或一半以上读不出 Unicode，并且页面画了路径／渐变或有批注时，才渲染识别。普通带文字层的页不受影响：80 个真实 PDF 里 428 页无图页，只多读了 4 页转曲的图纸。
+
+### 中文和数字之间时有时无的空格、繁体字、两个字符的词，都搜不到
+
+- **现象**：识别结果和用户输入在中文与数字／英文之间有时有空格、有时没有（“第 3 页”和“第3页”，“Win顺 插件”），对不上就搜不到；繁体扫描件用简体搜不到；搜 A4、Q3、12 永远没有结果。
+- **原因**：归一化只做了大小写、全角和中文字之间的空格；片段规则里 ASCII 至少三个字符才有片段，一两个字符的词没有任何索引。
+- **做法**：存入和查询两边都去掉中日文字旁边的空格、把繁体折成简体（OpenCC `TSCharacters`）；一两个字符的字母数字词另存整词词元，按整词匹配。规则摘要（`termsRules()`）包含 `normalized()` 的样本输出和繁简表，规则一变就从已存识别行重建，不重新识别。
+
+### 测试：`tst_ocr` 不能用 `QT_QPA_PLATFORM=offscreen` 跑
+
+- **现象**：设了 `QT_QPA_PLATFORM=offscreen` 跑 `tst_ocr`，27 项里 22 项失败，画出来的字一个也认不出；不设就全过。
+- **原因**：没细查，很可能是 offscreen 平台没带字体目录（`tst_clipimage` 用 offscreen 时另设了 `QT_QPA_FONTDIR`），画字的测试画出了空图。
+- **做法**：照 ctest 的注册直接跑，不设 offscreen。
+
+### 装好的插件读不了任何 PDF：“缺少 PDF 读取组件，请更新 Win顺”
+
+- **现象**：从插件库或压缩包装好图片文字搜索后，所有 PDF 都进未完成项，原因“缺少 PDF 读取组件，请更新 Win顺”；图片照常识别。单元测试、wsbench 和整套识别对比都正常，直到 2026-11-04 用装好的插件实测才发现，已发布的 1.0.0 也是这样。
+- **原因**：`extract::loadPdfium()` 用 `LoadLibraryExW(L"pdfium.dll", nullptr, LOAD_LIBRARY_SEARCH_APPLICATION_DIR)`，只找程序自己的文件夹。Win顺 和 WinShunExtract 就在 `pdfium.dll` 旁边；插件程序却装在用户的插件文件夹，小启动器用 `AddDllDirectory` 加了 Win顺 的文件夹，这个标志不搜它。测试和基准都从 build 文件夹运行工作进程，`pdfium.dll` 正好在旁边，测不出来。
+- **做法**：改成 `LOAD_LIBRARY_SEARCH_APPLICATION_DIR | LOAD_LIBRARY_SEARCH_USER_DIRS`（仍不找 PATH 和当前目录）。插件里加载宿主自带的 DLL，标志里都要有 `USER_DIRS`（或用默认目录）。验证插件要用装好的布局：程序和 DLL 复制到单独的文件夹，宿主的 DLL 只在 app 目录，`tst_ocrsearch` 的 `installedWorkerReadsPdfPages` 就这样测。已经因此失败的文件不会自己重试，升级迁移按两种语言的这条报错把它们留给下次遍历重读。
+
+### 测试：`--profile` 的插件装在 `<profile>\plugins`，不是 `<profile>\WinShun\plugins`
+
+- **现象**：实测插件时把插件和它的旧索引放进 `<profile>\WinShun\plugins\`，测试副本启动后插件根本没运行，插件列表里也没有它。
+- **原因**：`--profile` 下数据目录（`Settings::dataDir()`）就是 profile 文件夹本身，插件、索引、日志都在那里；只有设置文件多一层：`<profile>\WinShun\WinShun.ini`（`QSettings::setPath` 的 UserScope 会再加组织名）。
+- **做法**：用户插件放 `<profile>\plugins\<id>`，插件数据放 `<profile>\plugins\<id>.data`，设置写 `<profile>\WinShun\WinShun.ini` 的 `[Plugin.<id>]`（`Enabled=true` 和 `Confirmed=` 插件的权限）。启动后看 `<profile>\plugins.log` 有没有“<id>: 启动”。
+
+### 识别进度里的长路径在“C:”后断开，看不到文件名
+
+- **现象**：插件窗口识别时，进度下面的当前文件只显示“C:”和下一行半截路径，没有省略号，文件名看不到。
+- **原因**：计数和路径放在同一个 `Text` 里，`wrapMode: Text.Wrap` 加 `maximumLineCount: 3` 和 `elide: Text.ElideMiddle`。Qt 只有 `ElideRight` 能和换行一起用，`ElideMiddle`／`ElideLeft` 只对单行有效（“多行文字粘贴进搜索框，灰色的字铺满整个窗口”一条也提到过），多出的行直接截掉。
+- **做法**：会很长的路径单独放一行不换行的 `Text`，用 `ElideMiddle`；要换行的说明另放一个 `Text`（`Controller::progressFile`）。

@@ -150,11 +150,18 @@ namespace ws::autostart {
 
 // From what was last read: at once, without asking Task Scheduler again.
 bool isEnabled();
+// The same, but nothing (rather than asking) before anything was read.
+std::optional<bool> lastRead();
 // Reads the task again, in the background (changed outside WinShun?); `done`
 // runs there afterwards.
 void refresh(std::function<void()> done = {});
 bool isSetUp(); // enabled for any copy of WinShun, this one or another
 void setEnabled(bool enabled);
+// Takes away the task and the Run value that start THIS copy, and only those
+// (another copy's stay). Whether one was removed. For the uninstall of a Scoop copy.
+bool removeIfThisCopy();
+// The task or the Run value starts another copy that exists.
+bool otherCopyStarts();
 // Removes the task as administrator (schtasks, UAC asks): Windows refuses a
 // process with normal rights to remove one that starts Win顺 elevated (the
 // 管理员直读 mode; GitHub #67). `done` runs on a worker thread once the task

@@ -1,7 +1,9 @@
 #include "Preview.h"
+#include "ClipScrollBench.h"
 #include "ContentPaneProbe.h"
 
 #include "Backup.h"
+#include "AiSettings.h"
 #include "App.h"
 #include "Clipboard.h"
 #include "ClipboardDisplay.h"
@@ -21,6 +23,7 @@
 #include "PluginSettings.h"
 #include "ResultModel.h"
 #include "ThumbnailProvider.h"
+#include "ClipThumbnailProvider.h"
 #include "Settings.h"
 #include "SettingsEditor.h"
 #include "SystemTheme.h"
@@ -64,10 +67,14 @@
 #include <QPainter>
 #include <QLibraryInfo>
 #include <QLocale>
+#include <QMutex>
 #include <QQmlApplicationEngine>
 #include <QQmlComponent>
 #include <QQmlContext>
 #include <QQmlEngine>
+#include <QQmlExpression>
+#include <QAbstractEventDispatcher>
+#include <QEventLoop>
 #include <QQuickItem>
 #include <QQuickWindow>
 #include <stdexcept>
@@ -302,7 +309,7 @@ int runPlugins(const QStringList& args)
     }
     auto* editor = new SettingsEditor(settings, u"software"_s, &engine);
     editor->plugins()->setLocale(u"zh"_s);
-    editor->plugins()->loadPreview();
+    editor->plugins()->loadPreview(args.contains(u"--elevated"_s)); // the `elevated` shield and 确认 note
     if (updatesOnly)
         editor->plugins()->gallery()->setUpdatesOnly(true);
     if (aiPage)
@@ -399,6 +406,19 @@ QObject* named(QQuickWindow* window, const char* id)
     QObject* object = context ? context->objectForName(QString::fromLatin1(id)) : nullptr;
     if (!object)
         qWarning("preview: no item '%s' in SettingsWindow.qml", id);
+    return object;
+}
+
+// A row or section of a page of SettingsWindow.qml, by its name in that page's
+// parts (SettingsWindow.part): the page is made if it is not yet.
+QObject* partOf(QQuickWindow* window, int page, const char* name)
+{
+    QVariant found;
+    QMetaObject::invokeMethod(window, "part", Q_RETURN_ARG(QVariant, found), Q_ARG(QVariant, QVariant(page)),
+        Q_ARG(QVariant, QVariant(QString::fromLatin1(name))));
+    QObject* object = found.metaType() == QMetaType::fromType<QJSValue>() ? found.value<QJSValue>().toQObject() : found.value<QObject*>();
+    if (!object)
+        qWarning("preview: no part '%s' on settings page %d", name, page);
     return object;
 }
 
@@ -664,6 +684,339 @@ bool previewCommandIcons(QQuickWindow* window, SettingsEditor* editor, Favorites
     return saved;
 }
 
+// ---- --preview-settings --lazy-pages ------------------------------------------------------
+// The settings window makes a page when first needed (SettingsWindow.loadPage,
+// PageSlot): with the window only the page on show; a way in from elsewhere only
+// its own; a word typed all of them (the search needs every row); after the first
+// frame (refreshAfterOpen) the rest one at a time (fillTimer).
+
+constexpr int kSettingsPages = 10; // SettingsWindow.pageSlots
+
+QList<int> madePages(QQuickWindow* window)
+{
+    QList<int> pages;
+    for (int i = 0; i < kSettingsPages; ++i) {
+        QObject* slot = named(window, (QByteArray("slot") + QByteArray::number(i)).constData());
+        if (slot && slot->property("item").value<QObject*>())
+            pages.append(i);
+    }
+    return pages;
+}
+
+QString pagesText(const QList<int>& pages)
+{
+    QStringList list;
+    for (int page : pages)
+        list.append(QString::number(page));
+    return u"["_s + list.join(u',') + u"]"_s;
+}
+
+// The GUI thread's longest stretch without running its event loop while `until`
+// is false (at most `ms`): what a frame, a hover or a key waits for at worst.
+qint64 longestBlock(int ms, const std::function<bool()>& until, qint64* took = nullptr)
+{
+    QElapsedTimer clock;
+    clock.start();
+    qint64 last = 0;
+    qint64 longest = 0;
+    QTimer tick;
+    tick.setTimerType(Qt::PreciseTimer);
+    tick.setInterval(1);
+    QObject::connect(&tick, &QTimer::timeout, [&] {
+        const qint64 now = clock.elapsed();
+        longest = std::max(longest, now - last);
+        last = now;
+    });
+    tick.start();
+    while (clock.elapsed() < ms && !until())
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
+    tick.stop();
+    if (took)
+        *took = clock.elapsed();
+    return longest;
+}
+
+QVariant evaluateIn(QQuickWindow* window, const QString& expression); // below
+
+bool previewLazyPages(QQuickWindow* window, const std::function<QQuickWindow*()>& make, QQmlEngine* engine,
+    const QString& favoritePath, const QDir& out)
+{
+    Q_UNUSED(out);
+    bool ok = true;
+    const auto check = [&](bool condition, const QString& message) {
+        say((condition ? u"ok: "_s : u"FAILED: "_s) + message);
+        ok = condition && ok;
+    };
+    const auto all = [] {
+        QList<int> pages;
+        for (int i = 0; i < kSettingsPages; ++i)
+            pages.append(i);
+        return pages;
+    }();
+    const auto inputOf = [](QQuickWindow* w) -> QQuickItem* {
+        QObject* box = named(w, "searchBox");
+        for (QQuickItem* item : box ? box->findChildren<QQuickItem*>() : QList<QQuickItem*>()) {
+            if (item->inherits("QQuickTextInput"))
+                return item;
+        }
+        return nullptr;
+    };
+    const auto close = [](QQuickWindow* w) {
+        w->hide();
+        pump(50);
+        delete w;
+    };
+    say(u"lazy pages: this engine's incubation controller: %1"_s.arg(engine->incubationController() ? u"set"_s : u"none (incubateObject makes it all at once)"_s));
+
+    // Opened: the page on show, and no other.
+    check(madePages(window) == QList<int> {0}, u"opened: page 0 only (made %1)"_s.arg(pagesText(madePages(window))));
+    check(qobject_cast<QQuickItem*>(named(window, "flick"))->property("contentHeight").toDouble() > 300, u"opened: the first page is laid out"_s);
+
+    // The ways in from elsewhere, each on a window made anew. Called as App
+    // calls them (before the window is shown), they make only their own page.
+    const int clipboardPage = window->property("clipboardPage").toInt();
+    const int favoritesPage = window->property("favoritesPage").toInt();
+    const int pluginsPage = window->property("pluginsPage").toInt();
+    const QString rowTitle = QCoreApplication::translate("SettingsWindow", "每次打开时清空搜索"); // 结果列表 › 操作习惯
+    struct Link {
+        QString name;
+        std::function<void(QQuickWindow*)> go;
+        int page;
+        int tab; // -1: either
+        QList<int> made;
+        bool afterShow = false;
+    };
+    const auto call = [](const char* method, QVariantList values = {}) {
+        return [method, values](QQuickWindow* w) {
+            if (values.size() == 3)
+                QMetaObject::invokeMethod(w, method, Q_ARG(QVariant, values[0]), Q_ARG(QVariant, values[1]), Q_ARG(QVariant, values[2]));
+            else if (values.size() == 1)
+                QMetaObject::invokeMethod(w, method, Q_ARG(QVariant, values[0]));
+            else
+                QMetaObject::invokeMethod(w, method);
+        };
+    };
+    const Link links[] = {
+        {u"showClipboardPage"_s, call("showClipboardPage"), clipboardPage, 0, {clipboardPage}},
+        {u"showShortcutsPage"_s, call("showShortcutsPage"), 0, 4, {0}},
+        {u"showWebPage"_s, call("showWebPage"), pluginsPage, -1, {pluginsPage}},
+        {u"showFileTypesPage"_s, call("showFileTypesPage"), 3, 3, {3}},
+        {u"showFavoritesPage"_s, call("showFavoritesPage", {favoritePath}), favoritesPage, 0, {favoritesPage}},
+        {u"showPluginUpdates"_s, call("showPluginUpdates"), pluginsPage, 1, {pluginsPage}},
+        {u"showPlace indexAccess"_s, call("showPlace", {u"indexAccess"_s}), 2, -1, {2}},
+        {u"showPlace 3,2 (--settings-at)"_s, call("showPlace", {u"3,2"_s}), 3, 2, {3}},
+        {u"showSetting (open_settings)"_s, call("showSetting", {3, 2, rowTitle}), 3, 2, all},
+        {u"showClipboardPage after show"_s, call("showClipboardPage"), clipboardPage, 0, {0, clipboardPage}, true},
+    };
+    for (const Link& link : links) {
+        const int warned = g_warnings;
+        QQuickWindow* w = make();
+        if (!w) {
+            check(false, link.name + u": no window"_s);
+            continue;
+        }
+        if (link.afterShow) {
+            showOffScreen(w);
+            link.go(w);
+        } else {
+            link.go(w);
+            showOffScreen(w);
+        }
+        settle(w);
+        pump(300); // showSetting finds its row after a turn of the event loop (Qt.callLater)
+        settle(w, 2);
+        const QList<int> made = madePages(w);
+        const int page = w->property("currentPage").toInt();
+        const int tab = w->property("currentTab").toInt();
+        const double height = named(w, "flick")->property("contentHeight").toDouble();
+        check(page == link.page && (link.tab < 0 || tab == link.tab) && !w->property("searching").toBool()
+                  && made == link.made && height > 150 && g_warnings == warned,
+            u"%1: on %2/%3, made %4, content %5 high, %6 warning(s)"_s.arg(link.name).arg(page).arg(tab)
+                .arg(pagesText(made)).arg(height).arg(g_warnings - warned));
+        close(w);
+    }
+
+    // A word typed: nothing made at once; the page stays as it is (no 没有找到)
+    // while the rest is made in the background as fast as it goes, then searched;
+    // the results ordered as they stand, page by page, and as many as with all
+    // made beforehand. Enter and ↓ pressed meanwhile: no harm, Enter done after.
+    {
+        const QString word = QCoreApplication::translate("SettingsWindow", "快捷键", "settings tab");
+        const int warned = g_warnings;
+        QQuickWindow* w = make();
+        showOffScreen(w);
+        settle(w);
+        check(madePages(w) == QList<int> {0}, u"search: page 0 only before typing"_s);
+        QQuickItem* input = inputOf(w);
+        QObject* noResults = named(w, "noResults");
+        const double heightBefore = named(w, "flick")->property("contentHeight").toDouble();
+        input->setProperty("text", word);
+        QQuickItem* focused = w->activeFocusItem();
+        QMetaObject::invokeMethod(w, "moveCurrent", Q_ARG(QVariant, QVariant(1))); // ↓
+        check(madePages(w) == QList<int> {0} && !w->property("searchReady").toBool() && !w->property("searching").toBool()
+                  && !noResults->property("visible").toBool() && w->property("currentPage").toInt() == 0
+                  && named(w, "flick")->property("contentHeight").toDouble() == heightBefore && w->activeFocusItem() == focused,
+            u"search: typed, nothing made at once, the page as it was, no 没有找到, ↓ harmless"_s);
+        bool nothingFoundMeanwhile = false;
+        QElapsedTimer waited;
+        waited.start();
+        while (!w->property("searchReady").toBool() && waited.elapsed() < 5000) {
+            pump(5);
+            nothingFoundMeanwhile = nothingFoundMeanwhile || noResults->property("visible").toBool();
+        }
+        check(madePages(w) == all && w->property("searchReady").toBool() && !nothingFoundMeanwhile && g_warnings == warned,
+            u"search: every page made after the letter, a page per turn (%1 ms, made %2), no 没有找到 meanwhile"_s
+                .arg(waited.elapsed()).arg(pagesText(madePages(w))));
+        settle(w, 3);
+        QObject* search = named(w, "settingsSearch");
+        const int total = search->property("total").toInt();
+        const QVariantList counts = search->property("counts").toList();
+        QVariant returned;
+        QMetaObject::invokeMethod(w, "results", Q_RETURN_ARG(QVariant, returned));
+        const QVariantList results = returned.metaType() == QMetaType::fromType<QJSValue>()
+            ? returned.value<QJSValue>().toVariant().toList() : returned.toList();
+        bool ordered = !results.isEmpty();
+        double lastY = -1;
+        int lastPage = -1;
+        QSet<int> pagesFound;
+        for (const QVariant& entry : results) {
+            auto* row = qobject_cast<QQuickItem*>(entry.toMap().value(u"row"_s).value<QObject*>());
+            QObject* section = row ? row->property("section").value<QObject*>() : nullptr;
+            if (!row || !section) {
+                ordered = false;
+                break;
+            }
+            const double y = row->mapToItem(w->contentItem(), QPointF()).y();
+            const int page = section->property("page").toInt();
+            ordered = ordered && y >= lastY - 0.5 && page >= lastPage;
+            lastY = y;
+            lastPage = page;
+            pagesFound.insert(page);
+        }
+        check(ordered && pagesFound.size() > 1, u"search '%1': %2 result(s) on %3 page(s), in the order they stand"_s
+            .arg(word).arg(results.size()).arg(pagesFound.size()));
+        // The same word on a window with every page made before it was typed.
+        QMetaObject::invokeMethod(window, "loadAllPages");
+        settle(window);
+        QQuickItem* mainInput = inputOf(window);
+        mainInput->setProperty("text", word);
+        settle(window, 3);
+        QObject* mainSearch = named(window, "settingsSearch");
+        check(total > 0 && total == mainSearch->property("total").toInt() && counts == mainSearch->property("counts").toList(),
+            u"search: %1 found, as with every page made beforehand (%2)"_s.arg(total).arg(mainSearch->property("total").toInt()));
+        // Where Enter goes there: the best result's page and tab.
+        const QString best = evaluateIn(window, u"settingsSearch.current ? settingsSearch.current.section.page + '/' + settingsSearch.current.section.tab : ''"_s).toString();
+        mainInput->setProperty("text", QString());
+        settle(window, 2);
+        close(w);
+
+        // Enter pressed before the search could look: done once it can.
+        const int warnedEnter = g_warnings;
+        QQuickWindow* e = make();
+        showOffScreen(e);
+        settle(e);
+        inputOf(e)->setProperty("text", word);
+        QMetaObject::invokeMethod(named(e, "searchBox"), "activated");
+        const bool pending = e->property("activatePending").toBool() && !e->property("searching").toBool();
+        QElapsedTimer waitedEnter;
+        waitedEnter.start();
+        while (!e->property("searchReady").toBool() && waitedEnter.elapsed() < 5000)
+            pump(5);
+        settle(e, 3);
+        const QString landed = u"%1/%2"_s.arg(e->property("currentPage").toInt()).arg(e->property("currentTab").toInt());
+        check(pending && !best.isEmpty() && landed == best && !e->property("searching").toBool()
+                  && inputOf(e)->property("text").toString().isEmpty() // left the search for the row
+                  && !e->property("activatePending").toBool() && g_warnings == warnedEnter,
+            u"search: Enter before ready, gone to the best result once searched (%1, expected %2)"_s.arg(landed, best));
+        close(e);
+    }
+
+    // Closed with some pages made, and while they were being made; opened again.
+    {
+        const int warned = g_warnings;
+        QQuickWindow* w = make();
+        showOffScreen(w);
+        settle(w);
+        QMetaObject::invokeMethod(w, "showPage", Q_ARG(QVariant, QVariant(4)), Q_ARG(QVariant, QVariant(0)));
+        settle(w, 2);
+        w->hide();
+        pump(100);
+        check(madePages(w) == QList<int>({0, 4}) && w->property("currentPage").toInt() == 0 && g_warnings == warned,
+            u"hidden with pages 0 and 4 made: reset without warnings, back on page 0"_s);
+        showOffScreen(w);
+        settle(w);
+        check(madePages(w) == QList<int>({0, 4}) && g_warnings == warned, u"shown again: nothing more made"_s);
+        QMetaObject::invokeMethod(w, "refreshAfterOpen");
+        pump(250);
+        const QList<int> partly = madePages(w);
+        w->hide();
+        pump(600);
+        check(madePages(w) == partly && partly.size() < kSettingsPages && g_warnings == warned,
+            u"hidden while filling (made %1): filling stops"_s.arg(pagesText(partly)));
+        showOffScreen(w);
+        settle(w);
+        QMetaObject::invokeMethod(w, "refreshAfterOpen");
+        qint64 took = 0;
+        const qint64 block = longestBlock(4000, [&] { return w->property("searchReady").toBool(); }, &took);
+        check(madePages(w) == all && g_warnings == warned, u"shown again: the rest made after the first frame (%1 ms, longest block %2 ms)"_s
+            .arg(took).arg(block));
+        close(w);
+    }
+
+    // The background filling from scratch: one page per tick, each tick's time,
+    // the GUI thread's longest block meanwhile.
+    {
+        const int warned = g_warnings;
+        QQuickWindow* w = make();
+        showOffScreen(w);
+        settle(w);
+        QMetaObject::invokeMethod(w, "refreshAfterOpen");
+        qint64 took = 0;
+        const qint64 block = longestBlock(5000, [&] { return w->property("searchReady").toBool(); }, &took);
+        QStringList times;
+        double slowest = 0;
+        for (int i = 0; i < kSettingsPages; ++i) {
+            const double ms = named(w, (QByteArray("slot") + QByteArray::number(i)).constData())->property("loadMs").toDouble();
+            times.append(u"%1: %2"_s.arg(i).arg(ms));
+            if (i > 0)
+                slowest = std::max(slowest, ms);
+        }
+        say(u"lazy pages: made in %1 ms; each page's making (ms) %2; slowest after the first %3 ms; GUI thread's longest block %4 ms"_s
+            .arg(took).arg(times.join(u", "_s)).arg(slowest).arg(block));
+        check(madePages(w) == all && took < 3000 && g_warnings == warned, u"filling: every page made within 3 s"_s);
+        // Typed once filling has made everything (按键一览's sections too), and
+        // typed on a window just opened (found once it is all made): as many
+        // found as on the window with everything made beforehand.
+        const auto found = [&](QQuickWindow* in, const QString& word) {
+            inputOf(in)->setProperty("text", word);
+            QElapsedTimer waited;
+            waited.start();
+            while (!in->property("searchReady").toBool() && waited.elapsed() < 5000)
+                pump(5);
+            settle(in, 3);
+            const int total = named(in, "settingsSearch")->property("total").toInt();
+            inputOf(in)->setProperty("text", QString());
+            settle(in, 2);
+            return total;
+        };
+        // "Ctrl": rows of 按键一览 among them
+        for (const QString& word : {QCoreApplication::translate("SettingsWindow", "快捷键", "settings tab"), u"Ctrl"_s}) {
+            const int afterFilling = found(w, word);
+            QQuickWindow* fresh = make();
+            showOffScreen(fresh);
+            settle(fresh);
+            const int typedAtOnce = found(fresh, word);
+            close(fresh);
+            const int everything = found(window, word);
+            check(afterFilling > 0 && afterFilling == everything && typedAtOnce == everything && g_warnings == warned,
+                u"search '%1': %2 found after filling, %3 typed at once, as with everything made (%4)"_s
+                    .arg(word).arg(afterFilling).arg(typedAtOnce).arg(everything));
+        }
+        close(w);
+    }
+    return ok;
+}
+
 int runSettings(const QStringList& args)
 {
     const QDir out(valueAfter(args, kSettingsFlag));
@@ -782,6 +1135,7 @@ int runSettings(const QStringList& args)
     editor->refreshFileManagers();
     editor->refreshTaskbarState();
     editor->refreshMcpClients();
+    editor->refreshAutostart(); // the switch as this PC has it (App reads it in the background)
     // A few favorites, in a file of their own that goes with the preview:
     // a folder renamed and with a keyword, a file, a folder that is gone.
     QTemporaryDir favoritesDir;
@@ -826,6 +1180,27 @@ int runSettings(const QStringList& args)
     const int baseHeight = window->height(); // 720: what the page column gets on a screen
     settle(window);
     say(u"showing %1x%2 (dpr %3), active %4"_s.arg(window->width()).arg(window->height()).arg(window->devicePixelRatio()).arg(window->isActive()));
+    // The pages are made when first needed (SettingsWindow.loadPage), the one on
+    // show with the window. --lazy-pages looks at that; everything else below at
+    // all of them, made now.
+    if (args.contains(u"--lazy-pages"_s)) {
+        const auto make = [&] {
+            auto* made = qobject_cast<QQuickWindow*>(component.createWithInitialProperties({
+                {u"editor"_s, QVariant::fromValue(editor)},
+                {u"frame"_s, QVariant::fromValue(frame)},
+                {u"updater"_s, QVariant::fromValue(updater)},
+                {u"backup"_s, QVariant::fromValue(&backup)},
+            }));
+            if (made)
+                editor->setWindow(made);
+            return made;
+        };
+        const bool ok = previewLazyPages(window, make, &engine, favorites.items().constFirst().path, out);
+        editor->setWindow(window);
+        return finish(window, ok);
+    }
+    QMetaObject::invokeMethod(window, "loadAllPages");
+    settle(window);
 
     // The three tables, side by side: a page without a keyword entry or a
     // tabs entry would read undefined.
@@ -1192,7 +1567,7 @@ int runSettings(const QStringList& args)
         QMetaObject::invokeMethod(depth, "editingFinished");
         const auto scan = editor->shares().front().toMap();
         check(scan.value(u"scanFrom"_s).toString() == u"23:45" && scan.value(u"scanDepth"_s).toInt() == 4, "QML edits did not reach settings");
-        QMetaObject::invokeMethod(window, "goTo", Q_ARG(QVariant, QVariant::fromValue(named(window, "sharesRow"))));
+        QMetaObject::invokeMethod(window, "goTo", Q_ARG(QVariant, QVariant::fromValue(partOf(window, 2, "sharesRow"))));
         settle(window, 3);
         if (auto* viewport = qobject_cast<QQuickItem*>(flick)) {
             const auto top = controls->parentItem()->mapToItem(viewport, QPointF());
@@ -1337,6 +1712,23 @@ int runSettings(const QStringList& args)
             QKeyEvent event(QEvent::KeyPress, code, modifiers, text);
             QCoreApplication::sendEvent(recorder, &event);
         };
+        for (const QString& name : {u"shortcutHelpToggle"_s, u"footerHintsToggle"_s}) {
+            QObject* toggle = window->findChild<QObject*>(name);
+            check(toggle != nullptr, "keyboard hint toggle is missing");
+            if (!toggle)
+                continue;
+            const bool help = name == u"shortcutHelpToggle";
+            for (const bool on : {false, true}) {
+                QMetaObject::invokeMethod(toggle, "toggled", Q_ARG(bool, on));
+                settle(window);
+                Settings restored;
+                restored.load();
+                check((help ? editor->shortcutHelp() : editor->footerHints()) == on
+                    && (help ? restored.shortcutHelp : restored.footerHints) == on
+                    && toggle->property("checked").toBool() == on,
+                    "keyboard hint toggle did not apply and persist");
+            }
+        }
         key(Qt::Key_Space, {}, u" "_s);
         check(editor->previewHotkey() == u"Space", "recording Space did not apply");
         Settings restored;
@@ -1376,7 +1768,7 @@ int runSettings(const QStringList& args)
             const QString title = pages[page].toMap().value(u"title"_s).toString() + (pageTabs.isEmpty() ? QString() : u" / "_s + pageTabs[tab].toString());
             QMetaObject::invokeMethod(window, "showPage", Q_ARG(QVariant, QVariant(page)), Q_ARG(QVariant, QVariant(tab)));
             if (page == pluginsPage && tab == 0) { // the cards come folded: one unfolded too (翻译: settings, permissions)
-                if (QObject* section = named(window, "pluginsSection"))
+                if (QObject* section = partOf(window, pluginsPage, "pluginsSection"))
                     QMetaObject::invokeMethod(section, "expandAt", Q_ARG(QVariant, QVariant(1)));
                 if (auto* paste = window->findChild<QQuickItem*>(u"pasteFileSettingsCard"_s))
                     paste->setProperty("expanded", true);
@@ -1479,7 +1871,7 @@ int runSettings(const QStringList& args)
         settle(window, 3);
         saved = saveGrab(window, out.filePath(u"command-form-bottom.png"_s)) && saved;
         if (args.contains(u"--command-form"_s)) {
-            if (QObject* section = named(window, "favoritesSection")) {
+            if (QObject* section = partOf(window, favoritesPage, "favoritesSection")) {
                 section->setProperty("editing", -1);
                 section->setProperty("addingCommand", true);
                 flick->setProperty("contentY", 0);
@@ -1575,7 +1967,7 @@ int runSettings(const QStringList& args)
         {PluginSettings::tr("API 密钥"), pluginsPage, 0}, // a plugin's own setting
         {QCoreApplication::translate("PasteFileCard", "粘贴为文件"), pluginsPage, 0}, // a built-in card
         // Shown as 内置功能 cards too, the rows of their own page first (open_settings searches them by title).
-        {QCoreApplication::translate("SettingsWindow", "双击空白处弹出文件夹菜单"), 0, 2},
+        {QCoreApplication::translate("SettingsWindow", "在资源管理器或桌面弹出文件夹快捷菜单"), 0, 2},
         {QCoreApplication::translate("SettingsWindow", "菜单里列出的内容"), 0, 2},
         {QCoreApplication::translate("SettingsWindow", "对话框旁的搜索框"), 0, 2},
         {QCoreApplication::translate("SettingsWindow", "在 Directory Opus 里直接打字搜索"), 0, 2},
@@ -1629,6 +2021,70 @@ int runSettings(const QStringList& args)
         settle(window, 2);
     }
     return finish(window, saved);
+}
+
+// GitHub #186: the preview window by the real launcher on the real screen
+// (GetWindowRect, physical): beside it while there is room (a launcher in
+// the middle of the screen), and with no room, never over the names.
+void checkPreviewPlacement(Launcher& launcher, QQuickWindow* window, FilePreview& preview)
+{
+    const auto check = [](bool okay, const QString& name) {
+        if (!okay) qWarning("preview placement regression: %s", qUtf8Printable(name));
+    };
+    QScreen* screen = window->screen();
+    if (!screen || launcher.results()->count() == 0) {
+        check(false, u"no screen or no rows"_s);
+        return;
+    }
+    const QRect area = screen->availableGeometry();
+    const QRect before = window->geometry();
+    const auto physical = [](QWindow* w) {
+        RECT r {};
+        ::GetWindowRect(reinterpret_cast<HWND>(w->winId()), &r);
+        return QRect(QPoint(r.left, r.top), QPoint(r.right - 1, r.bottom - 1));
+    };
+    const QString path = launcher.results()->pathAt(0);
+    const FilePreview::Item item {path, QFileInfo(path).fileName()};
+    for (const bool roomy : {true, false}) {
+        // Room beside: the default width in the middle, low (the sides go
+        // above its top). No room: nearly as wide and tall as the screen.
+        const QSize size = roomy ? QSize(760, 480) : area.size() - QSize(160, 200);
+        window->setGeometry(area.left() + (area.width() - size.width()) / 2,
+            roomy ? area.top() + area.height() * 2 / 5 : area.top() + 40, size.width(), size.height());
+        settle(window);
+        preview.show(item);
+        QElapsedTimer loaded;
+        loaded.start();
+        while ((preview.kind() == FilePreview::Loading || !preview.window() || !preview.window()->isVisible())
+            && loaded.elapsed() < 3000)
+            pump(10);
+        pump(50);
+        QWindow* shown = preview.window();
+        check(shown && shown->isVisible(), u"preview window shown"_s);
+        if (shown) {
+            const QRect launcherRect = physical(window), previewRect = physical(shown);
+            say(u"preview placement (%1): launcher %2,%3 %4x%5, preview %6,%7 %8x%9 (physical)"_s
+                    .arg(roomy ? u"room beside"_s : u"no room"_s)
+                    .arg(launcherRect.x()).arg(launcherRect.y()).arg(launcherRect.width()).arg(launcherRect.height())
+                    .arg(previewRect.x()).arg(previewRect.y()).arg(previewRect.width()).arg(previewRect.height()));
+            if (roomy) {
+                check(!previewRect.intersects(launcherRect), u"room beside: the preview covered the launcher"_s);
+            } else {
+                const int names = launcherRect.left() + launcherRect.width() * 40 / 100;
+                check(previewRect.left() >= names || previewRect.right() <= launcherRect.right() - launcherRect.width() * 40 / 100,
+                    u"no room: the preview covered the names"_s);
+            }
+            MONITORINFO monitor {.cbSize = sizeof(MONITORINFO)};
+            ::GetMonitorInfoW(::MonitorFromWindow(reinterpret_cast<HWND>(window->winId()), MONITOR_DEFAULTTONEAREST), &monitor);
+            const RECT& work = monitor.rcWork;
+            check(QRect(QPoint(work.left, work.top), QPoint(work.right - 1, work.bottom - 1)).contains(previewRect),
+                u"the preview stays in the work area"_s);
+        }
+        preview.close();
+        pump(50);
+    }
+    window->setGeometry(before);
+    settle(window);
 }
 
 void checkSearchMenuKeys(Launcher& launcher, QQuickWindow* window, FilePreview& preview, const QDir& output)
@@ -2110,6 +2566,89 @@ bool checkShortcutPanels(QQmlEngine* engine, const QDir& output)
         if (field)
             panel(window, launcherAsked, u"launcher"_s,
                   {u"Shift+Tab"_s, u"Ctrl+Tab"_s, u"Ctrl+S"_s, u"Ctrl+T"_s}, {u"Ctrl+C"_s, u"Ctrl+Shift+Enter"_s, u"Ctrl+J / N · Ctrl+K / P"_s}, field);
+
+        Settings settings;
+        SettingsEditor editor(settings, u"software"_s);
+        QObject::connect(&editor, &SettingsEditor::edited, &launcher, [&launcher](const Settings& changed) {
+            launcher.setKeyboardHints(changed.shortcutHelp, changed.footerHints);
+        });
+        QQuickItem* help = shownNamed(window->contentItem(), u"shortcutsButton"_s);
+        QQuickItem* hints = shownNamed(window->contentItem(), u"footerKeyHints"_s);
+        check(help && hints, u"launcher: help and footer controls exist"_s);
+        if (help && hints) {
+            const qreal withHelp = hints->mapToScene({hints->width(), 0}).x();
+            click(window, help);
+            editor.setShortcutHelp(false);
+            settle(window);
+            check(!tipWindow() && !help->isVisible(), u"launcher: disabling help closes its open panel"_s);
+            check(hints->mapToScene({hints->width(), 0}).x() > withHelp,
+                u"launcher: hiding help releases the button's space"_s);
+            for (const bool showHelp : {false, true}) {
+                for (const bool showFooter : {false, true}) {
+                    editor.setShortcutHelp(showHelp);
+                    editor.setFooterHints(showFooter);
+                    settle(window);
+                    check(help->isVisible() == showHelp && hints->isVisible() == showFooter,
+                        u"launcher: help=%1 and footer=%2 apply independently"_s.arg(showHelp).arg(showFooter));
+                    check(showFooter || hints->width() == 0, u"launcher: hidden hints release their width"_s);
+                    Settings restored;
+                    restored.load();
+                    check(restored.shortcutHelp == showHelp && restored.footerHints == showFooter,
+                        u"launcher: both hint options persist"_s);
+                    saveGrab(window, output.filePath(u"hints-%1-%2.png"_s.arg(showHelp).arg(showFooter)));
+                }
+            }
+        }
+        for (const QString& query : {QString(), u"   "_s, u"no-matching-file"_s}) {
+            launcher.setQuery(query);
+            pump(200);
+            launcher.results()->assign({}, {});
+            launcher.setCurrentRow(-1);
+            settle(window);
+            QQuickItem* tab = hints ? visualNamed(hints, u"footerTabHint"_s) : nullptr;
+            check(tab && tab->isVisible() == !query.trimmed().isEmpty(),
+                u"launcher: scope hint follows nonblank input, including no results"_s);
+        }
+        struct AdminCase {
+            QString name;
+            bool expected;
+            bool directory = false;
+            bool missing = false;
+            bool offline = false;
+            AppKind app = AppKind::None;
+        };
+        const AdminCase adminCases[] {
+            {u"Portable.ExE"_s, true}, {u"Setup.msi"_s, true}, {u"Script.cmd"_s, true}, {u"Notes.txt"_s, false},
+            {.name = u"Folder.exe"_s, .expected = false, .directory = true},
+            {.name = u"Missing.exe"_s, .expected = false, .missing = true},
+            {.name = u"Offline.exe"_s, .expected = false, .offline = true},
+            {.name = u"Installed.exe"_s, .expected = true, .app = AppKind::Desktop},
+            {.name = u"StoreApp.exe"_s, .expected = false, .app = AppKind::Store},
+        };
+        for (const AdminCase& test : adminCases) {
+            SearchResult result;
+            result.name = test.name;
+            result.path = temporary.filePath(test.name);
+            result.isDir = test.directory;
+            result.missing = test.missing;
+            result.offline = test.offline;
+            result.app = test.app;
+            result.elevatable = test.app == AppKind::Desktop;
+            launcher.results()->assign({result}, {});
+            launcher.setCurrentRow(0);
+            settle(window);
+            check(launcher.results()->data(launcher.results()->index(0), ResultModel::ElevatableRole).toBool() == test.expected,
+                u"launcher: elevation capability for "_s + test.name);
+            QQuickItem* row = visualNamed(window->contentItem(), u"resultRow-0"_s);
+            QQuickItem* shield = row ? visualNamed(row, u"adminAction"_s) : nullptr;
+            check(shield && shield->isVisible() == test.expected, u"launcher: shield visibility for "_s + test.name);
+            bool menuAdmin = false;
+            for (const QVariant& item : launcher.menuItems(0))
+                menuAdmin = menuAdmin || item.toMap().value(u"action"_s).toInt() == Launcher::RunAsAdmin;
+            check(menuAdmin == test.expected, u"launcher: shield agrees with the menu for "_s + test.name);
+            if (test.name == u"Portable.ExE")
+                saveGrab(window, output.filePath(u"portable-admin.png"_s));
+        }
         window->hide();
     }
     {
@@ -2237,6 +2776,16 @@ bool checkSearchLogo(QQmlEngine* engine, const QDir& output)
         for (const QString& size : {u"compact"_s, u"standard"_s, u"roomy"_s}) {
             SystemTheme::setUiSize(size);
             settle(window);
+            // #162: the type strip shown once (文件) and closed again keeps
+            // its chips and + laid out over the header's lower half, clipped
+            // away but still registered as controls. Not 内容: its scan's
+            // stop warns.
+            if (!panel) {
+                for (const Launcher::Scope scope : {Launcher::Files, Launcher::All}) {
+                    launcher.setScope(scope);
+                    settle(window);
+                }
+            }
             RECT client {};
             ::GetClientRect(hwnd, &client);
             const qreal scaleX = qreal(client.right) / window->width();
@@ -2277,6 +2826,7 @@ bool checkSearchLogo(QQmlEngine* engine, const QDir& output)
             }
         }
         SystemTheme::setUiSize(previousUiSize);
+        launcher.results()->assign({SearchResult{.name = u"Example.txt"_s, .path = u"T:\\Example.txt"_s}}, {}); // the scopes searched again
         settle(window);
         check(::SendMessageW(hwnd, WM_NCHITTEST, 0, point()) == HTCAPTION, mode + u"logo retains the system drag region"_s);
         click(WM_NCMBUTTONDOWN, WM_NCMBUTTONUP);
@@ -2464,6 +3014,7 @@ void checkFileGallery(Launcher& launcher, IndexService& index, QQmlEngine* engin
         "real image search did not produce the gallery rows");
     if (auto* field = visualNamed(window->contentItem(), u"panelSearchField"_s))
         field->setProperty("text", u"测试照片"_s);
+    checkPreviewPlacement(launcher, window, filePreview);
     checkSearchMenuKeys(launcher, window, filePreview, output);
     checkDialogSearchKeys(index, engine, output);
     launcher.setGallery(true);
@@ -3021,7 +3572,6 @@ void checkLauncherFilters(QQuickWindow* window, QQmlEngine* qmlEngine, const QDi
         launcher.setCurrentRow(0);
     };
     const auto tabHint = [&] { return launcher.keyHints().value(u"tab"_s).toString(); };
-    const QString scopeHint = QCoreApplication::translate("ws::Launcher", "切换范围");
     const QString folderHint = QCoreApplication::translate("ws::Launcher", "进入文件夹");
     const auto hasBrowseAction = [&] {
         const QVariantList menu = launcher.menuItems(0);
@@ -3031,7 +3581,7 @@ void checkLauncherFilters(QQuickWindow* window, QQmlEngine* qmlEngine, const QDi
         });
     };
     showRow(folder);
-    check(tabHint() == scopeHint && !launcher.autocomplete(0) && launcher.query().isEmpty(),
+    check(tabHint().isEmpty() && !launcher.autocomplete(0) && launcher.query().isEmpty(),
         "favorite folder stole Tab with the default setting");
     launcher.cycleScope(1);
     check(launcher.scope() == Launcher::Files, "Tab did not advance the scope on a favorite folder");
@@ -3045,7 +3595,7 @@ void checkLauncherFilters(QQuickWindow* window, QQmlEngine* qmlEngine, const QDi
     folder.favorite = false;
     folder.path = ordinaryPath;
     showRow(folder);
-    check(tabHint() == scopeHint && !launcher.autocomplete(0) && hasBrowseAction(),
+    check(tabHint().isEmpty() && !launcher.autocomplete(0) && hasBrowseAction(),
         "an ordinary folder stole Tab or lost its independent browse action");
     launcher.setScope(Launcher::Folders);
     query({});
@@ -3064,7 +3614,7 @@ void checkLauncherFilters(QQuickWindow* window, QQmlEngine* qmlEngine, const QDi
     folder.missing = false;
     showRow(folder);
     launcher.setTabEntersFavoriteFolder(false);
-    check(tabHint() == scopeHint && !launcher.autocomplete(0), "turning the Tab setting off left stale behavior or hints");
+    check(tabHint().isEmpty() && !launcher.autocomplete(0), "turning the Tab setting off left stale behavior or hints");
     SearchResult suggestion {.name = u"Search suggestion"_s, .app = AppKind::Web,
         .keyword = u"example"_s, .words = u"report"_s, .suggestion = true};
     showRow(suggestion);
@@ -4205,8 +4755,11 @@ int runResults(const QStringList& args)
     QFont font = QGuiApplication::font();
     font.setStyleStrategy(QFont::NoSubpixelAntialias);
     QGuiApplication::setFont(font);
+    if (args.contains(u"--clipboard-scroll"_s)) // its own engine: --qml-debug comes before one exists
+        return runClipScrollBench(out, args);
     QQmlApplicationEngine engine;
     engine.addImageProvider(u"fileicon"_s, new FileIconProvider);
+    engine.addImageProvider(u"clipthumb"_s, new ClipThumbnailProvider); // the clipboard rows' pictures
     if (args.contains(u"--clipboard-sizing"_s))
         return checkClipboardInteractions(&engine, out, {}, true) ? std::min(g_warnings, 100) : 4;
     if (args.contains(u"--content-pane"_s)) {
@@ -5981,6 +6534,451 @@ bool probeCaptureHotkeys(App& app, const QStringList& args, const QDir& out, QJs
     return passed;
 }
 
+// ---- --settings-reopen-check (runtime probe) ----------------------------------------
+// The settings window is made once and kept (App::showSettings): closed, it is
+// hidden and puts itself back as a window made anew would be
+// (SettingsWindow.resetForReopen). Opened, left in a state, closed the way the
+// title bar closes it (QWindow::close), opened again and looked at; then the
+// ways in from elsewhere on the kept window, and --settings-opens more
+// openings timed. Shown without activation, no input sent (StartOptions::settingsProbe).
+
+QQuickWindow* productionSettingsWindow()
+{
+    for (QWindow* candidate : QGuiApplication::allWindows()) {
+        if (candidate->property("editor").value<SettingsEditor*>())
+            return qobject_cast<QQuickWindow*>(candidate);
+    }
+    return nullptr;
+}
+
+// A JavaScript expression in SettingsWindow.qml's own scope (its ids, functions).
+QVariant evaluateIn(QQuickWindow* window, const QString& expression)
+{
+    QQmlExpression e(qmlContext(window), window, expression);
+    QVariant value = e.evaluate();
+    if (e.hasError()) {
+        qWarning().noquote() << u"settings reopen: %1: %2"_s.arg(expression, e.error().toString());
+        return {};
+    }
+    if (value.metaType() == QMetaType::fromType<QJSValue>())
+        value = value.value<QJSValue>().toVariant();
+    return value;
+}
+
+// Every Timer, animation or other object of the window that says it is
+// running (Repeater and Loader items are reached through the visual tree).
+QStringList runningInWindow(QQuickWindow* window)
+{
+    QSet<QObject*> seen;
+    QStringList running;
+    const std::function<void(QObject*)> walk = [&](QObject* object) {
+        if (!object || seen.contains(object))
+            return;
+        seen.insert(object);
+        const QMetaObject* meta = object->metaObject();
+        const int index = meta->indexOfProperty("running");
+        if (index >= 0 && meta->property(index).read(object).toBool()) {
+            const QObject* owner = object->parent();
+            running.push_back(u"%1 (in %2 %3)"_s.arg(QString::fromLatin1(meta->className()),
+                owner ? QString::fromLatin1(owner->metaObject()->className()) : u"-"_s, owner ? owner->objectName() : QString()));
+        }
+        for (QObject* child : object->children())
+            walk(child);
+        if (auto* item = qobject_cast<QQuickItem*>(object)) {
+            for (QQuickItem* child : item->childItems())
+                walk(child);
+        }
+    };
+    walk(window);
+    walk(window->contentItem());
+    return running;
+}
+
+// The GUI thread left alone (an event loop that sleeps, not pump()'s spin) for
+// `ms`: how often it woke and how much CPU it took. Work done on a timer or
+// for an animation (a kept window's) shows as tens of wakes a second.
+QJsonObject guiThreadIdle(int ms)
+{
+    const auto cpuMs = [] {
+        FILETIME created {}, exited {}, kernel {}, user {};
+        if (!GetThreadTimes(GetCurrentThread(), &created, &exited, &kernel, &user))
+            return -1.0;
+        const auto ticks = [](const FILETIME& t) { return (static_cast<quint64>(t.dwHighDateTime) << 32) | t.dwLowDateTime; };
+        return static_cast<double>(ticks(kernel) + ticks(user)) / 10000.0;
+    };
+    int wakes = 0;
+    const QMetaObject::Connection counting = QObject::connect(QAbstractEventDispatcher::instance(),
+        &QAbstractEventDispatcher::awake, [&wakes] { ++wakes; });
+    const double before = cpuMs();
+    QEventLoop loop;
+    QTimer::singleShot(ms, &loop, &QEventLoop::quit);
+    loop.exec();
+    const double cpu = cpuMs() - before;
+    QObject::disconnect(counting);
+    return {{u"ms"_s, ms}, {u"wakes"_s, wakes}, {u"gui_cpu_ms"_s, cpu}};
+}
+
+bool probeSettingsReopen(App& app, const QStringList& args, const QDir& out, QJsonObject& report)
+{
+    QJsonObject checks;
+    QJsonArray openings;
+    bool passed = true;
+    const auto check = [&](bool ok, const QString& key) {
+        checks.insert(key, ok);
+        if (!ok) {
+            qWarning().noquote() << "settings reopen:" << key;
+            passed = false;
+        }
+        return ok;
+    };
+    // Shown, then pumped until its first frame was drawn and what waited for it ran.
+    const auto open = [&](const std::function<void()>& how, const QString& what,
+                          const std::function<void(QQuickWindow*)>& drawn = {}) -> QQuickWindow* {
+        const int before = app.settingsOpening().count;
+        how();
+        QElapsedTimer waited;
+        waited.start();
+        while (waited.elapsed() < 5000
+            && (app.settingsOpening().count == before || app.settingsOpening().firstFrameMs < 0))
+            pump(10);
+        if (drawn && productionSettingsWindow())
+            drawn(productionSettingsWindow());
+        pump(150);
+        const App::SettingsOpening& o = app.settingsOpening();
+        openings.append(QJsonObject {{u"what"_s, what}, {u"reused"_s, o.reused}, {u"firstFrameMs"_s, o.firstFrameMs}});
+        say(u"settings %1: %2, first frame after %3 ms"_s.arg(what, o.reused ? u"shown again"_s : u"made"_s).arg(o.firstFrameMs));
+        return productionSettingsWindow();
+    };
+    const auto close = [&](QQuickWindow* window) {
+        window->close(); // as the title bar's ✕, Alt+F4 or the taskbar's 关闭窗口
+        pump(300);
+    };
+    const auto js = [&](QQuickWindow* window, const QString& expression) { return evaluateIn(window, expression); };
+
+    const int warningsBefore = g_warnings; // a QML error in the reset is a warning
+    const QJsonObject idleBefore = guiThreadIdle(3000); // the app with no settings window yet
+    report.insert(u"gui_idle_before_first_open"_s, idleBefore);
+
+    // The pages made after the first frame (SettingsWindow.fillTimer), with frames
+    // kept coming meanwhile (the page nudged by a pixel every 16 ms, as hovering or
+    // typing would redraw it): the longest wait for a frame, each page's making.
+    // Then the same for a second with nothing being made, to compare.
+    const auto watchFilling = [&](QQuickWindow* w) {
+        // Made for the first frame: the page it opened on, and no other.
+        const QString madeFirst = js(w, u"[0, 1, 2, 3, 4, 5, 6, 7, 8, 9].filter(i => pageItem(i) !== null).join(',')"_s).toString();
+        report.insert(u"made_for_first_frame"_s, madeFirst);
+        // --settings-first-open all: everything made before the first frame (as before
+        // the pages were made when needed), to compare with.
+        const bool allFirst = valueAfter(args, u"--settings-first-open") == u"all";
+        if (!allFirst)
+            check(madeFirst == js(w, u"String(currentPage)"_s).toString(), u"first_frame_made_one_page"_s);
+        // --settings-fill-interval 16: as fast as while the search box has the keyboard.
+        if (const int interval = valueAfter(args, u"--settings-fill-interval").toInt(); interval > 0)
+            js(w, u"fillTimer.interval = %1"_s.arg(interval));
+        QElapsedTimer clock;
+        clock.start();
+        QMutex lock;
+        QList<qint64> frames;
+        const QMetaObject::Connection counting = QObject::connect(w, &QQuickWindow::frameSwapped, w, [&] {
+            QMutexLocker locked(&lock);
+            frames.append(clock.elapsed());
+        }, Qt::DirectConnection); // emitted on the render thread
+        QTimer nudge;
+        nudge.setTimerType(Qt::PreciseTimer);
+        nudge.setInterval(16);
+        QObject::connect(&nudge, &QTimer::timeout, [&] { js(w, u"flick.contentY = flick.contentY > 0 ? 0 : 1"_s); });
+        nudge.start();
+        const auto longestGap = [&](qint64 from, qint64 to) {
+            QMutexLocker locked(&lock);
+            qint64 longest = 0;
+            qint64 last = from;
+            int count = 0;
+            for (qint64 at : frames) {
+                if (at < from || at > to)
+                    continue;
+                longest = std::max(longest, at - last);
+                last = at;
+                ++count;
+            }
+            return std::pair {std::max(longest, to - last), count};
+        };
+        // --settings-type-at N: a letter typed into the search box N ms after the
+        // first frame. Nothing made at once for it: the filling goes as fast as it
+        // can and the results come once everything is made (searchReady).
+        QJsonObject typed;
+        const QString typeAt = valueAfter(args, u"--settings-type-at");
+        qint64 typedAt = -1, readyAt = -1, resultsAt = -1, typedBlock = 0, lastPoll = 0;
+        bool nothingFoundMeanwhile = false;
+        QTimer typing;
+        typing.setSingleShot(true);
+        QObject::connect(&typing, &QTimer::timeout, [&] {
+            typed.insert(u"made_before"_s, js(w, u"[0, 1, 2, 3, 4, 5, 6, 7, 8, 9].filter(i => pageItem(i) !== null).length"_s).toInt());
+            typedAt = clock.elapsed();
+            QElapsedTimer took;
+            took.start();
+            // --settings-focus: the box given the keyboard first (Ctrl+F), then the letter.
+            if (args.contains(u"--settings-focus"_s))
+                js(w, u"searchBox.focusAll()"_s);
+            js(w, u"searchBox.setText('a')"_s);
+            typed.insert(u"took_ms"_s, took.elapsed()); // the keystroke's own work
+            typed.insert(u"box_has_keyboard"_s, js(w, u"searchBox.editing"_s).toBool());
+        });
+        if (!typeAt.isEmpty())
+            typing.start(typeAt.toInt());
+        // Every 2 ms: when the search became ready and the results showed; the
+        // GUI thread's longest block from the letter typed to its results.
+        QTimer poll;
+        poll.setTimerType(Qt::PreciseTimer);
+        poll.setInterval(2);
+        QObject::connect(&poll, &QTimer::timeout, [&] {
+            const qint64 now = clock.elapsed();
+            if (typedAt >= 0 && resultsAt < 0)
+                typedBlock = std::max(typedBlock, now - std::max(lastPoll, typedAt));
+            lastPoll = now;
+            if (readyAt < 0 && w->property("searchReady").toBool())
+                readyAt = now;
+            if (typedAt >= 0 && resultsAt < 0) {
+                if (w->property("searching").toBool())
+                    resultsAt = now;
+                else if (QObject* none = named(w, "noResults"); none && none->property("visible").toBool())
+                    nothingFoundMeanwhile = true;
+            }
+        });
+        poll.start();
+        const auto loaded = [&] { return js(w, u"searchReady"_s).toBool(); };
+        const auto done = [&] { return readyAt >= 0 && !typing.isActive() && (typeAt.isEmpty() || resultsAt >= 0); };
+        qint64 took = 0;
+        const qint64 block = longestBlock(6000, done, &took);
+        if (readyAt >= 0)
+            took = readyAt; // the filling's own end, not the typed letter's
+        if (typedAt >= 0) {
+            pump(150); // the frames after it
+            poll.stop();
+            const auto [typedGap, typedFrames] = longestGap(typedAt, std::max(typedAt, resultsAt) + 100);
+            typed.insert(u"at_ms"_s, typedAt);
+            typed.insert(u"results_after_ms"_s, resultsAt >= 0 ? resultsAt - typedAt : -1);
+            // From App::showSettings called to the results shown (this clock starts
+            // as the first frame is seen, within a few ms of it).
+            typed.insert(u"open_to_results_ms"_s, resultsAt >= 0 ? app.settingsOpening().firstFrameMs + resultsAt : -1);
+            typed.insert(u"gui_longest_block_ms"_s, typedBlock);
+            typed.insert(u"longest_frame_gap_ms"_s, typedGap);
+            typed.insert(u"frames"_s, typedFrames);
+            typed.insert(u"nothing_found_meanwhile"_s, nothingFoundMeanwhile);
+            typed.insert(u"found"_s, js(w, u"results().length"_s).toInt());
+            js(w, u"searchBox.clear()"_s);
+            pump(100);
+            report.insert(u"typed"_s, typed);
+            say(u"settings typed during filling: %1"_s.arg(QString::fromUtf8(QJsonDocument(typed).toJson(QJsonDocument::Compact))));
+            check(typed.value(u"found"_s).toInt() > 0 && !nothingFoundMeanwhile && resultsAt >= 0, u"typed_search_finds"_s);
+        }
+        poll.stop();
+        const auto [fillGap, fillFrames] = longestGap(0, took);
+        const qint64 calmFrom = clock.elapsed();
+        const qint64 calmBlock = longestBlock(1000, [] { return false; });
+        const auto [calmGap, calmFrames] = longestGap(calmFrom, clock.elapsed());
+        nudge.stop();
+        QObject::disconnect(counting);
+        js(w, u"flick.contentY = 0"_s);
+        QJsonArray times;
+        double slowest = 0;
+        for (int i = 0; i < kSettingsPages; ++i) {
+            const double ms = js(w, u"slot%1.loadMs"_s.arg(i)).toDouble();
+            times.append(ms);
+            if (i > 0)
+                slowest = std::max(slowest, ms);
+        }
+        const QJsonObject filling {{u"all_made"_s, loaded()}, {u"took_ms"_s, took}, {u"page_ms"_s, times},
+            {u"slowest_page_after_first_ms"_s, slowest}, {u"longest_frame_gap_ms"_s, fillGap}, {u"frames"_s, fillFrames},
+            {u"gui_longest_block_ms"_s, block}, {u"calm_longest_frame_gap_ms"_s, calmGap}, {u"calm_frames"_s, calmFrames},
+            {u"calm_gui_longest_block_ms"_s, calmBlock}};
+        report.insert(u"filling"_s, filling);
+        say(u"settings filling: %1"_s.arg(QString::fromUtf8(QJsonDocument(filling).toJson(QJsonDocument::Compact))));
+        check(filling.value(u"all_made"_s).toBool(), u"pages_made_after_first_frame"_s);
+    };
+    // A way in from elsewhere, as App's own call it (App::showClipboardSettings …):
+    // where it opens, given before the window is shown.
+    const auto showAt = [&](const char* method, const QVariant& value = {}) {
+        app.showSettings([method, value](QQuickWindow* w) {
+            if (value.isValid())
+                QMetaObject::invokeMethod(w, method, Q_ARG(QVariant, value));
+            else
+                QMetaObject::invokeMethod(w, method);
+        });
+    };
+    // --settings-first-open clipboard: the first opening by such a way in, which makes that page only.
+    const bool firstByLink = valueAfter(args, u"--settings-first-open") == u"clipboard";
+    // No white flash: the page is made as the window is told to show
+    // (SettingsWindow.onVisibleChanged, connected first), before the native window shows.
+    QJsonObject shown;
+    QMetaObject::Connection showing;
+    QQuickWindow* window = open([&] {
+        app.showSettings([&](QQuickWindow* w) {
+            showing = QObject::connect(w, &QWindow::visibleChanged, w, [&, w](bool visible) {
+                if (!visible || !shown.isEmpty())
+                    return;
+                shown.insert(u"native_window_visible"_s, IsWindowVisible(reinterpret_cast<HWND>(w->winId())) != FALSE);
+                shown.insert(u"page_made"_s, js(w, u"pageItem(currentPage) !== null"_s).toBool());
+            }, Qt::DirectConnection);
+            if (firstByLink)
+                QMetaObject::invokeMethod(w, "showClipboardPage");
+            else if (valueAfter(args, u"--settings-first-open") == u"all") // see watchFilling
+                QMetaObject::invokeMethod(w, "loadAllPages");
+        });
+    }, firstByLink ? u"first (clipboard page)"_s : u"first"_s, watchFilling);
+    QObject::disconnect(showing);
+    report.insert(u"when_shown"_s, shown);
+    check(shown.value(u"page_made"_s).toBool() && shown.contains(u"native_window_visible"_s)
+            && !shown.value(u"native_window_visible"_s).toBool(),
+        u"page_made_before_the_native_window_shows"_s);
+    if (firstByLink)
+        check(window && js(window, u"currentPage === clipboardPage"_s).toBool(), u"first_opening_on_clipboard_page"_s);
+    if (window) {
+        // Whether this engine makes objects asynchronously at all (an incubation
+        // controller: QQmlApplicationEngine's, the launcher's window, now hidden):
+        // a page made again in the background, then thrown away.
+        QQmlEngine* engine = qmlEngine(window);
+        QJsonObject incubation {{u"controller"_s, engine && engine->incubationController() != nullptr}};
+        int othersShown = 0;
+        for (QWindow* other : QGuiApplication::allWindows())
+            othersShown += other != window && other->isVisible();
+        incubation.insert(u"other_windows_shown"_s, othersShown);
+        QQmlExpression start(qmlContext(window), window, u"slot2.content.incubateObject(slot2, {}, Qt.Asynchronous)"_s);
+        const QJSValue incubator = start.evaluate().value<QJSValue>();
+        const int atOnce = incubator.property(u"status"_s).toInt(); // Component.Ready 1, Loading 2
+        qint64 took = 0;
+        const qint64 block = longestBlock(5000, [&] { return incubator.property(u"status"_s).toInt() != 2; }, &took);
+        incubation.insert(u"status_at_once"_s, atOnce == 2 ? u"Loading"_s : atOnce == 1 ? u"Ready"_s : QString::number(atOnce));
+        incubation.insert(u"status_after"_s, incubator.property(u"status"_s).toInt() == 1 ? u"Ready"_s : u"not ready"_s);
+        incubation.insert(u"took_ms"_s, took);
+        incubation.insert(u"gui_longest_block_ms"_s, block);
+        delete incubator.property(u"object"_s).toQObject(); // at once, before anything else changes the window
+        pump(50);
+        report.insert(u"incubation"_s, incubation);
+        say(u"settings incubation: %1"_s.arg(QString::fromUtf8(QJsonDocument(incubation).toJson(QJsonDocument::Compact))));
+    }
+    if (!check(window && window->isVisible(), u"opened"_s))
+        return false;
+    QPointer<QQuickWindow> made(window);
+    const WId handle = window->winId();
+    check(!app.settingsOpening().reused && app.settingsOpening().firstFrameMs >= 0, u"first_opening_made_and_drawn"_s);
+
+    // Left in a state: another page, scrolled, a search typed, dialogs and a
+    // form open, a card unfolded, a field half filled, a hotkey being recorded.
+    js(window, u"showPage(3, 2)"_s);
+    settle(window, 2);
+    js(window, u"flick.contentY = 200"_s);
+    js(window, u"searchBox.setText('主题')"_s);
+    pump(100);
+    js(window, u"updateDialog.show()"_s);
+    js(window, u"pluginDialog.ask('uninstall', {id: 'zz.fixture', name: 'Fixture'})"_s);
+    js(window, u"webEditing = -1"_s);
+    js(window, u"part(2, 'nameInput').text = '半截'"_s);
+    js(window, u"part(6, 'captureKeywordError').text = 'stale'"_s);
+    js(window, u"part(pluginsPage, 'pluginsSection').expand('zz.fixture')"_s);
+    js(window, u"editor.plugins.recordingHotkey = true"_s);
+    pump(100);
+    check(js(window, u"searching && beforeSearch !== null && updateDialog.open && pluginDialog.open && webDialog.active"_s).toBool(),
+        u"state_before_close"_s);
+    check(js(window, u"editor.recordingHotkey"_s).toBool(), u"recording_suspends_hotkeys_before_close"_s);
+
+    close(window);
+    check(made && !made->isVisible(), u"close_hides_and_keeps"_s);
+    if (!made)
+        return false;
+    check(made->handle() && made->winId() == handle, u"close_keeps_native_window"_s);
+    check(!js(made, u"editor.recordingHotkey || editor.plugins.recordingHotkey"_s).toBool(), u"recording_stopped_on_hide"_s);
+    // What runs while hidden: animations that run to the end of their round
+    // (some 1.2 s) are allowed that long.
+    pump(1500);
+    const QStringList running = runningInWindow(made);
+    report.insert(u"running_while_hidden"_s, QJsonArray::fromStringList(running));
+    check(running.isEmpty(), u"nothing_runs_while_hidden"_s);
+    const QJsonObject idleHidden = guiThreadIdle(3000);
+    report.insert(u"gui_idle_while_hidden"_s, idleHidden);
+    // A timer or animation left running would wake it some 60 times a second.
+    check(idleHidden.value(u"wakes"_s).toInt() <= idleBefore.value(u"wakes"_s).toInt() + 15, u"hidden_window_does_not_wake_the_app"_s);
+
+    window = open([&] { app.showSettings(); }, u"again"_s);
+    check(window == made && window->winId() == handle, u"reopened_same_window"_s);
+    check(app.settingsOpening().reused && app.settingsOpening().firstFrameMs >= 0, u"reopening_reused_and_drawn"_s);
+    check(js(window, u"currentPage === 0 && currentTab === 0 && lastTabs.length === 0"_s).toBool(), u"reopened_on_first_page"_s);
+    check(js(window, u"flick.contentY === 0"_s).toBool(), u"reopened_at_top"_s);
+    check(js(window, u"searchBox.query === '' && !searching && beforeSearch === null && settingsSearch.current === null"_s).toBool(),
+        u"reopened_search_empty"_s);
+    check(js(window, u"!updateDialog.open && !pluginDialog.open && !webDialog.active && webEditing === -2"_s).toBool(),
+        u"reopened_no_dialogs"_s);
+    check(js(window, u"part(2, 'nameInput').text === '' && part(6, 'captureKeywordError').text === ''"
+                     u" && part(pluginsPage, 'pluginsSection').expandedIds.length === 0"_s).toBool(),
+        u"reopened_fields_cleared"_s);
+    check(!js(window, u"editor.recordingHotkey || editor.plugins.recordingHotkey"_s).toBool(), u"reopened_not_recording"_s);
+
+    // The ways in from elsewhere, on the kept window: each shows it again, at its place.
+    close(window);
+    window = open([&] { showAt("showClipboardPage"); }, u"clipboard page"_s);
+    check(js(window, u"currentPage === clipboardPage"_s).toBool(), u"deep_link_clipboard_page"_s);
+
+    close(window);
+    window = open([&] { showAt("showPlace", u"3,2"_s); }, u"place 3,2"_s);
+    check(js(window, u"currentPage === 3 && currentTab === 2"_s).toBool(), u"deep_link_place"_s);
+
+    close(window);
+    const QString key = u"Launcher/Autostart"_s;
+    const aisettings::Entry* entry = aisettings::find(key);
+    const aisettings::Section* section = entry ? aisettings::sectionOf(entry->section) : nullptr;
+    window = open([&] { app.showSettingsFor(key); }, u"setting "_s + key);
+    pump(300); // showSetting finds the row after its search (Qt.callLater)
+    check(section && js(window, u"currentPage"_s).toInt() == section->page
+            && (entry->tab < 0 || js(window, u"currentTab"_s).toInt() == entry->tab)
+            && js(window, u"!searching"_s).toBool(),
+        u"deep_link_setting"_s);
+
+    close(window);
+    QString pluginId;
+    if (auto* list = qobject_cast<QAbstractItemModel*>(window->property("editor").value<SettingsEditor*>()->plugins()->property("list").value<QObject*>());
+        list && list->rowCount() > 0)
+        pluginId = list->data(list->index(0, 0), list->roleNames().key("pluginId")).toString();
+    if (!pluginId.isEmpty()) {
+        window = open([&] { showAt("showPluginPage", pluginId); }, u"plugin "_s + pluginId);
+        check(js(window, u"currentPage === pluginsPage && currentTab === 0 && part(pluginsPage, 'pluginsSection').expandedIds.indexOf('%1') >= 0"_s.arg(pluginId)).toBool(),
+            u"deep_link_plugin_card"_s);
+        close(window);
+    } else {
+        report.insert(u"deep_link_plugin_card"_s, u"skipped: no plugin installed"_s);
+    }
+
+    window = open([&] { app.showUpdate(); }, u"update dialog"_s);
+    check(js(window, u"updateDialog.open && currentPage === 0"_s).toBool(), u"deep_link_update_dialog"_s);
+    close(window);
+
+    // Minimized, then closed (the taskbar's 关闭窗口): opens normal again.
+    window = open([&] { app.showSettings(); }, u"before minimizing"_s);
+    window->setWindowStates(Qt::WindowMinimized);
+    pump(300);
+    close(window);
+    window = open([&] { app.showSettings(); }, u"after minimized"_s);
+    check(!(window->windowStates() & Qt::WindowMinimized) && window->isVisible(), u"reopened_not_minimized"_s);
+    close(window);
+
+    // More openings, for their times.
+    const int more = std::clamp(valueAfter(args, u"--settings-opens", u"5"_s).toInt(), 0, 100);
+    for (int i = 0; i < more; ++i) {
+        window = open([&] { app.showSettings(); }, u"timed"_s);
+        close(window);
+        pump(200);
+    }
+    check(made && made->winId() == handle, u"one_native_window_throughout"_s);
+    report.insert(u"warnings"_s, g_warnings - warningsBefore);
+    check(g_warnings == warningsBefore, u"no_warnings"_s);
+
+    report.insert(u"checks"_s, checks);
+    report.insert(u"openings"_s, openings);
+    report.insert(u"passed"_s, passed);
+    QFile json(out.filePath(u"settings-reopen.json"_s));
+    if (json.open(QIODevice::WriteOnly))
+        json.write(QJsonDocument(report).toJson());
+    return passed;
+}
+
 int runRuntime(const QStringList& args)
 {
     const QDir out(valueAfter(args, kRuntimeFlag));
@@ -6185,7 +7183,8 @@ int runRuntime(const QStringList& args)
         App app;
         QElapsedTimer since;
         since.start();
-        if (!app.start({.background = true, .clipboardDisplayProbe = args.contains(u"--clipboard-display-probe"_s)}))
+        if (!app.start({.background = true, .clipboardDisplayProbe = args.contains(u"--clipboard-display-probe"_s),
+                .settingsProbe = args.contains(u"--settings-reopen-check"_s)}))
             return 4;
         if (args.contains(u"--capture-hotkey-probe"_s) && !probeCaptureHotkeys(app, args, out, report)) {
             QFile failed(out.filePath(u"capture-hotkey-failed.json"_s));
@@ -6199,6 +7198,8 @@ int runRuntime(const QStringList& args)
         }
         report.insert(u"start_ms"_s, static_cast<double>(since.elapsed()));
         pump(std::clamp(valueAfter(args, u"--settle-ms", u"3000"_s).toInt(), 100, 60000));
+        if (args.contains(u"--settings-reopen-check"_s))
+            return probeSettingsReopen(app, args, out, report) ? 0 : 4;
         if (args.contains(u"--clipboard-shell-probe"_s)) {
             const bool ok = probeClipboardShell(valueAfter(args, u"--clipboard-shell-probe"_s), out, report,
                 args.contains(u"--clipboard-display-probe"_s) || args.contains(u"--clipboard-display-service-probe"_s),
@@ -6469,7 +7470,7 @@ int run(const QStringList& args)
             QDir(profile).removeRecursively();
     });
     if (valueAfter(args, runtimeMode ? kRuntimeFlag : resultsMode ? kResultsFlag : cardsMode ? kAiCardsFlag : settingsMode ? kSettingsFlag : kFlag).isEmpty()) {
-        std::fprintf(stderr, "usage: WinShun --preview-plugins <file.png> [--dark] [--scale 1.5] [--dialog | --dialog-allow] [--updates] [--page ai]\n"
+        std::fprintf(stderr, "usage: WinShun --preview-plugins <file.png> [--dark] [--scale 1.5] [--dialog | --dialog-allow] [--updates] [--page ai] [--elevated]\n"
                              "       WinShun --preview-settings <folder> [--dark] [--scale 1.5] [--tree] [--edges] [--renderer d3d11]\n");
         return 2;
     }

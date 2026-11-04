@@ -35,7 +35,7 @@ add_custom_target(tst_ocrsearch_app DEPENDS "${ocr_app_stamp}")
 qt_add_executable(tst_ocrsearch tst_ocrsearch.cpp)
 target_link_libraries(tst_ocrsearch PRIVATE wsocrsearch wsplugin miniz Qt6::Test)
 target_compile_definitions(tst_ocrsearch PRIVATE WINSHUN_OCR_MANIFEST="${OCR_PLUGIN_MANIFEST}"
-    WINSHUN_OCR_APP_DIR="${ocr_app_dir}")
+    WINSHUN_OCR_APP_DIR="${ocr_app_dir}" WINSHUN_TEST_DATA="${CMAKE_CURRENT_SOURCE_DIR}/data")
 add_dependencies(tst_ocrsearch WinShunOcrSearch WinShunOcrSearchApp WinShunPluginHost tst_ocrsearch_app)
 set_target_properties(tst_ocrsearch PROPERTIES WIN32_EXECUTABLE FALSE QT_QML_MODULE_NO_IMPORT_SCAN TRUE)
 add_test(NAME tst_ocrsearch COMMAND tst_ocrsearch -o -,txt)
@@ -75,6 +75,31 @@ add_test(NAME tst_settingscapturehotkey COMMAND $<TARGET_FILE:WinShun>
 set_tests_properties(tst_settingscapturehotkey PROPERTIES RUN_SERIAL TRUE TIMEOUT 90
     ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
 
+# The settings window is kept once made: closed, it hides and comes back as new
+# (first page, no search, no dialogs, no recording, nothing running while
+# hidden), and the ways in from elsewhere still land; the real App, isolated
+# (--probe-runtime), shown without activation.
+add_test(NAME tst_settingsreopen COMMAND $<TARGET_FILE:WinShun>
+    --probe-runtime "${CMAKE_CURRENT_BINARY_DIR}/settings-reopen" --settings-reopen-check --settle-ms 1500
+    --renderer d3d11)
+set_tests_properties(tst_settingsreopen PROPERTIES RUN_SERIAL TRUE TIMEOUT 120
+    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+
+# The settings pages are made when needed: opening makes the page on show only,
+# each way in from elsewhere its own, a word typed all of them (results in page
+# order, as many as before), and after the first frame the rest, one per tick.
+add_test(NAME tst_settingslazy COMMAND $<TARGET_FILE:WinShun>
+    --preview-settings "${CMAKE_CURRENT_BINARY_DIR}/settings-lazy" --lazy-pages)
+set_tests_properties(tst_settingslazy PROPERTIES RUN_SERIAL TRUE TIMEOUT 120
+    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+# The same probe as tst_settingsreopen, first opened on the 剪贴板 page (as
+# App::showClipboardSettings opens it): that page alone made for the first frame.
+add_test(NAME tst_settingsopenlink COMMAND $<TARGET_FILE:WinShun>
+    --probe-runtime "${CMAKE_CURRENT_BINARY_DIR}/settings-open-link" --settings-reopen-check --settle-ms 1500
+    --renderer d3d11 --settings-first-open clipboard --settings-opens 1)
+set_tests_properties(tst_settingsopenlink PROPERTIES RUN_SERIAL TRUE TIMEOUT 120
+    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+
 # Clipboard sizing uses the production QML/native frame with temporary history.
 add_test(NAME tst_clipboardsizing COMMAND $<TARGET_FILE:WinShun>
     --preview-results "${CMAKE_CURRENT_BINARY_DIR}/clipboard-sizing" --clipboard-sizing --renderer d3d11)
@@ -102,6 +127,14 @@ target_link_libraries(tst_opusfocus PRIVATE winshun_options Qt6::Test oleacc ole
 set_target_properties(tst_opusfocus PROPERTIES WIN32_EXECUTABLE FALSE QT_QML_MODULE_NO_IMPORT_SCAN TRUE)
 add_test(NAME tst_opusfocus COMMAND tst_opusfocus)
 set_tests_properties(tst_opusfocus PROPERTIES
+    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+
+qt_add_executable(tst_previewplacement tst_previewplacement.cpp)
+target_include_directories(tst_previewplacement PRIVATE ${PROJECT_SOURCE_DIR}/src/app)
+target_link_libraries(tst_previewplacement PRIVATE Qt6::Core Qt6::Test)
+set_target_properties(tst_previewplacement PROPERTIES WIN32_EXECUTABLE FALSE)
+add_test(NAME tst_previewplacement COMMAND tst_previewplacement -o -,txt)
+set_tests_properties(tst_previewplacement PROPERTIES
     ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
 
 qt_add_executable(tst_launchernavigation tst_launchernavigation.cpp)
@@ -151,6 +184,14 @@ target_link_libraries(tst_notificationturns PRIVATE winshun_options Qt6::Test)
 set_target_properties(tst_notificationturns PROPERTIES WIN32_EXECUTABLE FALSE)
 add_test(NAME tst_notificationturns COMMAND tst_notificationturns)
 set_tests_properties(tst_notificationturns PROPERTIES
+    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+
+qt_add_executable(tst_admintaphint tst_admintaphint.cpp)
+target_include_directories(tst_admintaphint PRIVATE ${PROJECT_SOURCE_DIR}/src/app)
+target_link_libraries(tst_admintaphint PRIVATE winshun_options Qt6::Test)
+set_target_properties(tst_admintaphint PROPERTIES WIN32_EXECUTABLE FALSE)
+add_test(NAME tst_admintaphint COMMAND tst_admintaphint)
+set_tests_properties(tst_admintaphint PROPERTIES
     ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
 
 qt_add_executable(tst_wsl tst_wsl.cpp)
@@ -223,6 +264,7 @@ qt_add_executable(tst_foldermenu tst_foldermenu.cpp
     ${PROJECT_SOURCE_DIR}/src/app/SiteIconImage.cpp
     ${PROJECT_SOURCE_DIR}/src/app/SvgIcon.cpp
     ${PROJECT_SOURCE_DIR}/src/app/SystemTheme.cpp
+    ${PROJECT_SOURCE_DIR}/src/app/PhosphorGlyph.cpp
     ${PROJECT_SOURCE_DIR}/src/app/Phosphor.cpp
     ${PROJECT_SOURCE_DIR}/src/app/platform/SiteIcons.cpp
     ${PROJECT_SOURCE_DIR}/src/app/platform/Http.cpp
@@ -413,7 +455,7 @@ set_tests_properties(tst_settings PROPERTIES
 
 # The screenshot plugin's settings, capture.ini (src/capture-plugin/CaptureSettings).
 qt_add_executable(tst_capturesettings tst_capturesettings.cpp ${PROJECT_SOURCE_DIR}/src/capture-plugin/CaptureSettings.cpp)
-target_include_directories(tst_capturesettings PRIVATE ${PROJECT_SOURCE_DIR}/src/capture-plugin ${PROJECT_SOURCE_DIR}/src/app ${PROJECT_SOURCE_DIR}/src/core)
+target_include_directories(tst_capturesettings PRIVATE ${PROJECT_SOURCE_DIR}/src/capture-plugin ${PROJECT_SOURCE_DIR}/src/capture ${PROJECT_SOURCE_DIR}/src/app ${PROJECT_SOURCE_DIR}/src/core)
 target_link_libraries(tst_capturesettings PRIVATE winshun_options Qt6::Gui Qt6::Qml Qt6::Test)
 set_target_properties(tst_capturesettings PROPERTIES WIN32_EXECUTABLE FALSE QT_QML_MODULE_NO_IMPORT_SCAN TRUE)
 add_test(NAME tst_capturesettings COMMAND tst_capturesettings)
@@ -528,6 +570,29 @@ set_tests_properties(tst_annotmodel PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software"
     ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
 
+# The presenter (GitHub #189, docs/design-presenter.md): its rules
+# (PresenterState), the session with no window (Presenter: boards, back,
+# through, undo across screens, styles), the transparent compositor, and how
+# long a pen move takes on a 4K canvas (the long stroke's cost).
+qt_add_executable(tst_presenter tst_presenter.cpp
+    ${PROJECT_SOURCE_DIR}/src/capture/Presenter.cpp
+    ${PROJECT_SOURCE_DIR}/src/capture/AnnotationModel.cpp
+    ${PROJECT_SOURCE_DIR}/src/capture/AnnotationCanvas.cpp)
+target_link_libraries(tst_presenter PRIVATE wscapture Qt6::Qml Qt6::Quick Qt6::Test)
+set_target_properties(tst_presenter PROPERTIES WIN32_EXECUTABLE FALSE QT_QML_MODULE_NO_IMPORT_SCAN TRUE)
+add_test(NAME tst_presenter COMMAND tst_presenter)
+set_tests_properties(tst_presenter PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software"
+    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+
+# The laser pointer's trail (LaserTrail): its taper, its life, its outline.
+qt_add_executable(tst_lasertrail tst_lasertrail.cpp)
+target_link_libraries(tst_lasertrail PRIVATE wscapture Qt6::Test)
+set_target_properties(tst_lasertrail PROPERTIES WIN32_EXECUTABLE FALSE)
+add_test(NAME tst_lasertrail COMMAND tst_lasertrail)
+set_tests_properties(tst_lasertrail PROPERTIES
+    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+
 qt_add_executable(tst_traymenu tst_traymenu.cpp
     ${PROJECT_SOURCE_DIR}/src/capture/PinManager.cpp
     ${PROJECT_SOURCE_DIR}/src/capture/PinWindow.cpp
@@ -555,6 +620,7 @@ qt_add_executable(tst_appearance tst_appearance.cpp
     ${PROJECT_SOURCE_DIR}/src/app/Settings.cpp
     ${PROJECT_SOURCE_DIR}/src/app/WindowFrame.cpp
     ${PROJECT_SOURCE_DIR}/src/app/SystemTheme.cpp
+    ${PROJECT_SOURCE_DIR}/src/app/PhosphorGlyph.cpp
     ${PROJECT_SOURCE_DIR}/src/app/Phosphor.cpp
     ${PROJECT_SOURCE_DIR}/src/app/platform/WindowEffects.cpp
     ${PROJECT_SOURCE_DIR}/src/app/platform/Foreground.cpp)
@@ -595,9 +661,11 @@ target_link_libraries(tst_clipboard PRIVATE wscore Qt6::Test)
 # window station, and the production QML preview (offscreen).
 qt_add_executable(tst_clipimage tst_clipimage.cpp
     ${PROJECT_SOURCE_DIR}/src/app/ClipImage.cpp
+    ${PROJECT_SOURCE_DIR}/src/app/ClipThumbnailProvider.cpp
     ${PROJECT_SOURCE_DIR}/src/app/ClipFiles.cpp
     ${PROJECT_SOURCE_DIR}/src/app/ColorSwatch.cpp
     ${PROJECT_SOURCE_DIR}/src/app/SystemTheme.cpp
+    ${PROJECT_SOURCE_DIR}/src/app/PhosphorGlyph.cpp
     ${PROJECT_SOURCE_DIR}/src/app/Phosphor.cpp
     ${PROJECT_SOURCE_DIR}/src/app/platform/ClipboardWatcher.cpp
     ${PROJECT_SOURCE_DIR}/src/app/platform/WindowEffects.cpp
@@ -964,6 +1032,19 @@ add_test(NAME tst_break COMMAND tst_break)
 set_tests_properties(tst_break PROPERTIES
     ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
 
+# winshun.explorer-tabs's rules (src/explorer-tabs-plugin/Rules), built in
+# again: which new folder windows become tabs, where they go, the same
+# folder already open, Ctrl+Shift, a tab dragged out, Control Panel, the
+# integrity level and the test-root restriction, with made-up windows.
+qt_add_executable(tst_explorertabs tst_explorertabs.cpp ${PROJECT_SOURCE_DIR}/src/explorer-tabs-plugin/Rules.cpp
+    ${PROJECT_SOURCE_DIR}/src/explorer-tabs-plugin/Hider.cpp ${PROJECT_SOURCE_DIR}/src/explorer-tabs-plugin/Closer.cpp)
+target_include_directories(tst_explorertabs PRIVATE ${PROJECT_SOURCE_DIR}/src/explorer-tabs-plugin)
+target_link_libraries(tst_explorertabs PRIVATE winshun_options Qt6::Test)
+set_target_properties(tst_explorertabs PROPERTIES WIN32_EXECUTABLE FALSE)
+add_test(NAME tst_explorertabs COMMAND tst_explorertabs)
+set_tests_properties(tst_explorertabs PROPERTIES
+    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+
 # winshun.bookmarks (src/bookmarks-plugin/Bookmarks), built in again: reading
 # Bookmarks files, the folder text, percent-decoding, matching, scoring,
 # the 50-row cap and the "nothing found" rows.
@@ -1059,7 +1140,7 @@ set_tests_properties(tst_clipfiles PROPERTIES
 
 # Picking the whole clipboard list (Ctrl+A, delete all): ClipModel with a real store.
 qt_add_executable(tst_clipselect tst_clipselect.cpp ${PROJECT_SOURCE_DIR}/src/app/ClipModel.cpp
-    ${PROJECT_SOURCE_DIR}/src/app/ColorText.cpp)
+    ${PROJECT_SOURCE_DIR}/src/app/ClipThumbnailProvider.cpp ${PROJECT_SOURCE_DIR}/src/app/ColorText.cpp)
 target_include_directories(tst_clipselect PRIVATE ${PROJECT_SOURCE_DIR}/src/app)
 target_link_libraries(tst_clipselect PRIVATE wscore Qt6::Quick Qt6::Test)
 set_target_properties(tst_clipselect PROPERTIES WIN32_EXECUTABLE FALSE QT_QML_MODULE_NO_IMPORT_SCAN TRUE)
@@ -1085,6 +1166,17 @@ add_test(NAME tst_updater COMMAND tst_updater)
 set_tests_properties(tst_updater PROPERTIES
     ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
 
+# A Scoop install (core/ScoopInstall): detection, the stable "current" path
+# (real directory junctions), and bucket/winshun.json.
+qt_add_executable(tst_scoopinstall tst_scoopinstall.cpp)
+target_include_directories(tst_scoopinstall PRIVATE ${PROJECT_SOURCE_DIR}/src/core)
+target_link_libraries(tst_scoopinstall PRIVATE wscore Qt6::Test)
+target_compile_definitions(tst_scoopinstall PRIVATE WINSHUN_BUCKET_MANIFEST="${PROJECT_SOURCE_DIR}/bucket/winshun.json")
+set_target_properties(tst_scoopinstall PROPERTIES WIN32_EXECUTABLE FALSE)
+add_test(NAME tst_scoopinstall COMMAND tst_scoopinstall)
+set_tests_properties(tst_scoopinstall PROPERTIES
+    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+
 # Clipboard pinning: real native formats on a private window station, WIC
 # file decoding, asynchronous provenance and physical multi-monitor placement.
 qt_add_executable(tst_pinclipboard tst_pinclipboard.cpp
@@ -1106,4 +1198,14 @@ target_include_directories(tst_clipboarddisplay PRIVATE ${PROJECT_SOURCE_DIR}/sr
 target_link_libraries(tst_clipboarddisplay PRIVATE winshun_options Qt6::Core Qt6::Test)
 add_test(NAME tst_clipboarddisplay COMMAND tst_clipboarddisplay)
 set_tests_properties(tst_clipboarddisplay PROPERTIES
+    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+
+# The capture's key map (src/capture/CaptureKeys.h): defaults, the settings text,
+# matching, and which keys a user may give to which action (#187).
+qt_add_executable(tst_capturekeys tst_capturekeys.cpp)
+target_include_directories(tst_capturekeys PRIVATE ${PROJECT_SOURCE_DIR}/src/capture)
+target_link_libraries(tst_capturekeys PRIVATE Qt6::Gui Qt6::Test)
+set_target_properties(tst_capturekeys PROPERTIES WIN32_EXECUTABLE FALSE)
+add_test(NAME tst_capturekeys COMMAND tst_capturekeys -o -,txt)
+set_tests_properties(tst_capturekeys PROPERTIES
     ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")

@@ -53,11 +53,11 @@ bool darkMode()
 }
 
 // What a plugin may do that matters most: go online, take connections from
-// the network, write files, start programs.
+// the network, write files, start programs, run as administrator.
 bool risky(plugin::Permission p)
 {
     return p == plugin::Permission::Network || p == plugin::Permission::NetworkListen || p == plugin::Permission::FilesWrite
-        || p == plugin::Permission::Processes;
+        || p == plugin::Permission::Processes || p == plugin::Permission::Elevated;
 }
 
 // Every word typed is somewhere in the row.
@@ -243,6 +243,7 @@ void PluginGallery::setUpdates(PluginUpdates* updates)
         connect(updates, &PluginUpdates::changed, this, [this] { // staged versions, the badge
             rebuild();
         });
+        connect(updates, &PluginUpdates::automaticChanged, this, &PluginGallery::stateChanged);
     }
     rebuild(); // (also announces updateCount)
 }
@@ -252,6 +253,11 @@ int PluginGallery::updateCount() const
     if (m_preview)
         return static_cast<int>(std::ranges::count_if(m_list.rows(), [](const PluginGalleryModel::Row& r) { return r.updatable && r.stage == u"update"_s; }));
     return m_updates ? m_updates->count() : 0;
+}
+
+bool PluginGallery::automaticUpdates() const
+{
+    return m_updates && m_updates->automatic();
 }
 
 int PluginGallery::updatableCount() const
@@ -299,12 +305,15 @@ void PluginGallery::readCache()
     QFile file(cachePath());
     if (!file.open(QIODevice::ReadOnly))
         return;
-    std::optional<gallery::Index> index = gallery::parse(file.read(gallery::kMaxIndexBytes), source(), nullptr);
+    const QByteArray body = file.read(gallery::kMaxIndexBytes);
+    std::optional<gallery::Index> index = gallery::parse(body, source(), nullptr);
     if (!index)
         return;
     m_index = std::move(*index);
     m_hasIndex = true;
     m_listTime = QFileInfo(file).lastModified();
+    if (m_updates)
+        m_updates->setList(body); // hints, as after a fetch: 只看可更新 and the badge then agree
     rebuild();
     emit stateChanged();
 }
@@ -391,10 +400,12 @@ void PluginGallery::rebuild()
             case gallery::State::NeedsNewerApp: r.stage = u"app"_s; break;
             }
             r.updatable = r.updatable && (r.stage == u"update"_s || r.stage == u"app"_s);
+            const plugin::Entry* installed = host ? host->catalog().find(item.id) : nullptr;
+            if (installed && plugin::updates::developerCopy(installed->dir)) // the author's to move (as the badge leaves it out)
+                r.updatable = false;
             if (r.updatable && r.stage == u"update"_s) {
                 if (m_updates)
                     r.staged = m_updates->stagedVersion(item.id);
-                const plugin::Entry* installed = host->catalog().find(item.id);
                 const QStringList have = installed && installed->manifest ? installed->manifest->permissions.names() : QStringList();
                 QStringList added;
                 for (const QString& name : item.permissions) {
@@ -404,7 +415,9 @@ void PluginGallery::rebuild()
                     }
                 }
                 r.morePermissions = added.join(u"、"_s);
-                r.allUpdate = r.staged.isEmpty() && added.isEmpty() && !(installed && plugin::updates::developerCopy(installed->dir));
+                r.allUpdate = r.staged.isEmpty() && added.isEmpty();
+                // The same set as the badge's number: asked of the service, which also knows what was refused.
+                r.needsYou = m_updates ? m_updates->waiting(item.id) : r.staged.isEmpty();
             }
             // The icon of the copy here, if any (the list has none).
             const PluginListModel::Card* card = m_settings->m_list.card(item.id);
@@ -434,10 +447,13 @@ void PluginGallery::rebuild()
         }
     }
     for (PluginGalleryModel::Row& r : rows)
-        r.shown = fits(r.words, m_filter) && (!m_updatesOnly || r.updatable);
+        r.shown = fits(r.words, m_filter) && (!m_updatesOnly || (m_preview ? r.updatable : r.needsYou));
     m_list.setRows(std::move(rows));
     emit listChanged();
-    emit updateCountChanged();
+    if (const int count = updateCount(); count != m_announcedCount) {
+        m_announcedCount = count;
+        emit updateCountChanged();
+    }
 }
 
 void PluginGallery::setRowProgress(const QString& id, double progress)
@@ -482,7 +498,19 @@ void PluginGallery::beginInstall(const QString& id, bool enableAfterInstall, boo
     const quint64 generation = ++m_generation;
     rebuild();
     emit stateChanged();
-    QThreadPool::globalInstance()->start([self = QPointer(this), item = *found, cancel, generation, enableAfterInstall, bulk] {
+    // An elevated Win顺 updating a plugin it runs as administrator: the
+    // checked bytes become its confirmed copy too (plugin::elevation).
+    // This tab's list is not checked against a signature (and its kept copy
+    // is the user's to change): only when the signed list has the very same
+    // package does it become the confirmed copy.
+    const plugin::Host* host = m_settings->m_host;
+    const std::optional<plugin::gallery::Item> signedItem = m_updates ? m_updates->signedItem(id) : std::nullopt;
+    const bool elevated = host && host->hostElevated() && signedItem && signedItem->version == found->version
+        && signedItem->sha256 == found->sha256 && signedItem->size == found->size;
+    const plugin::elevation::Store store = host ? host->elevationStore() : plugin::elevation::Store {};
+    const QString pluginDir = QDir::toNativeSeparators(QDir(m_settings->m_userDir).filePath(found->id));
+    QThreadPool::globalInstance()->start([self = QPointer(this), item = *found, cancel, generation, enableAfterInstall, bulk, elevated, store,
+                                             pluginDir] {
         // The progress told now and then: a piece of the body each time would flood the page.
         QElapsedTimer sinceTold;
         sinceTold.start();
@@ -509,8 +537,11 @@ void PluginGallery::beginInstall(const QString& id, bool enableAfterInstall, boo
         d.error = fetched.error;
         if (fetched.status == 200 && !cancel->load()) {
             d.check = gallery::check(item, fetched.body);
-            if (d.check == gallery::Problem::None)
+            if (d.check == gallery::Problem::None) {
+                if (QString why; elevated && !plugin::elevation::keepConfirmed(store, item.id, pluginDir, fetched.body, &why))
+                    qWarning().noquote() << "Plugin library:" << item.id << "confirmed copy not kept:" << why;
                 d.path = gallery::saveTemporary(item, fetched.body, &d.saveError);
+            }
         }
         QMetaObject::invokeMethod(qApp, [self, d, id = item.id, generation, cancel] {
             if (!self || cancel->load() || self->m_generation != generation) {
@@ -586,6 +617,12 @@ void PluginGallery::finishDownload(const QString& id, const Download& d)
     const gallery::Item* item = m_index.find(id);
     m_settings->installFrom(d.path, id, item ? item->name.pick(m_settings->m_locale) : id, d.enableAfterInstall);
     QFile::remove(d.path);
+}
+
+void PluginGallery::readList()
+{
+    if (!m_preview && !m_cacheRead)
+        readCache();
 }
 
 void PluginGallery::updateAll()

@@ -135,7 +135,19 @@ public:
         bool settings = false; // open the settings window
         QString settingsAt; // there (SettingsWindow.showPlace), after a restart from the settings
         bool clipboardDisplayProbe = false; // isolated runtime QA only; never claims UIAccess
+        // Isolated runtime QA only: the settings window shown without being
+        // activated or brought to the front (no input of any kind is sent).
+        bool settingsProbe = false;
     };
+    // How the settings window last opened (written to the diagnostics journal
+    // as "settings-open", read by the runtime probe): made or shown again,
+    // and the milliseconds from showSettings() to its first frame.
+    struct SettingsOpening {
+        int count = 0;
+        bool reused = false;
+        qint64 firstFrameMs = -1; // -1 until drawn
+    };
+    const SettingsOpening& settingsOpening() const { return m_settingsOpening; }
 
     App();
     ~App() override;
@@ -173,7 +185,9 @@ public:
     // --dump <file> from another copy (tests): the launcher's state and rows as JSON.
     void dumpLauncher(const QString& file) const;
     void showClipboard();
-    void showSettings();
+    // `at`: where it opens (its showPage, showPlace …), called before it is shown:
+    // the page wanted is the one made for the first frame, not the first page too.
+    void showSettings(const std::function<void(QQuickWindow*)>& at = {});
     void showUpdate(); // the settings window with the update dialog
     // Set by "重新启动" in the tray menu or the settings window: the command
     // line for the new copy, which main() starts once this one has let go,
@@ -199,6 +213,8 @@ protected:
 
 private:
     bool startRuntime(const StartOptions& options, bool firstRun, bool clipboardIsNew, bool fromOnboarding = false);
+    bool settingsShown() const; // the settings window on show (it is kept, hidden, once made)
+    void settingsFirstFrame(int opening); // after the first frame of an opening: what waited for it
     bool showOnboarding(const StartOptions& options);
     void finishOnboarding(const StartOptions& options);
     bool createWindow();
@@ -310,6 +326,10 @@ private:
     void applyClipboard(bool initial = false); // the [Clipboard] settings
     void applyClipboardHotkeys(); // Win+V and the other shortcut; where Win+V stands, for the settings
     void applyQuickPasteHotkeys(); // global digits, suspended while Win顺 has the keys
+    // Whether Win顺 has the keys: the clipboard up, or a window of its own in
+    // front. Qt's focus window alone is not that (a refused activation leaves
+    // one active in the background, the browser in front: #195).
+    bool quickPasteSuspended() const;
     void clipCaptured(const ClipCapture& capture);
     void applyTaskbar(bool initial = false); // the [Taskbar] settings: Win+S, typing in the Start menu
     void applyTaskbarHotkeys(); // Win+S and Win+Shift+S; where Win+S stands, for the settings
@@ -615,6 +635,18 @@ private:
     // launcher Windows refused to bring to the front, see the constructor.
     static void CALLBACK foregroundChanged(HWINEVENTHOOK, DWORD, HWND, LONG, LONG, DWORD, DWORD);
     HWINEVENTHOOK m_launcherFrontHook = nullptr;
+    // A program run as administrator came to the front, Win顺 not: Windows
+    // gives a double tap there to no Raw Input of ours. Told once per
+    // program, in a notification (AdminTapHint), after it has stayed in
+    // front a moment (kAdminTapDwell), so that Alt+Tab past it says nothing.
+    void adminTapFront(HWND window);
+    void adminTapCheck();
+    QTimer m_adminTapDwell;
+    HWND m_adminTapWindow = nullptr; // what came to the front last
+    bool m_adminTapShownThisRun = false;
+    QStringList m_adminTapLogged; // "program verdict": each in the log and the journal once a run
+    QElapsedTimer m_keyListenerMade; // the service's listener answers within this of the key listener's start
+    bool m_hotkeyOverAdmin = false; // the hotkey is registered and has a modifier: it comes over administrator windows too
     // Refused the front (whether Qt became active or not): a press elsewhere
     // on the window already in front raises no event. Watch while that lasts
     // so an unactivated launcher can still be dismissed (#140).
@@ -772,16 +804,32 @@ private:
     QHash<QString, QString> m_applyProblems; // noteApplyProblem
     bool m_aiApplying = false; // an AI's change is being applied: what goes wrong is in its answer, not in a balloon
     QString m_winVState; // as applyClipboardHotkeys last found it: off, on, waiting, releasing, failed, blocked
-    unsigned m_quickPasteKeys = 0; // successfully registered digits, 1 << n
+    unsigned m_quickPasteKeys = 0; // registered digits that paste now, 1 << n
+    // Registered as hotkeys (1 << n), for m_quickPasteChord ("ctrl", "alt"):
+    // kept as they are from one applyQuickPasteHotkeys to the next, and one
+    // still held kept until it is let go (#195).
+    unsigned m_quickPasteRegistered = 0;
+    bool m_quickPasteSuspended = false; // as last applied
+    QString m_quickPasteChord;
+    QElapsedTimer m_quickPasteHeldSince; // a digit to let go of still held, since
+    bool m_quickPasteRetrying = false; // a look again at a held digit on its way
+    bool m_quickPasteOdd = false; // as last written to the diagnostics
+    QString m_quickPasteLogged; // likewise, in short
     QString m_winSState; // likewise for Win+S
     // In front when the launcher last opened: where a screenshot of the
     // history (jt, Enter) is pasted.
     HWND m_launcherTarget = nullptr;
     QPointer<QQuickWindow> m_window;
     QPointer<QQuickWindow> m_clipWindow; // the clipboard's; created a moment after the start
-    QPointer<QQuickWindow> m_settingsWindow; // created on demand, deleted when closed
+    // Created on its first opening, then hidden when closed and shown again
+    // (SettingsWindow.onClosing): reopening takes some 30 ms, not 500. Shown
+    // or hidden: settingsShown().
+    QPointer<QQuickWindow> m_settingsWindow;
     QPointer<QQuickWindow> m_barWindow; // the dialog bar's; created with the first file dialog
-    QPointer<SettingsEditor> m_settingsEditor; // owned by m_settingsWindow
+    QPointer<SettingsEditor> m_settingsEditor; // owned by m_settingsWindow; there while it is hidden too
+    SettingsOpening m_settingsOpening;
+    QElapsedTimer m_settingsOpenClock; // since the latest showSettings() that showed it
+    bool m_settingsProbe = false; // StartOptions::settingsProbe
     QString m_pluginRecoveryMessage;
     bool m_pluginRecoveryBusy = false;
     QString m_renderer; // the one in use; changing it takes a restart

@@ -434,12 +434,52 @@ private slots:
         f.svc->checkNow();
         QVERIFY(f.settle());
         QCOMPARE(f.svc->count(), 1); // only the one asking for more
+        QVERIFY(f.svc->waiting(u"test.asks"_s) && !f.svc->waiting(u"test.needsapp"_s) && !f.svc->waiting(u"test.bundled"_s));
         QCOMPARE(f.svc->more(u"test.asks"_s), QStringList {u"processes"_s});
         QCOMPARE(f.versionOf(u"test.asks"_s), u"1.0.0"_s);
         f.svc->dismiss(u"test.asks"_s, u"1.1.0"_s);
         QCOMPARE(f.svc->count(), 0);
+        QVERIFY(!f.svc->waiting(u"test.asks"_s));
         f.svc->forget(u"test.asks"_s);
         QCOMPARE(f.svc->count(), 1);
+    }
+
+    void countsDevelopmentCopiesNotAndAutomaticOffYes()
+    {
+        Fixture f;
+        f.install(u"test.dev"_s, u"1.0.0"_s);
+        f.install(u"test.plain"_s, u"1.0.0"_s);
+        QVERIFY(writeFile(f.user + u"/test.dev/.git/HEAD"_s, "ref"));
+        f.publish({{u"test.dev"_s, u"1.1.0"_s, {}, {}}, {u"test.plain"_s, u"1.1.0"_s, {}, {}}}, &m_key);
+        f.startSigned(m_key);
+        f.svc->setAutomatic(false);
+        f.svc->checkNow();
+        QVERIFY(f.settle());
+        QCOMPARE(f.svc->count(), 1); // the plain one waits for the user; the copy in development does not count
+        QVERIFY(f.svc->waiting(u"test.plain"_s) && !f.svc->waiting(u"test.dev"_s)); // the ids 只看可更新 shows are the counted ones (disabled plugins too)
+        QCOMPARE(f.versionOf(u"test.plain"_s), u"1.0.0"_s);
+        f.svc->setAutomatic(true); // now the plain one is put in place by itself
+        f.svc->checkNow();
+        QVERIFY(f.settle());
+        QCOMPARE(f.versionOf(u"test.plain"_s), u"1.1.0"_s);
+        QCOMPARE(f.versionOf(u"test.dev"_s), u"1.0.0"_s);
+        QCOMPARE(f.svc->count(), 0);
+        QVERIFY(!f.svc->waiting(u"test.plain"_s));
+    }
+
+    void automaticSwitchIsReadAndAnnounced()
+    {
+        Fixture f;
+        f.install(u"test.a"_s, u"1.0.0"_s);
+        f.publish({{u"test.a"_s, u"1.1.0"_s, {}, {}}}, &m_key);
+        f.startSigned(m_key);
+        QVERIFY(f.svc->automatic());
+        QSignalSpy spy(f.svc.get(), &PluginUpdates::automaticChanged);
+        f.svc->setAutomatic(true); // no change: no signal
+        QCOMPARE(spy.count(), 0);
+        f.svc->setAutomatic(false);
+        QVERIFY(!f.svc->automatic());
+        QCOMPARE(spy.count(), 1);
     }
 
     void consentIsToldOncePerVersion()

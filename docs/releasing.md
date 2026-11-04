@@ -31,7 +31,9 @@
 
 构建目录中的程序也在运行时，可以同时指定 `-BuildDir 'F:\电脑便捷工具\build\release-isolated'`。构建、CTest、部署、可选插件与 OCR 打包都使用该目录，默认的 `build/release` 不受影响。`scripts/build.ps1` 同样支持 `-BuildDir`；部署前拒绝覆盖源码、构建目录、含 `data` 的目录和运行中的 Win顺。
 
-脚本构建并运行 CTest，再生成标准安装包、便携包、完整离线安装包、独立增强 OCR 组件 ZIP 及 `SHA256SUMS.txt`。输出目录内运行着 Win顺，或部署目录含 `data` 时应换一个新目录。不要删除用户数据以绕过保护。
+测试只按需跑：不跑全部 CTest，发布也一样。用 `-Tests` 传本次改动涉及的测试（ctest `-R` 正则，例如 `-Tests 'tst_capture|tst_clipimage'`）；不传就不跑测试。新功能和修复照常做实际验证。
+
+脚本构建（传了 `-Tests` 就跑这几个测试），再生成标准安装包、便携包、完整离线安装包、独立增强 OCR 组件 ZIP 及 `SHA256SUMS.txt`。输出目录内运行着 Win顺，或部署目录含 `data` 时应换一个新目录。不要删除用户数据以绕过保护。
 
 构建依赖与应用内公开 GitHub 文件的默认镜像统一维护在 `resources/downloads/github-mirrors.txt`；修改后重新配置并构建。`cmake/Download.cmake` 优先镜像、再原站，每个响应都按固定 SHA256 检查，失败不使用半个文件；下载回归包含本地故障注入，公网验证需显式开启 `WINSHUN_UPDATE_LIVE=1`，不会运行安装程序。见 [镜像审计记录](download-mirrors-audit.md)。
 
@@ -43,7 +45,7 @@
 
 ## 推送与发布
 
-六个官方可选原生插件也要随宿主协议变动核对：`library-plugins/` 中的包先用插件库工具检查真实归档，确认 `minWinShun`、入口文件、权限、许可证和 README，再以新的插件版本发布到 `LingCore/WinShun-plugins`。记录主仓库源码提交，联网生成条目并核对 index 的公开结果后，才发布依赖它们的宿主版本。旧插件版本已经发布时必须核对原附件，不可用本次重新编译的文件覆盖；内容变化就升插件版本。官方原生包的受限白名单不适用于社区插件。
+官方可选插件（以 `CMakeLists.txt` 里 `library_plugins` 列的为准，不固定个数）也要随宿主协议变动核对：构建目录 `<BuildDir>/library-plugins` 中的包（`release.ps1` 另外导出 `.wsplugin` 到 `<OutputDir>/library-plugins`）先用插件库工具检查真实归档，确认 `minWinShun`、入口文件、权限、许可证和 README，再以新的插件版本发布到 `LingCore/WinShun-plugins`。记录主仓库源码提交，联网生成条目并核对 index 的公开结果后，才发布依赖它们的宿主版本。旧插件版本已经发布时必须核对原附件，不可用本次重新编译的文件覆盖；内容变化就升插件版本。官方原生包的受限白名单不适用于社区插件。
 
 提交所有本次必要改动并推送。保存已验证的提交 SHA，再次检查远端有无同版本 Release。
 
@@ -55,5 +57,7 @@
 curl.exe -s 'https://lcstp.com/updates/winshun/stable.json?platform=windows&arch=x64&osVersion=10.0.22631'
 curl.exe -s 'https://lcstp.com/updates/winshun/stable.json?platform=windows&arch=x64&osVersion=10.0.22631&package=portable'
 ```
+
+Scoop：`scripts/release.ps1 -Publish` 在 Release 创建成功之后，把 `bucket/winshun.json` 的 `version`、`url`、`hash` 改成这次的便携包（只改这三处，保持 4 空格缩进和无 BOM 的 UTF-8），只提交这一个文件（`git commit --only`，工作区里可能有别人的修改）为 “Scoop: winshun <版本>” 并推送。用户用 `scoop bucket add winshun https://github.com/LingCore/WinShun` 加入的就是主仓库，所以推送要在 Release 之后，清单不能比 zip 先到。`checkver` / `autoupdate` 写好了（`$sha256\s+$basename` 只匹配便携包那一行），发布后可以用 Scoop 自带的 `bin\checkver.ps1 -App winshun -Dir bucket -Update`（先复制一份目录）核对：它会用公开的 SHA256SUMS.txt 算出同样的值。`tests/tst_scoopinstall.cpp` 检查清单是合法 JSON、正则能在样例校验文件里只匹配便携包。
 
 已发布成功的单次任务不得重复执行；若由一次性自动化触发，成功后关闭它。论坛文案可另行提供，但发布到论坛或向他人发消息需要用户明确要求。

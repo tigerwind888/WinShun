@@ -21,6 +21,7 @@
 #include "SwitchBackend.h"
 #include "Switches.h"
 #include "SystemCatalog.h"
+#include "ToastPolicy.h"
 #include "Unc.h"
 #include "WebDav.h"
 #include "platform/DragOut.h"
@@ -401,6 +402,12 @@ constexpr QStringView kShotPlugin = u"winshun.capture";
 constexpr QStringView kShotCommand = u"history";
 constexpr QStringView kShotIcon = u"glyph:U+E722"; // Camera
 constexpr int kShotRows = 500;
+// The screenshot plugin is winshun.capture too (its own "cap" keyword, command "capture"): the history
+// is told from it by its command, or "cap 白板" would list pictures and never ask the plugin.
+bool isShotHistory(const QString& pluginId, const QString& commandId)
+{
+    return pluginId == kShotPlugin && commandId == kShotCommand;
+}
 
 // 贴到屏幕 on a file's row: the pictures Windows Imaging Component reads
 // (WebP with Windows' codec; a GIF's first frame).
@@ -1382,6 +1389,15 @@ void Launcher::setNumberHints(const QString& hints)
     emit resultOptionsChanged();
 }
 
+void Launcher::setKeyboardHints(bool help, bool footer)
+{
+    if (m_shortcutHelp == help && m_footerHints == footer)
+        return;
+    m_shortcutHelp = help;
+    m_footerHints = footer;
+    emit resultOptionsChanged();
+}
+
 void Launcher::setPreviewHotkey(const QString& shortcut)
 {
     const QString value = shortcut.isEmpty() ? QString() : previewkeys::normalized(shortcut);
@@ -1758,7 +1774,7 @@ void Launcher::search(bool more)
         m_pending = false;
         m_contentRunning = false;
         refreshStatus();
-        if (m_keyword->pluginId == kShotPlugin) // the screenshots: in memory, at once
+        if (isShotHistory(m_keyword->pluginId, m_keyword->commandId)) // the screenshots: in memory, at once
             showPluginRows(screenshotRows(m_keyword->words));
         return;
     }
@@ -2836,13 +2852,16 @@ void Launcher::refreshKeyHints()
     switch (tabAction(m_currentRow)) {
     case navigation::TabAction::BrowseFolder: tab = tr("进入文件夹"); break;
     case navigation::TabAction::Complete: tab = tr("补全"); break;
-    case navigation::TabAction::SwitchScope: tab = tr("切换范围"); break;
+    case navigation::TabAction::SwitchScope:
+        if (!m_query.trimmed().isEmpty())
+            tab = tr("切换范围");
+        break;
     case navigation::TabAction::None: break;
     }
     QString tabKeys = u"Tab"_s; // the volume's row: its place is Alt+←→'s (Tab still does the same)
     const SearchResult* r = m_results.at(m_currentRow);
     if (!r) {
-        // No row, nothing to open: only Tab (it still switches the scope) is offered.
+        // Without a row, a nonblank query can still offer scope switching.
     } else if (r->isPlugin()) {
         const PluginRow& p = *r->plugin;
         if (p.valid) {
@@ -4847,7 +4866,7 @@ QVariantList Launcher::menuItems(int row) const
     }
     if (r->isApp()) {
         items.append(entry(Open, tr("打开"), u"Enter"_s, u"\uE8A7"_s)); // OpenInNewWindow
-        if (r->elevatable)
+        if (r->elevatable && !r->missing && !r->offline)
             items.append(entry(RunAsAdmin, tr("以管理员身份运行"), u"Ctrl+Shift+Enter"_s, u"\uE7EF"_s));
         if (!r->target.isEmpty())
             items.append(entry(Reveal, r->isPackagedApp() ? tr("打开安装文件夹") : tr("打开所在位置"), u"Ctrl+Enter"_s,
@@ -4876,7 +4895,7 @@ QVariantList Launcher::menuItems(int row) const
     items.append(entry(OpenTerminal, tr("在终端中打开"), QString(), u"\uE756"_s)); // CommandPrompt
     if (r->isDir && m_contentEnabled && !r->path.startsWith(u"\\\\"_s)) // shares: contents are not read there
         items.append(entry(SearchInFolder, tr("在此文件夹中搜内容"), QString(), u"\uE721"_s)); // Search
-    if (!r->isDir && shell::canRunAsAdministrator(r->path))
+    if (!r->isDir && !r->missing && !r->offline && shell::canRunAsAdministrator(r->path))
         items.append(entry(RunAsAdmin, tr("以管理员身份运行"), u"Ctrl+Shift+Enter"_s, u"\uE7EF"_s));
     fileCommandItems(items);
     items.append(separator);
@@ -5181,7 +5200,7 @@ void Launcher::setScreenshots(const QString& keyword, ScreenshotHooks hooks)
 
 bool Launcher::screenshotMode() const
 {
-    return m_keyword && m_keyword->pluginId == kShotPlugin;
+    return m_keyword && isShotHistory(m_keyword->pluginId, m_keyword->commandId);
 }
 
 void Launcher::refreshScreenshots()
@@ -5373,7 +5392,7 @@ void Launcher::startPluginQuery(const QString& text, std::optional<KeywordMode> 
             emit pluginChanged();
         return;
     }
-    if (keyword && keyword->pluginId == kShotPlugin) {
+    if (keyword && isShotHistory(keyword->pluginId, keyword->commandId)) {
         // Win顺's own list: no plugin is asked, and whatever they were
         // asked before is moot (their answers come for an older id).
         const std::uint64_t id = ++m_pluginQueryId;
@@ -5393,8 +5412,9 @@ void Launcher::startPluginQuery(const QString& text, std::optional<KeywordMode> 
     const auto scope = keyword && m_panel ? ws::Scope::All : static_cast<ws::Scope>(m_scope);
     const std::uint64_t id = ++m_pluginQueryId;
     m_keyword = std::move(keyword);
+    // The keywords offered as rows are 全部's (matchKeyword): in 文件 and 文件夹 they could not be run.
     m_merge->begin(id, text, m_keyword ? m_keyword->pluginId : QString(), m_keyword ? m_keyword->commandId : QString(),
-        m_scope == Content);
+        m_scope == Content, m_scope == All || m_panel);
     m_pluginTimer.start();
     m_plugins->query(text, scope, id, pluginFilters()); // zero-code ones answer within
     if (!m_pluginPending.isEmpty())
@@ -5754,7 +5774,7 @@ bool Launcher::pluginOpenAllowed(const QString& pluginId, const plugin::Open& op
 }
 
 // What a plugin asked for after an action, in its order: hide (the default),
-// keep, setQuery, notify, copy, open, replace (its items as the list).
+// keep, setQuery, notify, copy, open, replace (its items as the list), reveal.
 // `pluginId`: whose action it was (onPluginActionDone), for the open policy.
 void Launcher::applyEffects(const QString& pluginId, const QList<ws::plugin::Effect>& effects)
 {
@@ -5802,6 +5822,18 @@ void Launcher::applyEffects(const QString& pluginId, const QList<ws::plugin::Eff
                     followCurrentRow(before, currentPath);
             }
             break;
+        case plugin::Effect::Kind::Reveal: {
+            // Only selects (as show_in_folder): no program starts, no processes
+            // permission. Gone by now: its folder, if that is still there (#194).
+            if ((m_plugins && !m_plugins->catalog().enabled(pluginId)) || !plugin::plainLocalPath(e.open.target))
+                break;
+            const QFileInfo item(e.open.target);
+            if (item.exists())
+                shell::reveal(QDir::toNativeSeparators(item.absoluteFilePath()));
+            else if (QFileInfo(item.absolutePath()).isDir())
+                shell::open(QDir::toNativeSeparators(item.absolutePath()), false);
+            break;
+        }
         }
     }
     if (hide)

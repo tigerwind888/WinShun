@@ -29,7 +29,7 @@ Item {
             Text { text: qsTr("识别范围"); color: Theme.text; font.pixelSize: Theme.fontTitle; font.weight: Theme.fontStrong }
             Text {
                 Layout.fillWidth: true
-                text: qsTr("搜索图片、PDF 和 Office 图片中的文字。选择目录后，在后台识别一次。")
+                text: qsTr("搜索图片、PDF 和 Office 图片中的文字。选择目录后，在后台识别一次。索引建好后，在搜索框直接输入图片里的文字就能搜到；输入 ocr 关键词只看图片和扫描件结果。")
                 wrapMode: Text.Wrap
                 color: Theme.subtext
                 font.pixelSize: Theme.fontCaption
@@ -118,10 +118,13 @@ Item {
                 onClicked: pane.editor.start(true)
             }
             FlatButton {
+                readonly property bool unfinished: pane.editor.errors.length > 0
+                readonly property bool textless: pane.editor.textless.length > 0
                 Layout.fillWidth: true
-                text: qsTr("查看未完成项")
+                text: unfinished && textless ? qsTr("查看未完成和没有文字的文件")
+                    : unfinished ? qsTr("查看未完成项") : qsTr("查看没有文字的文件")
                 flat: true
-                visible: pane.editor.errors.length > 0
+                visible: unfinished || textless
                 onClicked: issues.open = !issues.open
             }
             Text {
@@ -167,14 +170,34 @@ Item {
             }
         }
         Text {
+            // After an upgrade: the files the new rules read again, counting down.
+            readonly property int remaining: pane.editor.statistics.recheck ?? 0
+            Layout.fillWidth: true
+            visible: remaining > 0
+            text: pane.editor.busy
+                ? qsTr("识别规则已更新：正在补认以前跳过的 PDF 页、超长图片和放反的页面（还剩 %n 个文件），期间照常可以搜索。", "", remaining)
+                : pane.editor.autoUpdate
+                ? qsTr("识别规则已更新：以前跳过的 PDF 页、超长图片和放反的页面要补认（%n 个文件），稍后自动进行，期间照常可以搜索。", "", remaining)
+                : qsTr("识别规则已更新：以前跳过的 PDF 页、超长图片和放反的页面要补认（%n 个文件），点“开始更新”即可，期间照常可以搜索。", "", remaining)
+            wrapMode: Text.Wrap
+            color: Theme.text
+            font.pixelSize: Theme.fontCaption
+        }
+        Text {
             Layout.fillWidth: true
             visible: pane.editor.busy
             text: pane.editor.progressText
             color: Theme.subtext
             font.pixelSize: Theme.fontCaption
-            maximumLineCount: 3
-            elide: Text.ElideMiddle
             wrapMode: Text.Wrap
+        }
+        Text {
+            Layout.fillWidth: true
+            visible: pane.editor.busy
+            text: pane.editor.progressFile
+            color: Theme.subtext
+            font.pixelSize: Theme.fontCaption
+            elide: Text.ElideMiddle
         }
         FlatButton {
             objectName: "startOcrIndex"

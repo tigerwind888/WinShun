@@ -1,4 +1,6 @@
 #include "CaptureApp.h"
+
+#include "PresenterHost.h"
 #include "platform/OcrFiles.h"
 
 #include "Protocol.h"
@@ -55,7 +57,7 @@ namespace ws::captureplugin {
 namespace {
 
 constexpr wchar_t kWindowClass[] = L"WinShun.Capture.Messages";
-enum Hotkey : int { CaptureKey = 1, PrintScreenKey, PinsKey, PinsRestoreKey, LastPinKey };
+enum Hotkey : int { CaptureKey = 1, PrintScreenKey, PinsKey, PinsRestoreKey, LastPinKey, PresentKey, ProbeKey = 0x0BFF };
 
 bool isDarkMode()
 {
@@ -222,6 +224,15 @@ CaptureApp::CaptureApp(Protocol& protocol, QString appDir, QString dataDir, QObj
     connect(&m_applyLater, &QTimer::timeout, this, &CaptureApp::apply);
     connect(&m_settings, &CaptureSettings::changed, &m_applyLater, qOverload<>(&QTimer::start));
     connect(&m_settings, &CaptureSettings::recordingHotkeyChanged, this, &CaptureApp::applyHotkeys);
+    // A key for the capture or a pin that a global hotkey holds would never
+    // reach them: asked by taking it for a moment (the plugin's own are let
+    // go of while a key box records, and compared by name first).
+    m_settings.setHotkeyProbe([this](unsigned modifiers, unsigned vk) {
+        if (!::RegisterHotKey(m_window, ProbeKey, modifiers | MOD_NOREPEAT, vk))
+            return ::GetLastError() != ERROR_HOTKEY_ALREADY_REGISTERED; // only a key held is refused
+        ::UnregisterHotKey(m_window, ProbeKey);
+        return true;
+    });
     connect(&m_protocol, &Protocol::requested, this, &CaptureApp::requested);
     connect(&m_protocol, &Protocol::notified, this, &CaptureApp::notified);
     connect(&m_protocol, &Protocol::closed, this, [this] {
@@ -288,7 +299,8 @@ void CaptureApp::requested(const QJsonValue& id, const QString& method, const QJ
         const QString text = params.value(u"text"_s).toString().trimmed();
         QJsonArray items;
         if (text == u"__selftest") { // whether each window's QML loads on this Win顺's Qt (made hidden, then let go of)
-            for (const QString& type : {u"EditWindow"_s, u"OcrPanel"_s, u"CaptureSettingsWindow"_s, u"LongCapturePanel"_s, u"RecordingPanel"_s}) {
+            for (const QString& type : {u"EditWindow"_s, u"OcrPanel"_s, u"CaptureSettingsWindow"_s, u"LongCapturePanel"_s, u"RecordingPanel"_s,
+                     u"PresenterOverlay"_s, u"PresenterToolbar"_s}) {
                 QQmlComponent component(&m_qml, u"WinShun"_s, type);
                 const QString problem = component.isError() ? component.errorString().trimmed() : QString();
                 items.append(QJsonObject {{u"id"_s, type}, {u"title"_s, (problem.isEmpty() ? u"ok  "_s : u"FAIL  "_s) + type},
@@ -297,8 +309,9 @@ void CaptureApp::requested(const QJsonValue& id, const QString& method, const QJ
             m_protocol.respond(id, QJsonObject {{u"items"_s, items}});
             return;
         }
-        const auto add = [&](const QString& itemId, const QString& title, const QString& subtitle, const QString& glyph) {
-            if (!text.isEmpty() && !title.contains(text, Qt::CaseInsensitive))
+        // aliases: other words that find the item (the title still does), space separated, either language.
+        const auto add = [&](const QString& itemId, const QString& title, const QString& subtitle, const QString& glyph, const QString& aliases = {}) {
+            if (!text.isEmpty() && !title.contains(text, Qt::CaseInsensitive) && !aliases.contains(text, Qt::CaseInsensitive))
                 return;
             items.append(QJsonObject {{u"id"_s, itemId}, {u"title"_s, title}, {u"subtitle"_s, subtitle},
                 {u"icon"_s, u"glyph:U+"_s + glyph}});
@@ -306,10 +319,14 @@ void CaptureApp::requested(const QJsonValue& id, const QString& method, const QJ
         const QString key = !m_settings.options().hotkey.isEmpty() ? m_settings.options().hotkey
             : m_settings.options().printScreen                         ? u"PrtScn"_s
                                                                        : QString();
-        add(u"start"_s, tr("开始截图"), key.isEmpty() ? tr("框选窗口或区域") : tr("快捷键 %1").arg(key), u"E722"_s);
-        add(u"delay"_s, tr("%1 秒后截图").arg(m_settings.options().delay), tr("先打开要截的菜单或提示"), u"E916"_s);
-        add(u"last"_s, tr("贴图"), tr("优先剪贴板图片，否则贴回最近截图并保留标注"), u"E718"_s);
-        add(u"settings"_s, tr("截图设置"), tr("快捷键、鼠标、贴图、打码和工具条"), u"E713"_s);
+        add(u"start"_s, tr("开始截图"), key.isEmpty() ? tr("框选窗口或区域") : tr("快捷键 %1").arg(key), u"E722"_s,
+            u"截图 截屏 截取 screenshot capture shot snip"_s);
+        add(u"delay"_s, tr("%1 秒后截图").arg(m_settings.options().delay), tr("先打开要截的菜单或提示"), u"E916"_s, u"延时 延迟 定时 delay timer later"_s);
+        add(u"last"_s, tr("贴图"), tr("优先剪贴板图片，否则贴回最近截图并保留标注"), u"E718"_s, u"贴 钉 贴图 pin paste sticker"_s);
+        add(u"present"_s, presenterOpen() ? tr("结束演示") : tr("演示 / 白板"),
+            m_settings.options().presentHotkey.isEmpty() ? tr("在屏幕上画、激光笔、白板黑板") : tr("快捷键 %1").arg(m_settings.options().presentHotkey),
+            u"E70F"_s, u"演示 白板 黑板 激光笔 画笔 present presenter whiteboard blackboard draw pen laser"_s);
+        add(u"settings"_s, tr("截图设置"), tr("快捷键、鼠标、贴图、打码和工具条"), u"E713"_s, u"设置 选项 配置 快捷键 settings options preferences config hotkey"_s);
         m_protocol.respond(id, QJsonObject {{u"items"_s, items}});
     } else if (method == u"action") {
         const QString item = params.value(u"item"_s).toObject().value(u"id"_s).toString();
@@ -322,6 +339,8 @@ void CaptureApp::requested(const QJsonValue& id, const QString& method, const QJ
                 m_capture->startDelayed(m_settings.options().delay);
             else if (item == u"last")
                 pinCurrentImage();
+            else if (item == u"present")
+                togglePresenter();
             else if (m_capture)
                 m_capture->trigger();
         });
@@ -353,7 +372,7 @@ void CaptureApp::notified(const QString& method, const QJsonObject& params)
         const QString key = hotkeys::normalized(params.value(u"key"_s).toString());
         const auto& o = m_settings.options();
         const std::pair<int, QString> shortcuts[] {{CaptureKey, o.hotkey}, {PinsKey, o.pinsHotkey},
-            {PinsRestoreKey, o.pinsRestoreHotkey}, {LastPinKey, o.lastPinHotkey},
+            {PinsRestoreKey, o.pinsRestoreHotkey}, {LastPinKey, o.lastPinHotkey}, {PresentKey, o.presentHotkey},
             {PrintScreenKey, o.printScreen ? u"PrintScreen"_s : QString()}};
         for (const auto& [id, shortcut] : shortcuts) {
             if (!key.isEmpty() && key == hotkeys::normalized(shortcut)) {
@@ -374,7 +393,9 @@ void CaptureApp::shutdown()
     ++m_hotkeyRevision;
     if (m_hostHotkeys)
         m_protocol.tool(u"register_hotkeys"_s, {{u"keys"_s, QJsonArray()}});
-    for (int id = CaptureKey; id <= LastPinKey; ++id)
+    if (m_presenter)
+        m_presenter->presenter().close();
+    for (int id = CaptureKey; id <= PresentKey; ++id)
         ::UnregisterHotKey(m_window, id);
     const QString before = m_settings.options().printScreenBefore;
     std::optional<DWORD> value;
@@ -426,6 +447,7 @@ void CaptureApp::apply()
             if (name != m_settings.options().colorFormat)
                 m_settings.update([&](CaptureOptions& next) { next.colorFormat = name; });
         };
+        callbacks.keyHintsKept = [this](bool on) { m_settings.setCaptureKeyHints(on); }; // the panel's 不再显示 / 一直显示
         callbacks.recording.preferences = [this] {
             const CaptureOptions& p = m_settings.options();
             return capture::Recorder::Preferences {p.recordingFolder, p.recordingSystemAudio, p.recordingMicrophone,
@@ -475,6 +497,7 @@ void CaptureApp::apply()
     }
     m_capture->setCopyOnSelect(o.copyOnSelect);
     m_capture->setMagnifier(o.magnifier);
+    m_capture->setKeyHints(o.keyHints);
     m_capture->setPinOnCopy(o.pinOnCopy);
     m_capture->setMouseActions({o.mouseDoubleLeft, o.mouseRight, o.mouseMiddle, o.mouseBack, o.mouseForward});
     m_capture->setHiddenButtons(o.toolbarHidden.split(u',', Qt::SkipEmptyParts));
@@ -484,8 +507,18 @@ void CaptureApp::apply()
     m_capture->setDelay(o.delay);
     m_capture->setHistory(QDir(m_dataDir).filePath(u"capture-history"_s), o.historyCount);
     m_capture->setColorFormat(capture::colorFormatFromName(o.colorFormat));
-    if (m_pins)
+    // The pin and save keys and the pin window's (#187): open pins and an open editor too.
+    m_capture->setKeys(o.keys);
+    // A save folder chosen: Save goes straight into it, as in 0.16 (#194).
+    m_capture->setSaveDirect(!o.saveFolder.isEmpty());
+    if (m_pins) {
         m_pins->setDoubleClick(capture::pinDoubleClickFromName(o.pinDoubleClick));
+        m_pins->setKeys(o.keys);
+    }
+    if (m_editor) {
+        m_editor->setKeys(o.keys);
+        m_editor->setSaveDirect(!o.saveFolder.isEmpty());
+    }
 
     // PrtScn: taken from the Snipping Tool while it is wanted, the value
     // found then kept in PrintScreenBefore and put back after.
@@ -521,7 +554,7 @@ void CaptureApp::apply()
 void CaptureApp::applyHotkeys()
 {
     const quint64 revision = ++m_hotkeyRevision;
-    for (int id = CaptureKey; id <= LastPinKey; ++id)
+    for (int id = CaptureKey; id <= PresentKey; ++id)
         ::UnregisterHotKey(m_window, id);
     if (m_settings.recordingHotkey()) {
         if (m_hostHotkeys)
@@ -553,6 +586,9 @@ void CaptureApp::applyHotkeys()
         problems.pinsHotkey = take(PinsKey, o.pinsHotkey);
         problems.pinsRestoreHotkey = take(PinsRestoreKey, o.pinsRestoreHotkey);
         problems.lastPinHotkey = take(LastPinKey, o.lastPinHotkey);
+        problems.presentHotkey = take(PresentKey, o.presentHotkey);
+        if (m_presenter)
+            m_presenter->setHotkeyText(o.presentHotkey);
         m_settings.setProblems(problems); // shown next to each shortcut
     }
     // Win顺 leaves these to the plugin (winshun/hotkeys): Win+Shift+S, its
@@ -593,6 +629,7 @@ void CaptureApp::applyHotkeys()
                 problems.pinsHotkey = problem(o.pinsHotkey);
                 problems.pinsRestoreHotkey = problem(o.pinsRestoreHotkey);
                 problems.lastPinHotkey = problem(o.lastPinHotkey);
+                problems.presentHotkey = problem(o.presentHotkey);
                 if (o.printScreen && (!error.isEmpty() || errors.contains(u"PrintScreen"_s)))
                     problems.note = hotkeyProblem(u"PrintScreen"_s);
                 m_settings.setProblems(problems);
@@ -608,7 +645,7 @@ void CaptureApp::reportHotkeyProblems(const CaptureSettings::Problems& problems)
     if (!m_capture)
         return;
     if (!(m_settingsWindow && m_settingsWindow->isVisible())) {
-        for (const QString& error : {problems.hotkey, problems.pinsHotkey, problems.pinsRestoreHotkey, problems.lastPinHotkey}) {
+        for (const QString& error : {problems.hotkey, problems.pinsHotkey, problems.pinsRestoreHotkey, problems.lastPinHotkey, problems.presentHotkey}) {
             if (!error.isEmpty()) {
                 notify(tr("快捷键不可用"), error);
                 break;
@@ -842,7 +879,9 @@ void CaptureApp::notifySaved(const QString& path, const QString& error)
     // Not the file's name: a toast stays in the Action Center.
     const saved::Target target = saved::target(path);
     const QString folder = target.show == saved::Show::File ? QFileInfo(target.path).absolutePath() : target.path;
-    notify(tr("截图已保存"), tr("点击打开所在文件夹"), QDir::toNativeSeparators(folder));
+    // A click selects the file in its folder, as in 0.16 (#194).
+    notify(tr("截图已保存"), tr("点击打开所在文件夹"), QDir::toNativeSeparators(folder),
+        target.show == saved::Show::File ? QDir::toNativeSeparators(target.path) : QString());
 }
 
 capture::PinManager& CaptureApp::pins()
@@ -873,8 +912,32 @@ capture::PinManager& CaptureApp::pins()
         };
         m_pins = std::make_unique<capture::PinManager>(std::move(callbacks));
         m_pins->setDoubleClick(capture::pinDoubleClickFromName(m_settings.options().pinDoubleClick));
+        m_pins->setKeys(m_settings.options().keys);
     }
     return *m_pins;
+}
+
+// The presenter (#189, PresenterHost): made the first time it is asked for.
+PresenterHost& CaptureApp::presenter()
+{
+    if (!m_presenter) {
+        m_presenter = std::make_unique<PresenterHost>(m_qml, m_dataDir + u"/presenter.ini"_s);
+        m_presenter->setHotkeyText(m_settings.options().presentHotkey);
+    }
+    return *m_presenter;
+}
+
+bool CaptureApp::presenterOpen() const
+{
+    return m_presenter && m_presenter->isOpen();
+}
+
+void CaptureApp::togglePresenter()
+{
+    if (presenterOpen())
+        m_presenter->presenter().close();
+    else
+        presenter().presenter().open();
 }
 
 capture::CaptureEditor* CaptureApp::editor()
@@ -944,6 +1007,8 @@ capture::CaptureEditor* CaptureApp::editor()
     m_editFrame->setWindow(window);
     editor->attach(window);
     m_editWindow = window;
+    editor->setKeys(m_settings.options().keys);
+    editor->setSaveDirect(!m_settings.options().saveFolder.isEmpty());
     m_editor = std::move(editor);
     return m_editor.get();
 }
@@ -1112,6 +1177,7 @@ QJsonArray CaptureApp::trayMenu() const
                                  menuItem(u"delay10"_s, tr("10 秒"), o.delay == 10)}}};
         items.append(delay);
         items.append(menuItem(u"pinLast"_s, withKey(tr("贴图"), o.lastPinHotkey)));
+        items.append(menuItem(u"present"_s, withKey(presenterOpen() ? tr("结束演示") : tr("演示 / 白板"), o.presentHotkey)));
         items.append(menuItem(u"restoreDraft"_s, tr("找回刚放弃的标注"), false, m_capture->hasDraft()));
         items.append(separator());
     }
@@ -1136,6 +1202,8 @@ void CaptureApp::menuChosen(const QString& id)
         });
     } else if (id == u"pinLast") {
         pinCurrentImage();
+    } else if (id == u"present") {
+        QTimer::singleShot(200ms, this, &CaptureApp::togglePresenter); // once the menu is gone
     } else if (id == u"restoreDraft" && m_capture) {
         m_capture->restoreDraft();
     } else if (id == u"clickThrough" && m_pins) {
@@ -1219,11 +1287,17 @@ void CaptureApp::copyText(const QString& text)
     });
 }
 
-void CaptureApp::notify(const QString& title, const QString& text, const QString& folder)
+void CaptureApp::notify(const QString& title, const QString& text, const QString& folder, const QString& file)
 {
     QJsonObject params {{u"toast"_s, true}, {u"title"_s, title}, {u"text"_s, text}};
+    // A click goes to one place, the first the host knows: reveal, else open.
+    QJsonArray click;
+    if (!file.isEmpty())
+        click.append(QJsonObject {{u"type"_s, u"reveal"_s}, {u"path"_s, file}});
     if (!folder.isEmpty())
-        params.insert(u"click"_s, QJsonArray {QJsonObject {{u"type"_s, u"open"_s}, {u"path"_s, folder}}});
+        click.append(QJsonObject {{u"type"_s, u"open"_s}, {u"path"_s, folder}});
+    if (!click.isEmpty())
+        params.insert(u"click"_s, click);
     m_protocol.notify(u"winshun/notify"_s, params);
 }
 
@@ -1258,6 +1332,9 @@ void CaptureApp::hotkey(int id)
         break;
     case LastPinKey:
         pinCurrentImage();
+        break;
+    case PresentKey: // never held back in full screen: a slide show is what it is for
+        presenter().hotkey();
         break;
     case PinsKey:
         if (m_pins)

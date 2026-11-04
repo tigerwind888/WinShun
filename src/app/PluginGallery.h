@@ -58,7 +58,8 @@ public:
         double progress = 0; // 0–1
         QString problem; // why the last install from here did not happen
         bool shown = true; // fits the filter (and, with updatesOnly, has a newer version to go to)
-        bool updatable = false; // the user's copy, not Win顺's own, with a newer version in the list
+        bool updatable = false; // the user's copy, not Win顺's own and not a copy in development, with a newer version in the list
+        bool needsYou = false; // ... and the background service counts it (badge, 插件 page notice): what 只看可更新 shows
         bool allUpdate = false; // ... and 全部更新 may do it: nothing staged, no new permissions, not a copy in development
         QString staged; // a newer version kept aside for the next start (empty: none)
         QString morePermissions; // the permissions the list's version adds to the installed one, named; empty: none
@@ -124,6 +125,7 @@ class PluginGallery : public QObject {
     // The nav badge: updates waiting for the user (the background service's count; in the preview, the rows with a newer version).
     Q_PROPERTY(int updateCount READ updateCount NOTIFY updateCountChanged FINAL)
     Q_PROPERTY(int updatableCount READ updatableCount NOTIFY listChanged FINAL) // those 全部更新 would do
+    Q_PROPERTY(bool automaticUpdates READ automaticUpdates NOTIFY stateChanged FINAL) // the 自动更新 switch: with it off every update waits for the user
     Q_PROPERTY(bool updatingAll READ updatingAll NOTIFY stateChanged FINAL)
     Q_PROPERTY(QString updateStatus READ updateStatus NOTIFY stateChanged FINAL) // 全部更新: how far it is, then what came of it
     Q_PROPERTY(bool updateFailed READ updateFailed NOTIFY stateChanged FINAL) // ... and some were not updated
@@ -149,6 +151,7 @@ public:
     bool downloading() const { return !m_downloadId.isEmpty(); }
     int updateCount() const;
     int updatableCount() const;
+    bool automaticUpdates() const;
     bool updatingAll() const { return m_updatingAll; }
     QString updateStatus() const { return m_updateStatus; }
     bool updateFailed() const { return !m_updateFailures.isEmpty(); }
@@ -157,6 +160,7 @@ public:
     Q_INVOKABLE void install(const QString& id); // 安装, 更新到
     Q_INVOKABLE void installAndEnable(const QString& id); // the library's explicit install-and-enable action
     Q_INVOKABLE void cancel(const QString& id); // the download
+    Q_INVOKABLE void readList(); // the list kept from the last fetch, if not read yet (the 插件 page's notice counts from it)
     Q_INVOKABLE void updateAll(); // 全部更新: the ones that need no new permission, one after the other
     Q_INVOKABLE void applyNow(const QString& id); // 立即更新: a version kept aside for the next start, now
     Q_INVOKABLE void openRepository(); // 看看怎么投稿
@@ -202,6 +206,7 @@ private:
     bool m_problemIsConnection = false;
     QString m_filter;
     bool m_updatesOnly = false;
+    int m_announcedCount = -1; // updateCount() as last announced
     bool m_updatingAll = false;
     QStringList m_updateQueue;
     int m_updateTotal = 0;

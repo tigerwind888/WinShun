@@ -211,9 +211,19 @@ public:
     Q_INVOKABLE void mouseDoubleClicked(qreal x, qreal y);
     Q_INVOKABLE void wheeled(qreal x, qreal y, int angleDeltaY, int angleDeltaX, int modifiers);
     Q_INVOKABLE bool keyPressed(int key, int modifiers);
+    // The save and pin keys (#187); the text box asks the model, which gets them too.
+    void setKeys(const CaptureKeys& keys)
+    {
+        m_keys = keys;
+        m_model.setKeys(keys);
+    }
+    const CaptureKeys& keys() const { return m_keys; }
     Q_INVOKABLE void spaceHeld(bool held);
-    // The toolbar's buttons: a CaptureSession::Action; Save asks for a path,
-    // SavePrevious uses the configured folder without a picker.
+    // A save folder was chosen ([Capture] SaveFolder): Save goes straight into it (#194).
+    void setSaveDirect(bool on) { m_model.setSaveDirect(on); }
+    // The toolbar's buttons: a CaptureSession::Action; Save asks for a path
+    // unless a save folder was chosen, SavePrevious uses the configured
+    // folder without a picker, SaveAs always asks.
     Q_INVOKABLE void act(int action);
 
     // ---- the zoom ----
@@ -273,6 +283,7 @@ private:
     QScreen* targetScreen() const;
 
     AnnotationModel m_model;
+    CaptureKeys m_keys;
     Hooks m_hooks;
     PinTarget m_pin;
     QPointer<QQuickWindow> m_window;

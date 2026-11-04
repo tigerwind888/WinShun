@@ -63,6 +63,7 @@ public:
     static QList<plugin::updates::Applied> prepare(const QString& dataDir, const QString& userDir, QStringView appVersion,
         const std::function<std::pair<bool, QStringList>(const QString&)>& switchOf);
 
+    bool automatic() const { return m_automatic; }
     void setAutomatic(bool on); // the 自动更新 switch: the timer, and whether installs are allowed
     void setPolicy(bool developerMode, const QList<PluginConfig>& plugins); // which are on, and what they were allowed
     void setBusy(std::function<bool()> busy); // true: not now (recovery running, Win顺 updating itself)
@@ -70,6 +71,7 @@ public:
     void setList(const QByteArray& bytes); // the 插件库 tab's list: hints only, never installed from
 
     int count() const; // badge and tray line
+    bool waiting(const QString& id) const { return m_waiting.contains(id); } // one of those counted (what 只看可更新 shows)
     bool idle() const { return !m_checking && !m_working && m_queue.isEmpty(); } // no check or download under way
     QString stagedVersion(const QString& id) const;
     QString problem(const QString& id) const;
@@ -83,9 +85,16 @@ public:
     void checkNow(); // fetches the list (whatever the clock says)
     void rescan(); // the plugins folder was changed by someone else (tests; the app's Host scans itself)
     void tick(); // the hourly beat: staged versions of plugins that stopped; the daily check when due
+    // The plugin's entry in the list now held, when that list's signature
+    // checked against a published key (not the unsigned local file a
+    // development variable may name): what may become a copy run as
+    // administrator (plugin::elevation). Nothing otherwise.
+    std::optional<plugin::gallery::Item> signedItem(const QString& id) const;
+    const plugin::gallery::Fetcher& web() const { return m_options.web; }
 
 signals:
     void changed(); // count() or what the rows show
+    void automaticChanged(); // the 自动更新 switch
     void consentNeeded(const QStringList& ids); // enabled plugins whose newer version asks for permissions, once per version
 
 private:
@@ -127,10 +136,12 @@ private:
     plugin::gallery::Index m_index;
     bool m_hasIndex = false;
     bool m_trusted = false; // the list now held checked against a key
+    bool m_signed = false; // ... and that by a signature (not "local")
     QHash<QString, Verdict> m_verdicts;
     QHash<QString, QString> m_problems; // id -> why its last try failed (this run)
     QString m_signature; // of the verdicts shown, to tell when they changed
     int m_count = 0;
+    QSet<QString> m_waiting; // the ids behind m_count
     QSet<QString> m_claims;
     QStringList m_queue;
     bool m_checking = false;

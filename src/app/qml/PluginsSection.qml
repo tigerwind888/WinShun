@@ -20,8 +20,8 @@ SettingsSection {
     property SettingsEditor editor: null
 
     // The cards unfolded, by plugin id: here, not in the cards, for the list
-    // is reset (the cards made again) when a plugin comes or goes. For as
-    // long as the window lives; not saved. Assigned whole, for the bindings.
+    // is reset (the cards made again) when a plugin comes or goes. Until the
+    // window is closed (resetForReopen); not saved. Assigned whole, for the bindings.
     property var expandedIds: []
     function setExpanded(pluginId, on) {
         const ids = expandedIds.filter(id => id !== pluginId)
@@ -61,6 +61,18 @@ SettingsSection {
         onTriggered: pluginsSection.revealed = ""
     }
 
+    // The settings window hidden (SettingsWindow.resetForReopen): every card
+    // folded, as in a window made anew; the menus are closed by the window.
+    function resetForReopen() {
+        expandedIds = []
+        revealTimer.stop()
+        revealed = ""
+        for (const loader of pasteCard.parent.children) {
+            if (loader.item && loader.item.expanded === true)
+                loader.item.expanded = false
+        }
+    }
+
     // Counts the cards' changes (a keyword changed, a plugin added), for
     // what the search reads of them to be read again.
     property int listRevision: 0
@@ -72,7 +84,40 @@ SettingsSection {
         function onDataChanged() { pluginsSection.listRevision++ }
     }
 
-    note: qsTr("插件给搜索框加关键字命令，结果混进列表。它们只用你的普通权限；启用前会先列出权限，由你决定是否开启。")
+    note: qsTr("插件给搜索框加关键字命令，结果混进列表。它们用你的普通权限（要跟随 Win顺 管理员权限的，权限里会写明）；启用前会先列出权限，由你决定是否开启。")
+
+    SettingRow { // what the number beside 插件 in the list on the left counts: newer versions waiting for a yes
+        objectName: "pluginUpdatesRow"
+        // While 全部更新 runs the count drops one by one (down to 0 before the last one is done): no number then.
+        readonly property bool updating: pluginsSection.plugins.gallery.updatingAll
+        readonly property string explanation: updating || pluginsSection.plugins.gallery.updateStatus.length > 0
+            ? pluginsSection.plugins.gallery.updateStatus
+            : pluginsSection.plugins.gallery.automaticUpdates ? qsTr("需要新权限的更新，会先请你确认。")
+                                                              : qsTr("自动更新已关，新版本等你点更新。")
+        title: updating ? qsTr("正在更新插件…") : qsTr("%n 个插件有新版本", "", pluginsSection.plugins.gallery.updateCount)
+        description: explanation
+        shown: pluginsSection.plugins.gallery.updateCount > 0 || pluginsSection.plugins.gallery.updatingAll
+        onShownChanged: if (shown) pluginsSection.plugins.gallery.readList()
+        Component.onCompleted: if (shown) pluginsSection.plugins.gallery.readList()
+
+        FlatButton {
+            objectName: "viewPluginUpdates"
+            text: qsTr("查看")
+            onClicked: {
+                pluginsSection.plugins.gallery.filter = ""
+                pluginsSection.plugins.gallery.updatesOnly = true
+                pluginsSection.column.openPage(pluginsSection.page, 1) // 插件库
+            }
+        }
+        FlatButton {
+            objectName: "updateAllFromNotice"
+            visible: pluginsSection.plugins.gallery.updatableCount > 0 || pluginsSection.plugins.gallery.updatingAll
+            highlighted: true
+            text: qsTr("全部更新")
+            enabled: !pluginsSection.plugins.gallery.downloading && !pluginsSection.plugins.gallery.updatingAll
+            onClicked: pluginsSection.plugins.gallery.updateAll()
+        }
+    }
 
     SettingRow {
         objectName: "pluginRecoveryRow"

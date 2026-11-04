@@ -161,7 +161,10 @@ void PluginUpdates::setAutomatic(bool on)
 {
     if (m_automatic == on && (m_hourly.isActive() == on))
         return;
+    const bool switched = m_automatic != on;
     m_automatic = on;
+    if (switched)
+        emit automaticChanged();
     if (on) {
         m_hourly.start();
         m_first.start(kFirstCheckMs);
@@ -363,8 +366,17 @@ void PluginUpdates::finishCheck(const updates::SignedList& fetched)
             qWarning().noquote() << "Plugin updates: the list could not be kept:" << file.errorString();
     }
     m_trusted = false; // setIndex() says
+    m_signed = fetched.trusted && !fetched.key.isEmpty() && fetched.key != u"local"_s;
     setIndex(std::move(*index), fetched.trusted);
     startNext();
+}
+
+std::optional<gallery::Item> PluginUpdates::signedItem(const QString& id) const
+{
+    if (!m_trusted || !m_signed)
+        return std::nullopt;
+    const gallery::Item* item = m_index.find(id);
+    return item ? std::optional<gallery::Item>(*item) : std::nullopt;
 }
 
 void PluginUpdates::setIndex(gallery::Index index, bool trusted)
@@ -372,6 +384,8 @@ void PluginUpdates::setIndex(gallery::Index index, bool trusted)
     m_index = std::move(index);
     m_hasIndex = true;
     m_trusted = trusted;
+    if (!trusted)
+        m_signed = false;
     evaluate(trusted);
 }
 
@@ -404,6 +418,7 @@ void PluginUpdates::evaluate(bool installs)
         }
     }
     int count = 0;
+    QSet<QString> waiting;
     QStringList consent;
     QStringList signature;
     QSettings s = state();
@@ -411,8 +426,10 @@ void PluginUpdates::evaluate(bool installs)
         const QString& id = it.key();
         const Verdict& v = it.value();
         const bool dismissed = s.value(key("Dismissed", id)).toString() == v.version;
-        if (v.decision.action == updates::Action::Ask && !dismissed && s.value(key("Staged", id)).toString() != v.version) {
+        // A copy in development (a link, or a .git folder) is the author's to move; no badge for it.
+        if (v.decision.action == updates::Action::Ask && !dismissed && !v.developerCopy && s.value(key("Staged", id)).toString() != v.version) {
             ++count;
+            waiting.insert(id);
             signature.push_back(id + u'=' + v.version);
         }
         if (m_trusted && v.decision.action == updates::Action::Ask && v.decision.needsConsent && !dismissed && !v.developerCopy
@@ -424,6 +441,7 @@ void PluginUpdates::evaluate(bool installs)
     const bool differs = joined != m_signature || count != m_count;
     m_signature = joined;
     m_count = count;
+    m_waiting = std::move(waiting);
     if (!consent.isEmpty()) {
         consent.sort();
         for (const QString& id : std::as_const(consent))
@@ -451,7 +469,15 @@ void PluginUpdates::startNext()
         }
         m_working = true;
         const QString root = stagingRoot();
-        QThreadPool::globalInstance()->start([self = QPointer(this), cancel = m_cancel, item = *found, web = m_options.web, root] {
+        // An elevated Win顺 updating a plugin it runs as administrator: the
+        // checked bytes become its confirmed copy too (plugin::elevation).
+        // Only from a list whose signature checked (installs need a trusted
+        // one; the unsigned local file of development does not count).
+        const bool elevated = m_host && m_host->hostElevated() && m_trusted && m_signed;
+        const plugin::elevation::Store store = m_host ? m_host->elevationStore() : plugin::elevation::Store {};
+        const QString pluginDir = QDir::toNativeSeparators(QDir(m_options.userDir).filePath(found->id));
+        QThreadPool::globalInstance()->start([self = QPointer(this), cancel = m_cancel, item = *found, web = m_options.web, root, elevated,
+                                                 store, pluginDir] {
             auto d = std::make_shared<Downloaded>();
             d->item = item;
             const gallery::Fetched f = gallery::fetch(
@@ -464,6 +490,8 @@ void PluginUpdates::startNext()
             else if (gallery::check(item, f.body) != gallery::Problem::None)
                 d->error = u"the package does not match the list (size or SHA-256)"_s;
             else {
+                if (QString why; elevated && !plugin::elevation::keepConfirmed(store, item.id, pluginDir, f.body, &why))
+                    qWarning().noquote() << "Plugin updates:" << item.id << "confirmed copy not kept:" << why;
                 QString saveError;
                 const QString path = gallery::saveTemporary(item, f.body, &saveError);
                 if (path.isEmpty())

@@ -4,8 +4,15 @@ qt_add_library(wsocrsearch STATIC OcrStore.cpp OcrStore.h OcrSource.cpp OcrSourc
     ${app_dir}/platform/PaddleOcr.cpp ${app_dir}/platform/OcrFiles.cpp ${app_dir}/PictureFile.cpp)
 target_include_directories(wsocrsearch PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ${app_dir})
 target_link_libraries(wsocrsearch PUBLIC wscore Qt6::Gui Qt6::Sql PRIVATE wsextract pdfium onnxruntime_headers windowscodecs)
+# Traditional to simplified Chinese characters for search: OpenCC's
+# data/dictionary/TSCharacters.txt (Apache-2.0) as published at commit
+# 5c764a5a886f46eb365656ed91a0410d7162fac6, unchanged (SHA-256
+# 9ff46a7d30e5765375eb13d33f2b03a34d298913caf2b120380679f33ae1642d).
+# Its license goes into the package (licenses/opencc.txt).
+qt_add_resources(wsocrsearch "ocr_search_opencc" PREFIX /ocr-search BASE "${PROJECT_SOURCE_DIR}/third_party/opencc"
+    FILES "${PROJECT_SOURCE_DIR}/third_party/opencc/TSCharacters.txt")
 
-add_executable(WinShunOcrSearch WIN32 stub/main.cpp)
+add_executable(WinShunOcrSearch WIN32 stub/main.cpp ${PROJECT_SOURCE_DIR}/resources/WinShunOcrSearch.rc)
 target_link_libraries(WinShunOcrSearch PRIVATE winshun_options)
 target_link_options(WinShunOcrSearch PRIVATE /ENTRY:wmainCRTStartup)
 set_target_properties(WinShunOcrSearch PROPERTIES AUTOMOC OFF MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
@@ -26,6 +33,7 @@ set_source_files_properties("${app_dir}/qml/Theme.qml" PROPERTIES QT_QML_SINGLET
 qt_add_library(WinShunOcrSearchApp SHARED OcrMain.cpp OcrController.cpp OcrController.h
     ${PROJECT_SOURCE_DIR}/src/capture-plugin/Protocol.cpp
     ${app_dir}/SystemTheme.cpp ${app_dir}/SystemTheme.h
+    ${app_dir}/PhosphorGlyph.cpp ${app_dir}/PhosphorGlyph.h
     ${app_dir}/WindowFrame.cpp ${app_dir}/WindowFrame.h
     ${app_dir}/Phosphor.cpp ${app_dir}/platform/WindowEffects.cpp ${app_dir}/platform/ShellDialogs.cpp
     ${app_dir}/platform/Foreground.cpp ${app_dir}/platform/DragOut.cpp)

@@ -2,21 +2,6 @@
 <!DOCTYPE TS>
 <TS version="2.1" language="en" sourcelanguage="zh_CN">
 <context>
-    <name>CaptureSaveButton</name>
-    <message>
-        <source>另存为…（Ctrl+S）</source>
-        <translation>Save as… (Ctrl+S)</translation>
-    </message>
-    <message>
-        <source>更多保存选项</source>
-        <translation>More save options</translation>
-    </message>
-    <message>
-        <source>保存到旧路径</source>
-        <translation>Save to previous folder</translation>
-    </message>
-</context>
-<context>
     <name>AnnotateLayer</name>
     <message>
         <source>再按一次关掉 · [ ] 改粗细 · H 隐藏工具条</source>
@@ -279,12 +264,12 @@
         <translation>1 E 3 L P M T N B or 1–9</translation>
     </message>
     <message>
-        <source>每次移动选区 1 个物理像素；未框选时微调光标</source>
-        <translation>Move the area by 1 physical pixel; without a selection, fine-tune the pointer</translation>
+        <source>微调鼠标光标，每次 1 个物理像素；按住左键拖选区、拖手柄或画标注时也有效</source>
+        <translation>Fine-tune the mouse pointer by 1 physical pixel; it also works while the left button is held to drag out an area, drag a handle or draw an annotation</translation>
     </message>
     <message>
-        <source>调整选区宽高，每次 1 个物理像素</source>
-        <translation>Resize the area by 1 physical pixel</translation>
+        <source>微调鼠标光标，每次 10 个物理像素</source>
+        <translation>Fine-tune the mouse pointer by 10 physical pixels</translation>
     </message>
     <message>
         <source>恢复最近选区：向前 / 向后循环，最多 10 个；使用当前画面</source>
@@ -327,10 +312,6 @@
         <translation>Read the QR codes in the selection</translation>
     </message>
     <message>
-        <source>还没选区时：用上一次的选区</source>
-        <translation>With no selection yet: use the last selection</translation>
-    </message>
-    <message>
         <source>复制颜色并结束截图；单按 Shift 换颜色格式（HEX、RGB、HSL）</source>
         <translation>Copy the colour and end the capture; Shift alone changes its format (HEX, RGB, HSL)</translation>
     </message>
@@ -341,10 +322,6 @@
     <message>
         <source>复制</source>
         <translation>Copy</translation>
-    </message>
-    <message>
-        <source>保存</source>
-        <translation>Save</translation>
     </message>
     <message>
         <source>贴图</source>
@@ -387,10 +364,6 @@
         <translation>Recognise text: reads the words in the picture; copy them or search with them</translation>
     </message>
     <message>
-        <source>识别文字：没有安装文字识别模型（Win顺 文件夹里的 ocr 文件夹），无法识别文字</source>
-        <translation>Recognise text: the text recognition models are not installed (the ocr folder in the WinShun folder), so no text can be read</translation>
-    </message>
-    <message>
         <source>按键</source>
         <translation>Keys</translation>
     </message>
@@ -419,8 +392,8 @@
         <translation>Arrow keys</translation>
     </message>
     <message>
-        <source>挪动选中的对象，按住 Shift 一次 10 像素；没有选中时微调选区</source>
-        <translation>Move the selected object, 10 pixels at a time with Shift; with none selected they nudge the selection</translation>
+        <source>挪动选中的对象；否则移动选区 1 个物理像素，Shift 调整选区大小；未框选时微调光标</source>
+        <translation>Move the selected object; otherwise move the area by 1 physical pixel, with Shift resize it; with no area, nudge the pointer</translation>
     </message>
     <message>
         <source>粗细、字号、格子小一档 / 大一档</source>
@@ -459,12 +432,20 @@
         <translation>Finish the text (Enter breaks the line; for the words by a number, Enter finishes them)</translation>
     </message>
     <message>
+        <source>保存到设置的保存位置</source>
+        <translation>Save to the chosen save folder</translation>
+    </message>
+    <message>
         <source>隐藏 / 显示工具条</source>
         <translation>Hide / show the toolbar</translation>
     </message>
     <message>
+        <source>显示 / 隐藏屏幕角落的快捷键提示（只管这次截图）</source>
+        <translation>Show / hide the shortcut hints in the screen corner (this capture only)</translation>
+    </message>
+    <message>
         <source>翻看之前截图时的画面（整屏、选区和标注），. 往回翻</source>
-        <translation type="unfinished"></translation>
+        <translation>Look at the screen as it was in earlier screenshots (whole screen, selection and annotations); press . to go back</translation>
     </message>
     <message>
         <source>Esc、右键</source>
@@ -671,10 +652,133 @@
     </message>
 </context>
 <context>
+    <name>CaptureKeyHints</name>
+    <message>
+        <source>滚轮</source>
+        <translation>Wheel</translation>
+    </message>
+    <message>
+        <source>扩大 / 缩小框选范围</source>
+        <translation>Pick a larger / smaller area</translation>
+    </message>
+    <message>
+        <source>微调光标 1 像素，加 Shift 10 像素</source>
+        <translation>Nudge the pointer 1 px, with Shift 10 px</translation>
+    </message>
+    <message>
+        <source>恢复最近选区</source>
+        <translation>Bring back a recent area</translation>
+    </message>
+    <message>
+        <source>翻看之前的截图</source>
+        <translation>Step through past captures</translation>
+    </message>
+    <message>
+        <source>识别文字并复制</source>
+        <translation>Recognize the text and copy it</translation>
+    </message>
+    <message>
+        <source>退出截图</source>
+        <translation>Leave the capture</translation>
+    </message>
+    <message>
+        <source>复制</source>
+        <translation>Copy</translation>
+    </message>
+    <message>
+        <source>另存为</source>
+        <translation>Save as</translation>
+    </message>
+    <message>
+        <source>保存</source>
+        <translation>Save</translation>
+    </message>
+    <message>
+        <source>贴到屏幕上</source>
+        <translation>Pin to the screen</translation>
+    </message>
+    <message>
+        <source>移动选区，加 Shift 改大小</source>
+        <translation>Move the area, with Shift resize it</translation>
+    </message>
+    <message>
+        <source>长截图 / 录屏</source>
+        <translation>Long screenshot / record</translation>
+    </message>
+    <message>
+        <source>最近选区 %1/%2</source>
+        <translation>Recent area %1/%2</translation>
+    </message>
+    <message>
+        <source>按住画正方形、正圆</source>
+        <translation>Hold for squares and circles</translation>
+    </message>
+    <message>
+        <source>按住让线吸附 15°</source>
+        <translation>Hold to snap lines to 15°</translation>
+    </message>
+    <message>
+        <source>按住画直线</source>
+        <translation>Hold for straight strokes</translation>
+    </message>
+    <message>
+        <source>细一档 / 粗一档</source>
+        <translation>Thinner / thicker</translation>
+    </message>
+    <message>
+        <source>字号小一档 / 大一档</source>
+        <translation>Smaller / larger text</translation>
+    </message>
+    <message>
+        <source>格子小一档 / 大一档</source>
+        <translation>Smaller / larger cells</translation>
+    </message>
+    <message>
+        <source>撤销 / 重做</source>
+        <translation>Undo / redo</translation>
+    </message>
+    <message>
+        <source>删除选中的对象</source>
+        <translation>Delete the selected object</translation>
+    </message>
+    <message>
+        <source>关掉“%1”</source>
+        <translation>Turn off “%1”</translation>
+    </message>
+    <message>
+        <source>隐藏工具条</source>
+        <translation>Hide the toolbar</translation>
+    </message>
+    <message>
+        <source>隐藏提示</source>
+        <translation>Hide hints</translation>
+    </message>
+    <message>
+        <source>不再显示</source>
+        <translation>Don&apos;t show again</translation>
+    </message>
+    <message>
+        <source>一直显示</source>
+        <translation>Always show</translation>
+    </message>
+</context>
+<context>
     <name>CaptureOptions</name>
+    <message>
+        <source>全部按键</source>
+        <translation>All keys</translation>
+    </message>
+    <message>
+        <source>帮助</source>
+        <translation>Help</translation>
+    </message>
     <message>
         <source>快捷键</source>
         <translation>Shortcut</translation>
+    </message>
+    <message>
+        <source>按键</source>
+        <translation>Keys</translation>
     </message>
     <message>
         <source>截图</source>
@@ -773,8 +877,16 @@
         <translation>Clear</translation>
     </message>
     <message>
-        <source>截图设置分类</source>
-        <translation>Screenshot settings categories</translation>
+        <source>恢复默认</source>
+        <translation>Reset</translation>
+    </message>
+    <message>
+        <source>请按下按键…</source>
+        <translation>Press a key…</translation>
+    </message>
+    <message>
+        <source>未设置</source>
+        <translation>None</translation>
     </message>
     <message>
         <source>按它开始截图，截图时再按一次取消</source>
@@ -787,6 +899,38 @@
     <message>
         <source>让 PrtScn 不再打开 Windows 的截图工具，改用这里的截图。Win顺 退出时还给截图工具，下次启动再接管；关掉这项也恢复原来的设置</source>
         <translation>PrtScn takes a screenshot here instead of opening the Windows Snipping Tool. It goes back to the Snipping Tool when WinShun quits and is taken again at the next start; turning this off restores the previous setting too</translation>
+    </message>
+    <message>
+        <source>截图时</source>
+        <translation>While capturing</translation>
+    </message>
+    <message>
+        <source>截图和编辑图片时按。清除后仍可点工具条上的按钮</source>
+        <translation>Pressed while capturing or editing a picture. Cleared, the toolbar buttons still work</translation>
+    </message>
+    <message>
+        <source>贴图窗口</source>
+        <translation>Pins</translation>
+    </message>
+    <message>
+        <source>点一下贴图再按。清除后仍可从贴图的右键菜单操作</source>
+        <translation>Click a pin, then press. Cleared, its right-click menu still has the action</translation>
+    </message>
+    <message>
+        <source>松开鼠标或点选窗口后立即复制，跳过标注和调整。关闭时可继续编辑，再按 Enter 复制，或按保存键保存。鼠标动作在“鼠标”分类设置。</source>
+        <translation>Copy immediately after selecting, skipping annotation and adjustments. When off, edit first, then press Enter to copy or the save key to save. Set button actions in the Mouse category.</translation>
+    </message>
+    <message>
+        <source>复位：回到原来的大小；关闭：贴图不要了；收起：缩成小方块，点一下再展开。贴图里的按键在“按键”分类设置</source>
+        <translation>Reset: back to its original size; Close: remove the pin; Fold: shrink to a tile, click to unfold. The keys inside a pin are set in the Keys category</translation>
+    </message>
+    <message>
+        <source>演示 / 白板的快捷键</source>
+        <translation>Present / Whiteboard hotkey</translation>
+    </message>
+    <message>
+        <source>在屏幕上直接画、用激光笔指，W/K 切白板黑板，Esc 让鼠标去操作下面的程序；画的时候再按一次结束。录屏或共享时请选显示器采集或共享整个屏幕</source>
+        <translation>Draw right on the screen or point with the laser pen; W/K switch to a whiteboard or blackboard, Esc lets the mouse use the programs underneath; press it again to finish. When recording or sharing, capture the display or share the entire screen</translation>
     </message>
     <message>
         <source>截图保存文件夹</source>
@@ -811,10 +955,6 @@
     <message>
         <source>选好就复制</source>
         <translation>Copy as soon as it is picked</translation>
-    </message>
-    <message>
-        <source>松开鼠标或点选窗口后立即复制，跳过标注和调整。关闭时可继续编辑，再按 Enter 复制或 Ctrl+S 保存。鼠标动作在“鼠标”分类设置。</source>
-        <translation>Copy immediately after selecting, skipping annotation and adjustments. When off, edit first, then Enter to copy or Ctrl+S to save. Set button actions in the Mouse category.</translation>
     </message>
     <message>
         <source>框选时显示放大镜</source>
@@ -870,20 +1010,20 @@
     </message>
     <message>
         <source>截图时翻看之前的画面</source>
-        <translation type="unfinished"></translation>
+        <translation>Look back at earlier screenshots</translation>
     </message>
     <message>
         <source>截图时按 , 翻到上一次截图时的画面，按 . 往回翻：整个屏幕、选区和标注都恢复，可以重新框选或接着改。会在本机保存最近几次截图时的整屏画面；选“关闭”不再保存，并删除已保存的（不影响用关键词找截过的图）。</source>
-        <translation type="unfinished"></translation>
+        <translation>While capturing, press , to go to the screen as it was at the previous screenshot and . to come back: the whole screen, selection and annotations are restored, so you can reselect or keep editing. The last few full-screen pictures are kept on this PC; choose “Off” to stop keeping them and delete the saved ones (finding past screenshots by keyword is not affected).</translation>
     </message>
     <message>
         <source>关闭</source>
         <comment>capture history</comment>
-        <translation type="unfinished">Close</translation>
+        <translation>Close</translation>
     </message>
     <message>
         <source>%1 次</source>
-        <translation type="unfinished"></translation>
+        <translation>%1 shots</translation>
     </message>
     <message>
         <source>框选后的鼠标操作</source>
@@ -922,10 +1062,6 @@
         <translation>Double-clicking a pin</translation>
     </message>
     <message>
-        <source>复位：回到原来的大小；关闭：贴图不要了；收起：缩成小方块，点一下再展开。按 Esc 总是关闭</source>
-        <translation>Reset: back to its original size. Close: the pin goes away. Collapse: it shrinks to a small tile; click it to open it again. Esc always closes it</translation>
-    </message>
-    <message>
         <source>复位</source>
         <translation>Reset</translation>
     </message>
@@ -944,10 +1080,6 @@
     <message>
         <source>贴图的快捷键</source>
         <translation>Pin image shortcut</translation>
-    </message>
-<message>
-        <source>把最近截过的图贴回原位置，保留标注；不设时仍可从托盘菜单操作</source>
-        <translation>Pin the last screenshot at its original position, including annotations. Also available from the tray menu.</translation>
     </message>
     <message>
         <source>隐藏 / 显示全部贴图的快捷键</source>
@@ -1006,8 +1138,8 @@
         <translation>Toolbar buttons</translation>
     </message>
     <message>
-        <source>亮起的按钮会显示，点一下切换。隐藏后快捷键仍可使用；标注工具始终显示。识别文字没有快捷键，隐藏后可在“鼠标”分类设置动作。</source>
-        <translation>Highlighted buttons are visible; click to toggle. Shortcuts still work when buttons are hidden. Annotation tools always stay visible. Text recognition has no shortcut; assign a mouse action if you hide its button.</translation>
+        <source>勾选的按钮会显示，点一下切换。隐藏后快捷键仍可使用；标注工具始终显示。识别文字没有快捷键，隐藏后可在“鼠标”分类设置动作。</source>
+        <translation>Checked buttons are visible; click to toggle. Shortcuts still work when buttons are hidden. Annotation tools always stay visible. Text recognition has no shortcut; assign a mouse action if you hide its button.</translation>
     </message>
     <message>
         <source>全屏时不响应截图快捷键</source>
@@ -1018,27 +1150,59 @@
         <translation>While another app is full screen, the screenshot hotkey and PrtScn do not start a capture. You can still start one from the menu.</translation>
     </message>
     <message>
+        <source>截图时显示快捷键提示</source>
+        <translation>Show shortcut hints while capturing</translation>
+    </message>
+    <message>
+        <source>停下来时在屏幕左下角列出此刻能用的按键，一按鼠标就消失，挡路时自动让开。关闭后截图时按 ? 仍可临时显示</source>
+        <translation>When you pause, lists the keys that work right now in the bottom-left corner; goes the moment you press a mouse button and moves out of the way. When off, press ? while capturing to show it for a moment</translation>
+    </message>
+    <message>
         <source>优先贴剪贴板里的图片；没有新图片时，把最近截图贴回原位置并保留标注。不设时仍可从托盘菜单操作</source>
         <translation>Pin a clipboard image first; otherwise restore the last screenshot at its original position with annotations. Also available from the tray menu.</translation>
+    </message>
+    <message>
+        <source>开始截图</source>
+        <translation>Start a screenshot</translation>
+    </message>
+    <message>
+        <source>框选</source>
+        <translation>Selecting</translation>
+    </message>
+    <message>
+        <source>复制与保存</source>
+        <translation>Copy and save</translation>
+    </message>
+    <message>
+        <source>延时与回看</source>
+        <translation>Delay and history</translation>
+    </message>
+    <message>
+        <source>贴图操作</source>
+        <translation>Pin actions</translation>
+    </message>
+    <message>
+        <source>编辑</source>
+        <translation>Editing</translation>
+    </message>
+    <message>
+        <source>截图方式</source>
+        <translation>Capture modes</translation>
+    </message>
+    <message>
+        <source>识别</source>
+        <translation>Recognition</translation>
+    </message>
+    <message>
+        <source>结束截图</source>
+        <translation>Finish</translation>
     </message>
 </context>
 <context>
     <name>CaptureOverlay</name>
     <message>
-        <source>R 最近选区</source>
-        <translation>R recent areas</translation>
-    </message>
-    <message>
-        <source>R 最近选区 %1/%2</source>
-        <translation>R recent area %1/%2</translation>
-    </message>
-    <message>
-        <source>WASD 移动 1 px · Shift+WASD 调整大小 · %1</source>
-        <translation>WASD move 1 px · Shift+WASD resize · %1</translation>
-    </message>
-    <message>
-        <source>WASD 微调光标 · %1</source>
-        <translation>WASD fine-tune pointer · %1</translation>
+        <source>最近选区 %1/%2 · R / Shift+R</source>
+        <translation>Recent area %1/%2 · R / Shift+R</translation>
     </message>
     <message>
         <source>C 复制 · Shift 换格式</source>
@@ -1058,6 +1222,33 @@
     </message>
 </context>
 <context>
+    <name>CaptureSaveButton</name>
+    <message>
+        <source>保存（%1）</source>
+        <translation>Save (%1)</translation>
+    </message>
+    <message>
+        <source>保存</source>
+        <translation>Save</translation>
+    </message>
+    <message>
+        <source>另存为…（%1）</source>
+        <translation>Save as… (%1)</translation>
+    </message>
+    <message>
+        <source>另存为…</source>
+        <translation>Save as…</translation>
+    </message>
+    <message>
+        <source>更多保存选项</source>
+        <translation>More save options</translation>
+    </message>
+    <message>
+        <source>保存到旧路径</source>
+        <translation>Save to previous folder</translation>
+    </message>
+</context>
+<context>
     <name>CaptureSettingsWindow</name>
     <message>
         <source>截图设置</source>
@@ -1066,6 +1257,10 @@
     <message>
         <source>截图</source>
         <translation>Screenshot</translation>
+    </message>
+    <message>
+        <source>截图设置分类</source>
+        <translation>Screenshot settings categories</translation>
     </message>
 </context>
 <context>
@@ -1098,12 +1293,12 @@
         <translation>Hold Ctrl, Alt or Win as well</translation>
     </message>
     <message>
-        <source>请按下组合键…</source>
-        <translation>Press a key combination…</translation>
+        <source>这个快捷键与其他操作冲突</source>
+        <translation>This hotkey conflicts with another action</translation>
     </message>
     <message>
-        <source>未设置</source>
-        <translation>Not set</translation>
+        <source>请按下组合键…</source>
+        <translation>Press a key combination…</translation>
     </message>
     <message>
         <source>点击设置快捷键</source>
@@ -1229,6 +1424,72 @@
     </message>
 </context>
 <context>
+    <name>PresenterOverlay</name>
+    <message>
+        <source>演示</source>
+        <translation>Presenter</translation>
+    </message>
+</context>
+<context>
+    <name>PresenterToolbar</name>
+    <message>
+        <source>演示工具条</source>
+        <translation>Presenter toolbar</translation>
+    </message>
+    <message>
+        <source>按住拖动工具条</source>
+        <translation>Drag to move the toolbar</translation>
+    </message>
+    <message>
+        <source>激光笔：按住拖动，留下渐隐的红色轨迹</source>
+        <translation>Laser pointer: hold and drag to leave a fading red trail</translation>
+    </message>
+    <message>
+        <source>颜色和粗细</source>
+        <translation>Colour and width</translation>
+    </message>
+    <message>
+        <source>撤销</source>
+        <translation>Undo</translation>
+    </message>
+    <message>
+        <source>重做</source>
+        <translation>Redo</translation>
+    </message>
+    <message>
+        <source>清屏（可撤销）</source>
+        <translation>Clear screen (can be undone)</translation>
+    </message>
+    <message>
+        <source>白板</source>
+        <translation>Whiteboard</translation>
+    </message>
+    <message>
+        <source>黑板</source>
+        <translation>Blackboard</translation>
+    </message>
+    <message>
+        <source>回到画笔</source>
+        <translation>Back to pen</translation>
+    </message>
+    <message>
+        <source>穿透：操作下面的程序，笔迹留着</source>
+        <translation>Pass through: use the programs underneath, the ink stays</translation>
+    </message>
+    <message>
+        <source>展开工具条</source>
+        <translation>Expand toolbar</translation>
+    </message>
+    <message>
+        <source>收起工具条</source>
+        <translation>Collapse toolbar</translation>
+    </message>
+    <message>
+        <source>结束演示（笔迹不保留）</source>
+        <translation>End presenting (the ink is not kept)</translation>
+    </message>
+</context>
+<context>
     <name>Recording</name>
     <message>
         <source>录制屏幕已断开或关闭</source>
@@ -1286,6 +1547,109 @@ The unfinished recording is kept at: %1</translation>
     </message>
 </context>
 <context>
+    <name>RecordingOptions</name>
+    <message>
+        <source>%1：%2</source>
+        <translation>%1: %2</translation>
+    </message>
+    <message>
+        <source>开</source>
+        <translation>On</translation>
+    </message>
+    <message>
+        <source>关</source>
+        <translation>Off</translation>
+    </message>
+    <message>
+        <source>画质</source>
+        <translation>Quality</translation>
+    </message>
+    <message>
+        <source>小体积</source>
+        <translation>Smaller file</translation>
+    </message>
+    <message>
+        <source>标准画质</source>
+        <translation>Standard</translation>
+    </message>
+    <message>
+        <source>更清晰</source>
+        <translation>Clearer</translation>
+    </message>
+    <message>
+        <source>10 帧/秒，最长边 960 像素，适合简单操作。</source>
+        <translation>10 fps, up to 960 px on the longest edge. For simple actions.</translation>
+    </message>
+    <message>
+        <source>20 帧/秒，最长边 1920 像素，文件可能较大。</source>
+        <translation>20 fps, up to 1920 px on the longest edge. Files may be larger.</translation>
+    </message>
+    <message>
+        <source>15 帧/秒，最长边 1280 像素，兼顾清晰度和体积。</source>
+        <translation>15 fps, up to 1280 px on the longest edge. Balances clarity and size.</translation>
+    </message>
+    <message>
+        <source>15 帧/秒，保留原始尺寸，适合文字和简单操作。</source>
+        <translation>15 fps at the original size, for text and simple actions.</translation>
+    </message>
+    <message>
+        <source>30 帧/秒，优先保留细节，文件可能更大。</source>
+        <translation>30 fps with more detail. Files may be larger.</translation>
+    </message>
+    <message>
+        <source>30 帧/秒，兼顾清晰度和文件大小。</source>
+        <translation>30 fps, balancing clarity and file size.</translation>
+    </message>
+    <message>
+        <source>鼠标指针</source>
+        <translation>Cursor</translation>
+    </message>
+    <message>
+        <source>3 秒倒计时</source>
+        <translation>3-sec countdown</translation>
+    </message>
+    <message>
+        <source>点击高亮</source>
+        <translation>Click highlight</translation>
+    </message>
+    <message>
+        <source>鼠标按键</source>
+        <translation>Mouse buttons</translation>
+    </message>
+    <message>
+        <source>显示按键</source>
+        <translation>Show keys</translation>
+    </message>
+    <message>
+        <source>不显示</source>
+        <translation>Off</translation>
+    </message>
+    <message>
+        <source>仅快捷键</source>
+        <translation>Shortcuts only</translation>
+    </message>
+    <message>
+        <source>全部按键</source>
+        <translation>All keys</translation>
+    </message>
+    <message>
+        <source>全部按键会录下输入的文字和密码，输入密码前请暂停。</source>
+        <translation>All keys records typed text and passwords. Pause before entering passwords.</translation>
+    </message>
+    <message>
+        <source>“仅快捷键”显示组合键和功能键，不显示输入的文字。</source>
+        <translation>Shortcuts only shows combinations and function keys, without typed text.</translation>
+    </message>
+    <message>
+        <source>保存到</source>
+        <translation>Save to</translation>
+    </message>
+    <message>
+        <source>更改保存文件夹</source>
+        <translation>Change save folder</translation>
+    </message>
+</context>
+<context>
     <name>RecordingPanel</name>
     <message>
         <source>录屏</source>
@@ -1308,18 +1672,6 @@ The unfinished recording is kept at: %1</translation>
         <translation>Record the entire screen containing the selection, including the taskbar</translation>
     </message>
     <message>
-        <source>点击高亮：%1</source>
-        <translation>Click highlight: %1</translation>
-    </message>
-    <message>
-        <source>在视频中显示鼠标点击圈，暂停期间和控制条上的点击不显示。</source>
-        <translation>Shows click rings in the video. Clicks while paused or on the controls are excluded.</translation>
-    </message>
-    <message>
-        <source>区域录屏</source>
-        <translation>Screen recording</translation>
-    </message>
-    <message>
         <source>系统声音：%1</source>
         <translation>System audio: %1</translation>
     </message>
@@ -1336,24 +1688,8 @@ The unfinished recording is kept at: %1</translation>
         <translation>Microphone: %1</translation>
     </message>
     <message>
-        <source>标准画质</source>
-        <translation>Standard</translation>
-    </message>
-    <message>
-        <source>更清晰</source>
-        <translation>Clearer</translation>
-    </message>
-    <message>
-        <source>更改保存文件夹…</source>
-        <translation>Change save folder…</translation>
-    </message>
-    <message>
         <source>%1 · %2</source>
         <translation>%1 · %2</translation>
-    </message>
-    <message>
-        <source>系统声音：%1 · 麦克风：%2</source>
-        <translation>System audio: %1 · Microphone: %2</translation>
     </message>
     <message>
         <source>播放</source>
@@ -1396,40 +1732,8 @@ The unfinished recording is kept at: %1</translation>
         <translation>Stop and save</translation>
     </message>
     <message>
-        <source>文件已保留在本机。</source>
-        <translation>The file is saved on this computer.</translation>
-    </message>
-    <message>
-        <source>可重新设置声音和保存位置后再录。</source>
-        <translation>Adjust audio and the save folder, then try again.</translation>
-    </message>
-    <message>
         <source>再次按截图快捷键也可停止；控制条不会录入视频。</source>
         <translation>The screenshot shortcut also stops recording. The controls are excluded from the video.</translation>
-    </message>
-    <message>
-        <source>小体积</source>
-        <translation>Smaller file</translation>
-    </message>
-    <message>
-        <source>15 帧/秒，保留原始尺寸，适合文字和简单操作。</source>
-        <translation>15 fps at the original size, for text and simple actions.</translation>
-    </message>
-    <message>
-        <source>30 帧/秒，优先保留细节，文件可能更大。</source>
-        <translation>30 fps with more detail. Files may be larger.</translation>
-    </message>
-    <message>
-        <source>30 帧/秒，兼顾清晰度和文件大小。</source>
-        <translation>30 fps, balancing clarity and file size.</translation>
-    </message>
-    <message>
-        <source>鼠标指针：%1</source>
-        <translation>Cursor: %1</translation>
-    </message>
-    <message>
-        <source>3 秒倒计时：%1</source>
-        <translation>3-sec countdown: %1</translation>
     </message>
     <message>
         <source>再录一段</source>
@@ -1440,72 +1744,12 @@ The unfinished recording is kept at: %1</translation>
         <translation>Start now</translation>
     </message>
     <message>
-        <source>正在保存…</source>
-        <translation>Saving…</translation>
-    </message>
-    <message>
         <source>MP4 视频</source>
         <translation>MP4 video</translation>
     </message>
     <message>
         <source>GIF 动图</source>
         <translation>Animated GIF</translation>
-    </message>
-    <message>
-        <source>10 帧/秒，最长边 960 像素，适合简单操作。</source>
-        <translation>10 fps, up to 960 px on the longest edge. For simple actions.</translation>
-    </message>
-    <message>
-        <source>20 帧/秒，最长边 1920 像素，文件可能较大。</source>
-        <translation>20 fps, up to 1920 px on the longest edge. Files may be larger.</translation>
-    </message>
-    <message>
-        <source>15 帧/秒，最长边 1280 像素，兼顾清晰度和体积。</source>
-        <translation>15 fps, up to 1280 px on the longest edge. Balances clarity and size.</translation>
-    </message>
-    <message>
-        <source>GIF 动图 · 无音频</source>
-        <translation>Animated GIF · No audio</translation>
-    </message>
-    <message>
-        <source>GIF 自动循环播放，不含音频；停止后会显示生成进度。</source>
-        <translation>GIFs loop without audio. Export progress appears after recording stops.</translation>
-    </message>
-    <message>
-        <source>鼠标按键：%1</source>
-        <translation>Mouse buttons: %1</translation>
-    </message>
-    <message>
-        <source>在视频角落显示按下的是左键、右键、中键还是侧键。</source>
-        <translation>Shows in a corner of the video whether the left, right, middle or a side button was pressed.</translation>
-    </message>
-    <message>
-        <source>不显示按键</source>
-        <translation>No keys</translation>
-    </message>
-    <message>
-        <source>仅快捷键</source>
-        <translation>Shortcuts only</translation>
-    </message>
-    <message>
-        <source>全部按键</source>
-        <translation>All keys</translation>
-    </message>
-    <message>
-        <source>打的字也会录进视频，包括密码；输入密码前请先暂停。</source>
-        <translation>Typing is recorded too, passwords included. Pause before typing a password.</translation>
-    </message>
-    <message>
-        <source>在视频角落显示 Ctrl、Alt、Win 组合键和 Esc、Enter、F1 等功能键，打的字不显示。</source>
-        <translation>Shows Ctrl, Alt and Win combinations and keys like Esc, Enter and F1 in a corner of the video. Typing is not shown.</translation>
-    </message>
-    <message>
-        <source>可在视频角落显示按下的键；推荐“仅快捷键”，不会录下打的字。</source>
-        <translation>Can show the keys pressed in a corner of the video. &quot;Shortcuts only&quot; is recommended: it never records typing.</translation>
-    </message>
-    <message>
-        <source>正在显示全部按键：打的字会录进视频，输入密码前请先暂停。</source>
-        <translation>Showing all keys: typing is recorded. Pause before typing a password.</translation>
     </message>
     <message>
         <source>已暂停 · %1</source>
@@ -1526,6 +1770,39 @@ The unfinished recording is kept at: %1</translation>
     <message>
         <source>正在显示全部按键；输入密码前请暂停。</source>
         <translation>All keys are shown; pause before entering passwords.</translation>
+    </message>
+</context>
+<context>
+    <name>ScopeTabs</name>
+    <message>
+        <source>全部</source>
+        <translation>All</translation>
+    </message>
+    <message>
+        <source>文件</source>
+        <translation>Files</translation>
+    </message>
+    <message>
+        <source>内容</source>
+        <translation>Content</translation>
+    </message>
+</context>
+<context>
+    <name>SettingRow</name>
+    <message>
+        <source>打开后可以设置：%1</source>
+        <translation>Turn on to set: %1</translation>
+    </message>
+    <message>
+        <source>、</source>
+        <translation>, </translation>
+    </message>
+</context>
+<context>
+    <name>SettingsSection</name>
+    <message>
+        <source>在“%1”中查看</source>
+        <translation>See all in %1</translation>
     </message>
 </context>
 <context>
@@ -1606,27 +1883,27 @@ The unfinished recording is kept at: %1</translation>
     </message>
     <message>
         <source>没有保存之前的画面，可在设置 › 截图里打开</source>
-        <translation type="unfinished"></translation>
+        <translation>Earlier pictures are not being kept; turn this on in Settings › Screenshot</translation>
     </message>
     <message>
         <source>已是当前画面，按 , 看之前的</source>
-        <translation type="unfinished"></translation>
+        <translation>This is the current screen; press , to see earlier ones</translation>
     </message>
     <message>
         <source>还没有之前的画面</source>
-        <translation type="unfinished"></translation>
+        <translation>No earlier pictures yet</translation>
     </message>
     <message>
         <source>没有更早的画面了</source>
-        <translation type="unfinished"></translation>
+        <translation>No earlier pictures</translation>
     </message>
     <message>
         <source>之前的画面 %1/%2 · %3 · , 更早  . 更近</source>
-        <translation type="unfinished"></translation>
+        <translation>Earlier picture %1/%2 · %3 · , older  . newer</translation>
     </message>
     <message>
         <source>回到当前画面</source>
-        <translation type="unfinished"></translation>
+        <translation>Back to the current screen</translation>
     </message>
     <message>
         <source>截图已保存，但 HDR 图片没能保存到 %1</source>
@@ -1657,14 +1934,77 @@ The unfinished recording is kept at: %1</translation>
     </message>
 </context>
 <context>
+    <name>ws::capture::CaptureKeys</name>
+    <message>
+        <source>贴到屏幕</source>
+        <translation>Pin to screen</translation>
+    </message>
+    <message>
+        <source>保存</source>
+        <translation>Save</translation>
+    </message>
+    <message>
+        <source>关闭贴图</source>
+        <translation>Close the pin</translation>
+    </message>
+    <message>
+        <source>复制</source>
+        <translation>Copy</translation>
+    </message>
+    <message>
+        <source>收起/展开</source>
+        <translation>Fold / unfold</translation>
+    </message>
+    <message>
+        <source>选取文字</source>
+        <translation>Select text</translation>
+    </message>
+    <message>
+        <source>向右转</source>
+        <translation>Rotate right</translation>
+    </message>
+    <message>
+        <source>向左转</source>
+        <translation>Rotate left</translation>
+    </message>
+    <message>
+        <source>左右翻转</source>
+        <translation>Flip horizontally</translation>
+    </message>
+    <message>
+        <source>上下翻转</source>
+        <translation>Flip vertically</translation>
+    </message>
+    <message>
+        <source>已被“%1”使用</source>
+        <translation>Already used by “%1”</translation>
+    </message>
+    <message>
+        <source>截图时不支持这个键</source>
+        <translation>This key can&apos;t be used while capturing</translation>
+    </message>
+    <message>
+        <source>截图时字母、数字会用来选工具或打字，请带上 Ctrl 或 Alt，或用功能键</source>
+        <translation>Letters and digits pick tools or type while capturing: add Ctrl or Alt, or use a function key</translation>
+    </message>
+    <message>
+        <source>截图时这个键已经有用处</source>
+        <translation>This key already does something while capturing</translation>
+    </message>
+    <message>
+        <source>贴图窗口不支持这个键</source>
+        <translation>Pins can&apos;t use this key</translation>
+    </message>
+    <message>
+        <source>贴图窗口里这个键已经有用处</source>
+        <translation>This key already does something in a pin</translation>
+    </message>
+</context>
+<context>
     <name>ws::capture::CaptureOcr</name>
     <message>
         <source>没有图片可以识别。</source>
         <translation>There is no picture to read.</translation>
-    </message>
-    <message>
-        <source>没有安装文字识别模型（Win顺 文件夹里的 ocr 文件夹），无法识别文字。</source>
-        <translation>The text recognition models are not installed (the ocr folder in the WinShun folder): text cannot be read.</translation>
     </message>
     <message>
         <source>识别失败：%1</source>
@@ -1694,10 +2034,6 @@ The unfinished recording is kept at: %1</translation>
         <translation>The monitors for recent areas are disconnected</translation>
     </message>
     <message>
-        <source>还没有上次的选区</source>
-        <translation>No last selection yet</translation>
-    </message>
-    <message>
         <source>颜色格式：%1</source>
         <translation>Colour format: %1</translation>
     </message>
@@ -1720,6 +2056,10 @@ The unfinished recording is kept at: %1</translation>
     <message>
         <source>选区太小，不能录屏</source>
         <translation>The selection is too small for recording</translation>
+    </message>
+    <message>
+        <source>已关闭快捷键提示 · 按 ? 临时显示，截图设置里可重新打开</source>
+        <translation>Shortcut hints off · Press ? to show them for a moment, or turn them back on in the screenshot settings</translation>
     </message>
 </context>
 <context>
@@ -1837,10 +2177,6 @@ click here to cancel</translation>
         <translation>Read text</translation>
     </message>
     <message>
-        <source>识别文字（没有安装文字识别模型）</source>
-        <translation>Read text (the text recognition models are not installed)</translation>
-    </message>
-    <message>
         <source>复制</source>
         <translation>Copy</translation>
     </message>
@@ -1898,6 +2234,21 @@ click here to cancel</translation>
     <message>
         <source>识别文字中…</source>
         <translation>Reading text…</translation>
+    </message>
+</context>
+<context>
+    <name>ws::capture::Presenter</name>
+    <message>
+        <source>录屏或共享屏幕时，请选「显示器采集」或「共享整个屏幕」：只选一个窗口录不到笔迹</source>
+        <translation>When recording or sharing, choose “Display capture” or “Share entire screen”: picking a single window will not show the ink</translation>
+    </message>
+    <message>
+        <source>现在可以操作下面的程序，笔迹还在；点工具条上的“回到画笔”接着画</source>
+        <translation>You can now use the programs underneath; the ink stays. Click “Back to pen” on the toolbar to keep drawing</translation>
+    </message>
+    <message>
+        <source>现在可以操作下面的程序，笔迹还在；按 %1 或点工具条上的“回到画笔”接着画</source>
+        <translation>You can now use the programs underneath; the ink stays. Press %1 or click “Back to pen” on the toolbar to keep drawing</translation>
     </message>
 </context>
 <context>
@@ -1963,20 +2314,12 @@ click here to cancel</translation>
         <translation>Encoding</translation>
     </message>
     <message>
-        <source>%1 × %2 · %3 帧/秒 · MP4</source>
-        <translation>%1 × %2 · %3 fps · MP4</translation>
-    </message>
-    <message>
         <source>正在生成 GIF…</source>
         <translation>Creating GIF…</translation>
     </message>
     <message>
         <source>正在生成 GIF… %1%</source>
         <translation>Creating GIF… %1%</translation>
-    </message>
-    <message>
-        <source>%1 × %2 · %3 帧/秒 · GIF</source>
-        <translation>%1 × %2 · %3 fps · GIF</translation>
     </message>
     <message>
         <source>%1
@@ -2058,10 +2401,6 @@ Original video kept at: %2</translation>
     <message>
         <source>贴图</source>
         <translation>Pin image</translation>
-    </message>
-<message>
-        <source>贴在原来的位置</source>
-        <translation>Pin it where it was</translation>
     </message>
     <message>
         <source>截图设置</source>
@@ -2195,9 +2534,21 @@ Original video kept at: %2</translation>
         <source>剪贴板里没有可用图片，也没有最近截图。请先复制图片或截一张。</source>
         <translation>No usable clipboard image or recent screenshot. Copy an image or take a screenshot first.</translation>
     </message>
-<message>
+    <message>
         <source>优先剪贴板图片，否则贴回最近截图并保留标注</source>
         <translation>Pin a clipboard image, or restore the last screenshot with annotations</translation>
+    </message>
+    <message>
+        <source>结束演示</source>
+        <translation>End presenting</translation>
+    </message>
+    <message>
+        <source>演示 / 白板</source>
+        <translation>Present / Whiteboard</translation>
+    </message>
+    <message>
+        <source>在屏幕上画、激光笔、白板黑板</source>
+        <translation>Draw on the screen, laser pointer, whiteboard and blackboard</translation>
     </message>
     <message>
         <source>剪贴板里的图片读不出来，请重新复制。</source>
@@ -2209,114 +2560,38 @@ Original video kept at: %2</translation>
     </message>
 </context>
 <context>
-    <name>RecordingOptions</name>
+    <name>ws::captureplugin::CaptureSettings</name>
     <message>
-        <source>%1：%2</source>
-        <translation>%1: %2</translation>
+        <source>开始截图</source>
+        <translation>Start a screenshot</translation>
     </message>
     <message>
-        <source>开</source>
-        <translation>On</translation>
+        <source>用 PrtScn 键截图</source>
+        <translation>Take screenshots with PrtScn</translation>
     </message>
     <message>
-        <source>关</source>
-        <translation>Off</translation>
+        <source>贴图</source>
+        <translation>Pin image</translation>
     </message>
     <message>
-        <source>画质</source>
-        <translation>Quality</translation>
+        <source>隐藏 / 显示全部贴图</source>
+        <translation>Hide / show all pins</translation>
     </message>
     <message>
-        <source>小体积</source>
-        <translation>Smaller file</translation>
+        <source>找回穿透贴图</source>
+        <translation>Restore click-through pins</translation>
     </message>
     <message>
-        <source>标准画质</source>
-        <translation>Standard</translation>
+        <source>演示 / 白板</source>
+        <translation>Present / Whiteboard</translation>
     </message>
     <message>
-        <source>更清晰</source>
-        <translation>Clearer</translation>
+        <source>和“%1”的快捷键相同，按下时会先被它用掉</source>
+        <translation>Same as the “%1” shortcut, which takes it first</translation>
     </message>
     <message>
-        <source>10 帧/秒，最长边 960 像素，适合简单操作。</source>
-        <translation>10 fps, up to 960 px on the longest edge. For simple actions.</translation>
-    </message>
-    <message>
-        <source>20 帧/秒，最长边 1920 像素，文件可能较大。</source>
-        <translation>20 fps, up to 1920 px on the longest edge. Files may be larger.</translation>
-    </message>
-    <message>
-        <source>15 帧/秒，最长边 1280 像素，兼顾清晰度和体积。</source>
-        <translation>15 fps, up to 1280 px on the longest edge. Balances clarity and size.</translation>
-    </message>
-    <message>
-        <source>15 帧/秒，保留原始尺寸，适合文字和简单操作。</source>
-        <translation>15 fps at the original size, for text and simple actions.</translation>
-    </message>
-    <message>
-        <source>30 帧/秒，优先保留细节，文件可能更大。</source>
-        <translation>30 fps with more detail. Files may be larger.</translation>
-    </message>
-    <message>
-        <source>30 帧/秒，兼顾清晰度和文件大小。</source>
-        <translation>30 fps, balancing clarity and file size.</translation>
-    </message>
-    <message>
-        <source>鼠标指针</source>
-        <translation>Cursor</translation>
-    </message>
-    <message>
-        <source>3 秒倒计时</source>
-        <translation>3-sec countdown</translation>
-    </message>
-    <message>
-        <source>点击高亮</source>
-        <translation>Click highlight</translation>
-    </message>
-    <message>
-        <source>鼠标按键</source>
-        <translation>Mouse buttons</translation>
-    </message>
-    <message>
-        <source>显示按键</source>
-        <translation>Show keys</translation>
-    </message>
-    <message>
-        <source>不显示</source>
-        <translation>Off</translation>
-    </message>
-    <message>
-        <source>仅快捷键</source>
-        <translation>Shortcuts only</translation>
-    </message>
-    <message>
-        <source>全部按键</source>
-        <translation>All keys</translation>
-    </message>
-    <message>
-        <source>全部按键会录下输入的文字和密码，输入密码前请暂停。</source>
-        <translation>All keys records typed text and passwords. Pause before entering passwords.</translation>
-    </message>
-    <message>
-        <source>“仅快捷键”显示组合键和功能键，不显示输入的文字。</source>
-        <translation>Shortcuts only shows combinations and function keys, without typed text.</translation>
-    </message>
-    <message>
-        <source>保存到</source>
-        <translation>Save to</translation>
-    </message>
-    <message>
-        <source>更改…</source>
-        <translation>Change…</translation>
-    </message>
-    <message>
-        <source>再次按截图快捷键可停止；控制条不会录入视频。</source>
-        <translation>The screenshot shortcut also stops recording. The controls stay out of the video.</translation>
-    </message>
-    <message>
-        <source>更改保存文件夹</source>
-        <translation>Change save folder</translation>
+        <source>其他程序或 Win顺 已把它设为全局快捷键，按下时这里收不到</source>
+        <translation>Another program or WinShun holds it as a global shortcut, so it never gets here</translation>
     </message>
 </context>
 </TS>

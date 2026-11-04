@@ -76,12 +76,19 @@ class SettingsEditor : public QObject {
     Q_PROPERTY(QString folderTyping READ folderTyping WRITE setFolderTyping NOTIFY changed FINAL) // first | only (GitHub #110)
     // The folder menu on a double click (Settings::folderMenu: on unless "off").
     Q_PROPERTY(bool folderMenu READ folderMenu WRITE setFolderMenu NOTIFY changed FINAL)
+    Q_PROPERTY(bool folderMenuDouble READ folderMenuDouble WRITE setFolderMenuDouble NOTIFY changed FINAL)
     Q_PROPERTY(bool folderMenuMiddle READ folderMenuMiddle WRITE setFolderMenuMiddle NOTIFY changed FINAL)
     Q_PROPERTY(bool folderMenuExplorer READ folderMenuExplorer WRITE setFolderMenuExplorer NOTIFY changed FINAL)
     // The groups it lists (GitHub #51); the last one on cannot be switched off.
     Q_PROPERTY(bool folderMenuFavorites READ folderMenuFavorites WRITE setFolderMenuFavorites NOTIFY changed FINAL)
     Q_PROPERTY(bool folderMenuRecent READ folderMenuRecent WRITE setFolderMenuRecent NOTIFY changed FINAL)
     Q_PROPERTY(bool folderMenuWindows READ folderMenuWindows WRITE setFolderMenuWindows NOTIFY changed FINAL)
+    // The actions under the lists (GitHub #200).
+    Q_PROPERTY(bool folderMenuItemSearch READ folderMenuItemSearch WRITE setFolderMenuItemSearch NOTIFY changed FINAL)
+    Q_PROPERTY(bool folderMenuItemCmd READ folderMenuItemCmd WRITE setFolderMenuItemCmd NOTIFY changed FINAL)
+    Q_PROPERTY(bool folderMenuItemPowerShell READ folderMenuItemPowerShell WRITE setFolderMenuItemPowerShell NOTIFY changed FINAL)
+    Q_PROPERTY(bool folderMenuItemFavorite READ folderMenuItemFavorite WRITE setFolderMenuItemFavorite NOTIFY changed FINAL)
+    Q_PROPERTY(bool folderMenuItemSettings READ folderMenuItemSettings WRITE setFolderMenuItemSettings NOTIFY changed FINAL)
     // The folder menu in Directory Opus, which runs a command of its settings
     // on a double click on blank space (refreshOpusFolderMenu): on | stale
     // (another copy's WinShunSearch.exe) | off | taken (a command of the
@@ -183,6 +190,8 @@ class SettingsEditor : public QObject {
     Q_PROPERTY(bool clearOnOpen READ clearOnOpen WRITE setClearOnOpen NOTIFY changed FINAL)
     Q_PROPERTY(QString numberKeys READ numberKeys WRITE setNumberKeys NOTIFY changed FINAL) // ctrl | alt | off
     Q_PROPERTY(QString numberHints READ numberHints WRITE setNumberHints NOTIFY changed FINAL) // held | always | off
+    Q_PROPERTY(bool shortcutHelp READ shortcutHelp WRITE setShortcutHelp NOTIFY changed FINAL)
+    Q_PROPERTY(bool footerHints READ footerHints WRITE setFooterHints NOTIFY changed FINAL)
     Q_PROPERTY(QString previewWith READ previewWith WRITE setPreviewWith NOTIFY changed FINAL) // auto | builtin
     Q_PROPERTY(QString previewHotkey READ previewHotkey WRITE setPreviewHotkey NOTIFY changed FINAL)
     Q_PROPERTY(QString previewHotkeyError READ previewHotkeyError NOTIFY changed FINAL)
@@ -332,7 +341,7 @@ public:
     void setHotkeyError(const QString& error);
     bool recordingHotkey() const { return m_recordingHotkey; }
     void setRecordingHotkey(bool recording);
-    bool autostart() const;
+    bool autostart() const { return m_autostart; } // as last read (autostart::isEnabled), never asked of Task Scheduler here
     void setAutostart(bool on);
     void refreshAutostart(); // changed or read again elsewhere (the tray menu, the task itself)
     bool recordHistory() const { return m_settings.recordHistory; }
@@ -376,6 +385,8 @@ public:
     bool folderMenu() const { return m_settings.folderMenu != u"off"; }
     void setFolderMenu(bool on);
     bool folderMenuExplorer() const { return m_settings.folderMenuExplorer; }
+    bool folderMenuDouble() const { return m_settings.folderMenuDouble; }
+    void setFolderMenuDouble(bool on);
     bool folderMenuMiddle() const { return m_settings.folderMenuMiddle; }
     void setFolderMenuMiddle(bool on);
     void setFolderMenuExplorer(bool on);
@@ -387,6 +398,16 @@ public:
     void setFolderMenuRecent(bool on);
     bool folderMenuWindows() const { return m_settings.folderMenuWindows; }
     void setFolderMenuWindows(bool on);
+    bool folderMenuItemSearch() const { return m_settings.folderMenuItemSearch; }
+    void setFolderMenuItemSearch(bool on);
+    bool folderMenuItemCmd() const { return m_settings.folderMenuItemCmd; }
+    void setFolderMenuItemCmd(bool on);
+    bool folderMenuItemPowerShell() const { return m_settings.folderMenuItemPowerShell; }
+    void setFolderMenuItemPowerShell(bool on);
+    bool folderMenuItemFavorite() const { return m_settings.folderMenuItemFavorite; }
+    void setFolderMenuItemFavorite(bool on);
+    bool folderMenuItemSettings() const { return m_settings.folderMenuItemSettings; }
+    void setFolderMenuItemSettings(bool on);
     QString folderMenuHotkey() const { return m_settings.folderMenuHotkey; }
     bool dropPie() const { return m_settings.dropPie; }
     void setDropPie(bool on);
@@ -652,6 +673,10 @@ public:
     void setNumberKeys(const QString& keys);
     QString numberHints() const { return m_settings.numberHints; }
     void setNumberHints(const QString& hints);
+    bool shortcutHelp() const { return m_settings.shortcutHelp; }
+    void setShortcutHelp(bool on);
+    bool footerHints() const { return m_settings.footerHints; }
+    void setFooterHints(bool on);
     QString numberKeysNote() const { return m_numberKeysNote; }
     QString previewWith() const { return m_settings.previewWith; }
     void setPreviewWith(const QString& with);
@@ -851,6 +876,22 @@ public:
     // Only whether Claude Code's Skill file is there (one path): for the window coming to the front
     // and the page showing, where refreshMcpClients() would stall the GUI thread on that PATH.
     Q_INVOKABLE void refreshSkillState();
+
+    // The window is kept while hidden (App::showSettings): what may change
+    // outside Win顺 meanwhile is read again as it comes back.
+    // The window activated (SettingsWindow.onActiveChanged): the taskbar,
+    // file managers, number keys, double Ctrl clash, Opus, ws on the PATH.
+    // Skipped while it opens: finishOpening() reads them after the first frame.
+    Q_INVOKABLE void windowActivated();
+    void beginOpening() { m_opening = true; }
+    // After the first frame of an opening: all of windowActivated()'s, and
+    // the AI clients and the shares, WSL and known folders offered.
+    void finishOpening();
+    bool opening() const { return m_opening; }
+    // Hidden: the lines about how the last action went (诊断包, 导入, AI
+    // client, plugin, favorite, ws), gone as with a window made anew; not
+    // while that action still runs.
+    Q_INVOKABLE void forgetMessages();
     Q_INVOKABLE void connectMcpClient(const QString& id); // writes Win顺 into its configuration; mcpMessage says how it went
     Q_INVOKABLE void copyMcpSnippet(const QString& id); // its configuration (or command) to the clipboard; "": the generic JSON
     Q_INVOKABLE void installMcpSkill(const QString& id); // Claude Code's Skill for ws; mcpMessage says how it went
@@ -924,6 +965,8 @@ private:
     friend class PluginSettings; // edits m_settings' plugin sections and commits
     friend class FavoritesSettings; // reads the web shortcuts' keywords and the window
     void commit();
+    void refreshKnownPlaces(); // m_knownShares, m_knownWsl, m_knownFolders read again; told when they changed
+    void refreshOnReturn(); // windowActivated()'s
     void noteFoldersEdited(); // foldersChanged() when the chosen folders (or the shares) are others now
     // m_settings.indexFolders as IndexService has them (Settings::indexFolderPath),
     // worked out when they change, not each time the cards are: no disk is read for those.
@@ -973,12 +1016,12 @@ private:
     bool m_diagnosticsBusy = false;
     std::vector<ShareIndexer::Status> m_shareStatuses;
     std::vector<remotecontent::Indexer::Status> m_shareContentStatuses;
-    std::vector<unc::Known> m_knownShares; // read once, with the window
+    std::vector<unc::Known> m_knownShares; // read with the window, again as it opens (refreshKnownPlaces)
     std::vector<wsl::Distribution> m_knownWsl;
     QStringList m_wslStarting;
     QHash<QString, QString> m_wslStartProblems;
     std::vector<IndexService::FolderStatus> m_folderStatuses;
-    std::vector<Settings::KnownFolder> m_knownFolders; // read once, with the window
+    std::vector<Settings::KnownFolder> m_knownFolders; // read with the window, again as it opens (refreshKnownPlaces)
     QStringList m_foldersAnnounced; // as foldersChanged() last had them
     QList<NetworkShare> m_sharesAnnounced;
     mutable QStringList m_folderKeysOf; // folderKeys(): of these
@@ -993,6 +1036,9 @@ private:
     QString m_mcpRelayPath;
     QString m_mcpMessage;
     bool m_mcpSkillBusy = false; // installMcpSkill is waiting for ws
+    bool m_autostart = false;
+    bool m_opening = false; // shown, its first frame not drawn yet (beginOpening)
+    bool m_knownPlacesFresh = true; // read by the constructor, for the first opening
     PluginSettings* m_plugins = nullptr; // a child
     OcrPackage* m_ocrPackage = nullptr;
     FavoritesSettings* m_favorites = nullptr; // a child

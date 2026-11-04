@@ -11,6 +11,7 @@
 #include "WindowFrame.h"
 #include "platform/OcrFiles.h"
 #include "RawClicks.h"
+#include "Presenter.h"
 #include "Recorder.h"
 #include "RecordingPointer.h"
 #include "SystemTheme.h"
@@ -35,6 +36,7 @@
 #include <QQuickWindow>
 #include <QScreen>
 #include <QStyleHints>
+#include <QSurfaceFormat>
 #include <QTimer>
 #include <QTemporaryDir>
 #include <QTranslator>
@@ -61,6 +63,7 @@ constexpr auto kSettingsFlag = u"--preview-capture-settings";
 constexpr auto kRecordingFlag = u"--preview-recording";
 constexpr auto kLongCaptureFlag = u"--preview-long-capture";
 constexpr auto kOcrFlag = u"--preview-ocr";
+constexpr auto kPresenterFlag = u"--preview-presenter";
 
 int g_warnings = 0;
 bool g_edges = false; // --edges (or --tree): every grab also writes <png>.edges.txt
@@ -224,9 +227,154 @@ int runSettings(const QStringList& args)
     }
     if (!ok)
         qWarning("capture settings: full-screen toggle did not update the editor and isolated file");
+    // 截图时显示快捷键提示: on by default, off and on again through the switch.
+    if (QObject* hints = window->findChild<QObject*>(u"captureKeyHintsSwitch"_s)) {
+        bool switched = editor.captureKeyHints() && hints->property("checked").toBool();
+        for (const bool enabled : {false, true}) {
+            QMetaObject::invokeMethod(hints, "toggled", Q_ARG(bool, enabled));
+            settle(window);
+            switched = switched && editor.captureKeyHints() == enabled
+                && CaptureOptions::load(temporary.filePath(u"capture.ini"_s)).keyHints == enabled
+                && hints->property("checked").toBool() == enabled;
+        }
+        say(u"captureKeyHintsSwitch: %1"_s.arg(switched ? u"ok"_s : u"WRONG"_s));
+        ok = ok && switched;
+    } else {
+        say(u"captureKeyHintsSwitch: not found"_s);
+        ok = false;
+    }
+    // The choices drawn as segmented tabs (ScopeTabs): each one reaches the
+    // editor and the isolated file, and the tabs show it as current; each
+    // ends on its default again, for the pictures.
+    const auto choose = [&](const char* name, int index, const char* property, const QVariant& expected,
+                            const std::function<QVariant(const CaptureOptions&)>& stored) {
+        QObject* tabs = window->findChild<QObject*>(QString::fromLatin1(name));
+        if (!tabs)
+            return false;
+        QMetaObject::invokeMethod(tabs, "activated", Q_ARG(int, index));
+        settle(window);
+        const bool chosen = editor.property(property) == expected
+            && stored(CaptureOptions::load(temporary.filePath(u"capture.ini"_s))) == expected
+            && tabs->property("current").toInt() == index;
+        say(u"%1 -> %2: %3"_s.arg(QString::fromLatin1(name)).arg(index).arg(chosen ? u"ok"_s : u"WRONG"_s));
+        return chosen;
+    };
+    bool choices = choose("captureDelayTabs", 0, "captureDelay", 3, [](const CaptureOptions& o) { return QVariant(o.delay); })
+        && choose("captureDelayTabs", 1, "captureDelay", 5, [](const CaptureOptions& o) { return QVariant(o.delay); })
+        && choose("captureHistoryTabs", 2, "captureHistoryCount", 30, [](const CaptureOptions& o) { return QVariant(o.historyCount); })
+        && choose("captureHistoryTabs", 1, "captureHistoryCount", 10, [](const CaptureOptions& o) { return QVariant(o.historyCount); })
+        && choose("capturePinClickTabs", 2, "capturePinDoubleClick", u"collapse"_s, [](const CaptureOptions& o) { return QVariant(o.pinDoubleClick); })
+        && choose("capturePinClickTabs", 0, "capturePinDoubleClick", u"reset"_s, [](const CaptureOptions& o) { return QVariant(o.pinDoubleClick); });
+    // The toolbar's buttons: 重做 (the second of the first row) off, then on again.
+    // In a Repeater's row: found through the items, not the objects' parents.
+    const std::function<QQuickItem*(QQuickItem*, const QString&)> visual = [&](QQuickItem* item, const QString& name) -> QQuickItem* {
+        if (item->objectName() == name)
+            return item;
+        for (QQuickItem* child : item->childItems()) {
+            if (QQuickItem* found = visual(child, name))
+                return found;
+        }
+        return nullptr;
+    };
+    if (QObject* tabs = visual(window->contentItem(), u"captureToolbarTabs0"_s)) {
+        const QString before = editor.captureToolbarHidden();
+        QMetaObject::invokeMethod(tabs, "toggled", Q_ARG(int, 1), Q_ARG(bool, false));
+        settle(window);
+        const bool hidden = editor.captureToolbarHidden().split(u',').contains(u"redo"_s)
+            && CaptureOptions::load(temporary.filePath(u"capture.ini"_s)).toolbarHidden.split(u',').contains(u"redo"_s)
+            && !tabs->property("checkedIndices").toList().contains(1);
+        QMetaObject::invokeMethod(tabs, "toggled", Q_ARG(int, 1), Q_ARG(bool, true));
+        settle(window);
+        const bool shown = editor.captureToolbarHidden() == before && tabs->property("checkedIndices").toList().contains(1);
+        say(u"captureToolbarTabs0 redo off/on: %1"_s.arg(hidden && shown ? u"ok"_s : u"WRONG"_s));
+        choices = choices && hidden && shown;
+    } else {
+        choices = false;
+    }
+    if (QObject* tabs = visual(window->contentItem(), u"captureToolbarTabs4"_s)) {
+        QObject* options = window->findChild<QObject*>(u"captureOptions"_s);
+        const int previousGroup = options ? options->property("currentGroup").toInt() : 0;
+        if (options)
+            options->setProperty("currentGroup", 6);
+        const QString before = editor.captureToolbarHidden();
+        QMetaObject::invokeMethod(tabs, "toggled", Q_ARG(int, 0), Q_ARG(bool, false));
+        settle(window);
+        const bool hidden = editor.captureToolbarHidden().split(u',').contains(u"help"_s)
+            && CaptureOptions::load(temporary.filePath(u"capture.ini"_s)).toolbarHidden.split(u',').contains(u"help"_s)
+            && tabs->property("checkedIndices").toList().isEmpty();
+        const bool saved = saveGrab(window, out.filePath(u"capture-toolbar-help-hidden.png"_s));
+        QMetaObject::invokeMethod(tabs, "toggled", Q_ARG(int, 0), Q_ARG(bool, true));
+        settle(window);
+        const bool shown = editor.captureToolbarHidden() == before && tabs->property("checkedIndices").toList().contains(0);
+        say(u"captureToolbarTabs4 help off/on: %1"_s.arg(hidden && shown ? u"ok"_s : u"WRONG"_s));
+        choices = choices && hidden && shown && saved;
+        if (options)
+            options->setProperty("currentGroup", previousGroup);
+    } else {
+        choices = false;
+    }
+    if (!choices)
+        qWarning("capture settings: a segmented choice did not update the editor and isolated file");
+    ok = ok && choices;
+    // 按键 (#187): keys pressed in the key boxes. A bare letter for 保存 is
+    // refused, with why under the row, and nothing stored; Ctrl+Shift+S is
+    // taken and stored; an arrow for 关闭贴图 is refused. Pictured so (the
+    // 恢复默认 and the words), then put back.
+    {
+        using capture::KeyAction;
+        QObject* options = window->findChild<QObject*>(u"captureOptions"_s);
+        QQuickItem* save = visual(window->contentItem(), u"captureKeySave"_s);
+        QQuickItem* close = visual(window->contentItem(), u"captureKeyPinClose"_s);
+        const auto rowOf = [](QQuickItem* item) {
+            while (item && item->metaObject()->indexOfProperty("keyId") < 0)
+                item = item->parentItem();
+            return item;
+        };
+        const auto press = [&](QQuickItem* box, int key, Qt::KeyboardModifiers mods) {
+            QMetaObject::invokeMethod(box, "keyPressed", Q_ARG(int, key), Q_ARG(int, int(mods)), Q_ARG(int, 0));
+            settle(window);
+            return rowOf(box)->property("error").toString();
+        };
+        const auto stored = [&](KeyAction action) {
+            return CaptureOptions::load(temporary.filePath(u"capture.ini"_s)).keys.key(action);
+        };
+        bool keys = options && save && close && rowOf(save) && rowOf(close);
+        if (keys) {
+            const int previousGroup = options->property("currentGroup").toInt();
+            options->setProperty("currentGroup", 1);
+            settle(window);
+            const QString refused = press(save, Qt::Key_P, Qt::NoModifier);
+            keys = !refused.isEmpty() && stored(KeyAction::Save) == QKeyCombination(Qt::ControlModifier, Qt::Key_S);
+            const QString taken = press(save, Qt::Key_S, Qt::ControlModifier | Qt::ShiftModifier);
+            keys = keys && taken.isEmpty() && stored(KeyAction::Save) == QKeyCombination(Qt::ControlModifier | Qt::ShiftModifier, Qt::Key_S)
+                && editor.options().keys.text(KeyAction::Save) == u"Ctrl+Shift+S"_s;
+            const QString arrow = press(close, Qt::Key_Left, Qt::NoModifier);
+            keys = keys && !arrow.isEmpty() && stored(KeyAction::PinClose) == QKeyCombination(Qt::Key_Escape);
+            say(u"key boxes: refused \"%1\", \"%2\"; taken: %3"_s.arg(refused, arrow).arg(keys ? u"ok"_s : u"WRONG"_s));
+            const int width = (std::max)(560, window->minimumWidth());
+            auto* flick = window->findChild<QQuickItem*>(u"captureSettingsFlick"_s);
+            window->resize(width, 640);
+            settle(window);
+            if (flick)
+                window->resize(width, static_cast<int>(std::ceil(window->height() - flick->height() + flick->property("contentHeight").toReal())));
+            settle(window);
+            keys = saveGrab(window, out.filePath(u"capture-keys-states.png"_s)) && keys;
+            editor.resetCaptureKey(u"Save"_s);
+            press(close, Qt::Key_Escape, Qt::NoModifier);
+            settle(window);
+            keys = keys && stored(KeyAction::Save) == QKeyCombination(Qt::ControlModifier, Qt::Key_S)
+                && rowOf(close)->property("error").toString().isEmpty();
+            options->setProperty("currentGroup", previousGroup);
+            window->resize(560, 640);
+            settle(window);
+        }
+        if (!keys)
+            qWarning("capture settings: the key boxes did not take, refuse or store keys as they should");
+        ok = ok && keys;
+    }
     if (args.contains(u"--pin-image"_s)) {
         if (QObject* options = window->findChild<QObject*>(u"captureOptions"_s))
-            options->setProperty("currentGroup", 3);
+            options->setProperty("currentGroup", 4);
         settle(window);
         auto* row = window->findChild<QQuickItem*>(u"capturePinImageHotkey"_s);
         ok = ok && row;
@@ -243,8 +391,29 @@ int runSettings(const QStringList& args)
             const QRectF rect = row->mapRectToItem(window->contentItem(), row->boundingRect());
             ok = ok && row->isVisible() && QRectF(QPointF(), window->contentItem()->size()).contains(rect);
             say(u"pin image shortcut: %1; %2; visible=%3"_s.arg(row->property("title").toString(),
-                row->property("words").toString()).arg(ok));
+                row->property("description").toString()).arg(ok));
         }
+    }
+    // --groups: every tab, each in a window tall enough for all of it, as
+    // capture-settings-<n>.png, in a window as wide as it opens (720) or
+    // --width (560 is its narrowest).
+    if (args.contains(u"--groups"_s)) {
+        const int asked = valueAfter(args, u"--width", u"720"_s).toInt();
+        QObject* options = window->findChild<QObject*>(u"captureOptions"_s);
+        auto* flick = window->findChild<QQuickItem*>(u"captureSettingsFlick"_s);
+        bool all = options && flick;
+        const int count = options ? options->property("groups").toList().size() : 0;
+        for (int group = 0; all && group < count; ++group) {
+            options->setProperty("currentGroup", group);
+            const int width = (std::max)(asked, window->minimumWidth()); // as the desktop keeps it
+            window->resize(width, 640);
+            settle(window);
+            const qreal chrome = window->height() - flick->height();
+            window->resize(width, static_cast<int>(std::ceil(chrome + flick->property("contentHeight").toReal())));
+            settle(window);
+            all = saveGrab(window, out.filePath(u"capture-settings-%1.png"_s.arg(group))) && all;
+        }
+        return finish(window, ok && all);
     }
     const bool saved = saveGrab(window, out.filePath(u"capture-settings.png"_s));
     return finish(window, ok && saved);
@@ -496,6 +665,36 @@ int runToolbarDrag(const QStringList& args)
         session.annotation()->setPanel({{u"color"_s, u"#8E24AA"_s}, {u"width"_s, 4}});
     }
     grab(u"toolbar-before");
+    // Two cards: the common row next to the selection (on top while the toolbar lies below), the other
+    // beyond it; the box is both and the gap; left edges together; the second no wider than the first.
+    auto* row1 = window->findChild<QQuickItem*>(u"captureToolbarRow1"_s);
+    auto* row2 = window->findChild<QQuickItem*>(u"captureToolbarRow2"_s);
+    auto* help = window->findChild<QQuickItem*>(u"captureToolbarHelp"_s);
+    check(help && help->isVisible(), "the screenshot toolbar help button is missing");
+    if (help) {
+        QQuickItem* helpRow = help->parentItem();
+        const qreal before = helpRow->width();
+        bar->setProperty("keysOpen", true);
+        settle(window);
+        check(bar->property("keysOpen").toBool(), "the full key list did not open");
+        session.setHiddenButtons({u"help"_s});
+        settle(window);
+        check(!help->isVisible() && !bar->property("keysOpen").toBool(), "hiding help left its button or list visible");
+        check(helpRow->width() < before, "hiding help kept its separator or space");
+        grab(u"toolbar-help-hidden");
+        session.setHiddenButtons({});
+        settle(window);
+        check(help->isVisible() && std::abs(helpRow->width() - before) < 1 / dpr, "restoring help did not restore the toolbar width");
+    }
+    const auto checkRows = [&](bool above) {
+        if (!row1 || !row2 || !row2->isVisible()) { check(false, "the overlay toolbar is not two rows"); return; }
+        check(row1->x() == row2->x() && row2->width() <= row1->width(), "rows: left edges or widths");
+        check(bar->height() == row1->height() + 4 + row2->height() && bar->width() == row1->width(), "rows: box is not both cards");
+        check(above ? row2->y() + row2->height() + 4 == row1->y() : row1->y() + row1->height() + 4 == row2->y(),
+            above ? "rows: the common row is not next to the selection (above)" : "rows: the common row is not next to the selection (below)");
+        check(row1->mapToScene(QPointF()).y() * 1 == std::round(row1->mapToScene(QPointF()).y() * dpr) / dpr, "rows: first card not on a device pixel");
+    };
+    checkRows(false);
     if (args.contains(u"--interactive"_s)) {
         struct PointerTrace : QObject {
             std::function<void(QMouseEvent*)> report;
@@ -623,7 +822,7 @@ int runToolbarDrag(const QStringList& args)
         "a drag delivered as one move did not reposition the toolbar");
     grab(u"toolbar-moved");
     const QPointF moved = toolbar->position();
-    const QPointF firstTool = bar->mapToScene(QPointF(grip->x() + grip->width() + 4 + 16, bar->height() / 2));
+    const QPointF firstTool = grip->mapToScene(QPointF(grip->width() + 4 + 16, grip->height() / 2));
     send(QEvent::MouseButtonPress, firstTool, Qt::LeftButton, Qt::LeftButton);
     send(QEvent::MouseButtonRelease, firstTool, Qt::LeftButton, Qt::NoButton);
     settle(window);
@@ -663,7 +862,27 @@ int runToolbarDrag(const QStringList& args)
     check(toolbar->property("side").toString() == u"above", "bottom selection did not place the toolbar above");
     drag(QPointF(40, -70));
     check(toolbar->property("manuallyPlaced").toBool() && toolbar->property("side").toString() == u"above", "dragging above the selection failed");
+    checkRows(true);
     grab(u"toolbar-above");
+    {
+        // The editing window's toolbar: the same item without a session, one card with everything.
+        QQmlComponent barComponent(&engine, u"WinShun"_s, u"AnnotateToolbar"_s);
+        QQuickWindow editorWindow;
+        editorWindow.resize(QSize(1000, 80));
+        editorWindow.setColor(QColor(args.contains(u"--dark"_s) ? QColor(32, 32, 32) : QColor(243, 243, 243)));
+        auto* editorBar = qobject_cast<QQuickItem*>(barComponent.createWithInitialProperties({
+            {u"annot"_s, QVariant::fromValue(session.annotation())}, {u"editor"_s, true}, {u"dpr"_s, dpr}}));
+        if (!editorBar) { say(barComponent.errorString()); return finish(window, false); }
+        editorBar->setParentItem(editorWindow.contentItem());
+        editorBar->setPosition(QPointF(12, 12));
+        showOffScreen(&editorWindow);
+        settle(&editorWindow);
+        auto* editorRow2 = editorBar->findChild<QQuickItem*>(u"captureToolbarRow2"_s);
+        check(editorRow2 && !editorRow2->isVisible(), "the editor toolbar has a second row");
+        check(editorBar->height() == 44, "the editor toolbar is not one 44 px card");
+        ok = saveGrab(&editorWindow, out.filePath(u"toolbar-editor.png"_s)) && ok;
+        delete editorBar;
+    }
     say(u"toolbar drag checks: %1"_s.arg(ok ? u"passed"_s : u"failed"_s));
     return finish(window, ok);
 }
@@ -780,14 +999,22 @@ int runSelectionKeys(const QStringList& args)
     check(session->recalledSelection() == 9, "Shift+R cycles in reverse");
     key(Qt::Key_R);
     const QRect recalled = session->selectionRect();
-    key(Qt::Key_A);
-    key(Qt::Key_W);
-    check(session->selectionRect() == recalled.translated(-1, -1), "WASD moved by one physical pixel");
-    key(Qt::Key_D, Qt::ShiftModifier);
+    QList<QPoint> pointerRequests;
+    const QMetaObject::Connection pointerWatch = QObject::connect(session, &CaptureSession::cursorMoveRequested, session,
+        [&](const QPoint& global) { pointerRequests.append(global); });
+    key(Qt::Key_D);
     key(Qt::Key_S, Qt::ShiftModifier);
+    QObject::disconnect(pointerWatch);
+    check(pointerRequests.size() == 2 && session->selectionRect() == recalled && session->annotation()->tool() < 0,
+        "WASD requested pointer moves and left the area alone (distances are covered by tst_capture)");
+    key(Qt::Key_Left);
+    key(Qt::Key_Up);
+    check(session->selectionRect() == recalled.translated(-1, -1), "arrow keys moved the area by one physical pixel");
+    key(Qt::Key_Right, Qt::ShiftModifier);
+    key(Qt::Key_Down, Qt::ShiftModifier);
     const QRect adjusted(recalled.topLeft() - QPoint(1, 1), recalled.size() + QSize(1, 1));
     check(session->selectionRect() == adjusted && session->annotation()->tool() < 0,
-        "Shift+WASD resized by one pixel without selecting a tool or starting a countdown");
+        "Shift+arrows resized by one pixel without selecting a tool or starting a countdown");
     const QImage expected = screen->image().copy(adjusted);
     check(expected.pixel(0, 0) != previousColor, "R uses the newly frozen picture");
     settle(overlay);
@@ -829,8 +1056,269 @@ int runSelectionKeys(const QStringList& args)
     return ok && g_warnings == 0 ? 0 : 4;
 }
 
+// --key-hints: the shortcut hints (CaptureKeyHints.qml) in the real overlay
+// over a made-up desktop, through the overlay's own mouse routing, on the
+// real clock (KeyHintPolicy): none at first, then by themselves; a press
+// takes them away; with the pointer near, on its button (不再显示, 一直显示
+// and ?), after a selection and a pause, with a tool, a recalled region, a
+// selection over the left corner and one over both; a delayed capture;
+// keyhints-*.png.
+int runKeyHints(const QStringList& args)
+{
+    using namespace capture;
+    const QDir out(valueAfter(args, kCaptureToolsFlag));
+    QDir().mkpath(out.path());
+    QTranslator translator;
+    if (args.contains(u"--english"_s) && translator.load(u":/i18n/capture_en.qm"_s))
+        QCoreApplication::installTranslator(&translator);
+    const qreal dpr = QGuiApplication::primaryScreen()->devicePixelRatio();
+    const QSize logical(1280, 800);
+    const QSize pixels(qRound(logical.width() * dpr), qRound(logical.height() * dpr));
+    const auto phys = [dpr](qreal x, qreal y) { return QPoint(qRound(x * dpr), qRound(y * dpr)); };
+    CaptureScreen screen(0);
+    screen.setGeometry(QRect(QPoint(), pixels), dpr, logical);
+    QImage image(pixels, QImage::Format_RGB32);
+    {
+        QPainter painter(&image);
+        painter.scale(dpr, dpr);
+        QLinearGradient wallpaper(0, 0, logical.width(), logical.height());
+        wallpaper.setColorAt(0, QColor(58, 96, 150));
+        wallpaper.setColorAt(1, QColor(150, 186, 214));
+        painter.fillRect(QRect(QPoint(), logical), wallpaper);
+        const QRect window(330, 120, 640, 420);
+        painter.fillRect(window, QColor(249, 249, 249));
+        painter.fillRect(QRect(window.topLeft(), QSize(window.width(), 36)), QColor(238, 238, 238));
+        painter.setPen(QColor(30, 30, 30));
+        QFont font(QGuiApplication::font().family());
+        font.setPixelSize(14);
+        painter.setFont(font);
+        painter.drawText(window.x() + 14, window.y() + 23, u"文档 - 记事本"_s);
+        font.setPixelSize(16);
+        painter.setFont(font);
+        for (int line = 0; line < 9; ++line)
+            painter.drawText(window.x() + 24, window.y() + 76 + line * 34,
+                             u"第 %1 行：截图时屏幕左下角列出此刻能用的快捷键。"_s.arg(line + 1));
+        painter.fillRect(QRect(0, logical.height() - 48, logical.width(), 48), QColor(32, 32, 32));
+        for (int icon = 0; icon < 6; ++icon)
+            painter.fillRect(QRect(470 + icon * 56, logical.height() - 36, 24, 24), QColor(90 + icon * 20, 140, 210));
+    }
+    screen.setImage(image);
+    CaptureSession session;
+    session.setOcrAvailable(true);
+    CaptureSession::Windows windows;
+    windows.tops = {QRect(phys(330, 120), phys(970, 540) - QPoint(1, 1))};
+    session.begin({&screen}, windows);
+    session.setHistoryAvailable(true);
+    for (int i = 0; i < 3; ++i)
+        session.rememberSelection(QRect(phys(400 + i * 20, 200), phys(800 + i * 20, 460) - QPoint(1, 1)));
+    QList<bool> kept;
+    QObject::connect(&session, &CaptureSession::keyHintsKept, &session, [&](bool on) { kept.append(on); });
+
+    QQmlApplicationEngine engine;
+    QQmlComponent component(&engine, u"WinShun"_s, u"CaptureOverlay"_s);
+    auto* window = qobject_cast<QQuickWindow*>(component.createWithInitialProperties({
+        {u"session"_s, QVariant::fromValue(&session)}, {u"screenModel"_s, QVariant::fromValue(&screen)}}));
+    if (!window) { say(component.errorString()); return 3; }
+    window->resize(logical);
+    showOffScreen(window);
+    settle(window);
+    auto* hints = window->findChild<QQuickItem*>(u"captureKeyHints"_s);
+    auto* card = window->findChild<QQuickItem*>(u"captureKeyHintsCard"_s);
+    auto* keep = window->findChild<QQuickItem*>(u"captureKeyHintsKeep"_s);
+    auto* recall = window->findChild<QQuickItem*>(u"captureRecallIndex"_s);
+    if (!hints || !card || !keep || !recall) { say(u"FAIL: key hint items not found"_s); return finish(window, false); }
+    bool ok = true;
+    const auto check = [&](bool passed, const QString& what) {
+        say(u"%1: %2"_s.arg(passed ? u"PASS"_s : u"FAIL"_s, what));
+        ok = passed && ok;
+    };
+    const auto send = [&](QEvent::Type type, QPointF at, Qt::MouseButton button, Qt::MouseButtons buttons) {
+        QMouseEvent event(type, at, window->mapToGlobal(at.toPoint()), button, buttons, Qt::NoModifier);
+        QCoreApplication::sendEvent(window, &event);
+        QCoreApplication::processEvents();
+    };
+    const auto move = [&](QPointF at) { send(QEvent::MouseMove, at, Qt::NoButton, Qt::NoButton); };
+    const auto drag = [&](QPointF from, QPointF to) {
+        move(from);
+        send(QEvent::MouseButtonPress, from, Qt::LeftButton, Qt::LeftButton);
+        for (int i = 1; i <= 6; ++i)
+            send(QEvent::MouseMove, from + (to - from) * (i / 6.0), Qt::NoButton, Qt::LeftButton);
+        send(QEvent::MouseButtonRelease, to, Qt::LeftButton, Qt::NoButton);
+    };
+    const auto key = [&](int code, Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
+        QKeyEvent press(QEvent::KeyPress, code, modifiers);
+        QCoreApplication::sendEvent(window, &press);
+        QKeyEvent release(QEvent::KeyRelease, code, modifiers);
+        QCoreApplication::sendEvent(window, &release);
+        QCoreApplication::processEvents();
+    };
+    const auto opacity = [&] { return card->opacity(); };
+    const auto rows = [&] { return session.keyHints().join(u','); };
+    const auto grab = [&](QStringView name) {
+        settle(window);
+        ok = saveGrab(window, out.filePath(u"keyhints-"_s + name.toString() + u".png"_s)) && ok;
+    };
+    const auto click = [&](QQuickItem* item, Qt::MouseButton button = Qt::LeftButton) {
+        const QPointF at = item->mapToScene(QPointF(item->width() / 2, item->height() / 2));
+        move(at);
+        send(QEvent::MouseButtonPress, at, button, button);
+        send(QEvent::MouseButtonRelease, at, button, Qt::NoButton);
+    };
+
+    constexpr int startMs = static_cast<int>(KeyHintPolicy::kStartMs);
+    constexpr int idleMs = static_cast<int>(KeyHintPolicy::kIdleMs);
+
+    // Rule 1: a capture begins with none; moving about leaves the wait be.
+    session.begin({&screen}, windows); // afresh, now that the overlay is up
+    move(QPointF(640, 330));
+    check(!session.keyHintsShown() && opacity() == 0, u"none as the capture begins"_s);
+    for (int i = 0; i < 4; ++i) {
+        pump(startMs / 4 + 20);
+        move(QPointF(640 + i * 30, 330 + i * 10));
+    }
+    check(session.keyHintsShown(), u"shown by themselves after %1 ms with no button pressed"_s.arg(startMs));
+    move(QPointF(640, 330));
+    grab(u"choosing");
+    check(rows() == u"wheel,wasd,recall,history,ocr,quit", u"choosing rows: "_s + rows());
+    check(opacity() == 1 && hints->property("corner").toInt() == 0, u"shown in the bottom-left corner"_s);
+    const QRectF cardRect = card->mapRectToScene(QRectF(0, 0, card->width(), card->height()));
+    say(u"card %1,%2 %3x%4 logical"_s.arg(cardRect.x()).arg(cardRect.y()).arg(cardRect.width()).arg(cardRect.height()));
+    key(Qt::Key_W);
+    check(session.keyHintsShown(), u"a key while choosing (W) leaves them up"_s);
+
+    move(QPointF(cardRect.right() + 20, cardRect.top() + 30));
+    grab(u"pointer-near");
+    check(std::abs(opacity() - 0.15) < 0.01, u"the pointer near: see-through (%1)"_s.arg(opacity()));
+    move(keep->mapToScene(QPointF(keep->width() / 2, keep->height() / 2)));
+    grab(u"button-hover");
+    check(opacity() == 1, u"on its button: in full again"_s);
+
+    // 不再显示: the setting off, the capture as it was; ? shows it again, 一直显示 turns it on.
+    click(keep, Qt::RightButton);
+    check(session.active() && !session.hasSelection() && kept.isEmpty() && session.keyHintsShown(),
+          u"a right click on the button is not Esc, nor a press that hides them"_s);
+    click(keep);
+    check(kept == QList<bool>{false} && !session.keyHintsShown() && !session.hasSelection()
+              && session.phaseName() == u"hover" && session.active(),
+          u"不再显示 turned the setting off without selecting or ending the capture"_s);
+    check(!screen.notice().isEmpty(), u"it says how to have them back: "_s + screen.notice());
+    settle(window);
+    check(opacity() == 0, u"gone after 不再显示"_s);
+    move(QPointF(640, 330));
+    key(Qt::Key_Question, Qt::ShiftModifier);
+    check(session.keyHintsShown(), u"? (after the click: the overlay still has the keys) shows them for this capture"_s);
+    grab(u"temporary");
+    check(opacity() == 1, u"shown by ? with the setting off"_s);
+    click(keep);
+    check(kept == (QList<bool>{false, true}) && session.keyHintsEnabled() && session.keyHintsShown(),
+          u"一直显示 turned the setting on and they stay"_s);
+    key(Qt::Key_Slash);
+    check(!session.keyHintsShown(), u"/ hides them"_s);
+    key(Qt::Key_F1);
+    check(session.keyHintsShown(), u"F1 shows them"_s);
+    settle(window);
+
+    // Rule 2: the left button down on the picture takes even a shown-by-hand panel away, quickly.
+    move(QPointF(380, 180));
+    send(QEvent::MouseButtonPress, QPointF(380, 180), Qt::LeftButton, Qt::LeftButton);
+    check(!session.keyHintsShown(), u"a left press hides them at once"_s);
+    pump(60);
+    const qreal at60 = opacity();
+    pump(80);
+    say(u"fade out: %1 after ~60 ms, %2 after ~140 ms"_s.arg(at60).arg(opacity()));
+    check(opacity() == 0, u"gone within ~140 ms of the press"_s);
+    for (int i = 1; i <= 6; ++i)
+        send(QEvent::MouseMove, QPointF(380, 180) + (QPointF(900, 470) - QPointF(380, 180)) * (i / 6.0), Qt::NoButton,
+             Qt::LeftButton);
+    send(QEvent::MouseButtonRelease, QPointF(900, 470), Qt::LeftButton, Qt::NoButton);
+    move(QPointF(640, 330));
+    check(session.hasSelection() && !session.keyHintsShown(), u"a selection made: none come back at once"_s);
+
+    // Rule 3: a pause on the selection brings its rows, once; any input takes them away.
+    pump(idleMs + 300);
+    check(session.keyHintsShown(), u"after %1 ms without input: the selection's rows"_s.arg(idleMs));
+    grab(u"selected");
+    check(rows() == u"copy,save,pin,arrows,ocr,long", u"selected rows: "_s + rows());
+    check(opacity() == 1 && hints->property("corner").toInt() == 0, u"still bottom-left with a selection in the middle"_s);
+    move(QPointF(650, 335));
+    check(!session.keyHintsShown(), u"a move after the pause hides them"_s);
+    pump(idleMs + 300);
+    check(!session.keyHintsShown(), u"and they do not come back in this capture"_s);
+
+    // Rows of a tool (shown by F1, which a tool chosen leaves up).
+    key(Qt::Key_F1);
+    session.annotation()->setTool(0); // 矩形
+    check(session.keyHintsShown(), u"F1's show stays as a tool is chosen"_s);
+    grab(u"tool");
+    check(rows() == u"shift,width,undo,delete,toolOff,hide", u"tool rows: "_s + rows());
+    session.annotation()->setTool(6); // 文字 (T): no Shift
+    check(rows() == u"width,undo,delete,toolOff,hide", u"text tool rows: "_s + rows());
+    // A text being typed: none, and / is a character there.
+    send(QEvent::MouseButtonPress, QPointF(620, 300), Qt::LeftButton, Qt::LeftButton);
+    send(QEvent::MouseButtonRelease, QPointF(620, 300), Qt::LeftButton, Qt::NoButton);
+    settle(window);
+    check(session.annotation()->editingText() && rows().isEmpty() && opacity() == 0, u"none while a text is typed"_s);
+    const bool shownBefore = session.keyHintsShown();
+    check(!session.key(Qt::Key_Slash, Qt::NoModifier) && session.keyHintsShown() == shownBefore,
+          u"/ while typing is not the hints' key"_s);
+    key(Qt::Key_Escape); // the empty text closes
+    session.annotation()->setTool(-1);
+
+    key(Qt::Key_Escape);
+    key(Qt::Key_R);
+    check(!session.keyHintsShown() && recall->isVisible(), u"R: no hints by themselves, the index below"_s);
+    key(Qt::Key_F1);
+    grab(u"recalled");
+    check(rows().endsWith(u",recalled"_s) && !recall->isVisible(), u"recalled region told in the panel, no bar below"_s);
+
+    // Over the left corner: to the right one; over both: gone.
+    key(Qt::Key_Escape);
+    drag(QPointF(4, 300), QPointF(560, 790));
+    key(Qt::Key_F1);
+    move(QPointF(300, 500));
+    grab(u"moved");
+    check(hints->property("corner").toInt() == 1 && opacity() == 1, u"selection over the left corner: moved right"_s);
+    key(Qt::Key_Escape);
+    drag(QPointF(2, 2), QPointF(1276, 796));
+    key(Qt::Key_F1);
+    move(QPointF(640, 330));
+    grab(u"blocked");
+    check(opacity() == 0, u"selection over both corners: out of the way"_s);
+    key(Qt::Key_Escape);
+
+    // While dragging: none.
+    move(QPointF(300, 250));
+    send(QEvent::MouseButtonPress, QPointF(300, 250), Qt::LeftButton, Qt::LeftButton);
+    send(QEvent::MouseMove, QPointF(500, 400), Qt::NoButton, Qt::LeftButton);
+    settle(window);
+    check(rows().isEmpty() && opacity() == 0, u"none while dragging"_s);
+    send(QEvent::MouseButtonRelease, QPointF(500, 400), Qt::LeftButton, Qt::NoButton);
+
+    // Rule 7: a capture begun by the delay's countdown shows none by itself.
+    key(Qt::Key_Escape);
+    session.begin({&screen}, windows);
+    session.quietKeyHints();
+    move(QPointF(640, 330));
+    pump(startMs + 300);
+    check(!session.keyHintsShown() && opacity() == 0, u"a delayed capture: none by themselves"_s);
+
+    // Off in the settings, in a new capture: none by themselves; a recalled region still says which.
+    key(Qt::Key_Escape);
+    session.begin({&screen}, windows);
+    session.setKeyHints(false);
+    key(Qt::Key_R);
+    move(QPointF(640, 330));
+    pump(idleMs + 300);
+    grab(u"off-recalled");
+    check(opacity() == 0 && recall->isVisible(), u"off: only the recalled region's index, at the bottom"_s);
+    say(u"key hint checks: %1"_s.arg(ok ? u"passed"_s : u"failed"_s));
+    return finish(window, ok);
+}
+
 int runCaptureTools(const QStringList& args)
 {
+    if (args.contains(u"--key-hints"_s))
+        return runKeyHints(args);
     if (args.contains(u"--save-options"_s))
         return runCaptureSave(args) + g_warnings;
     if (args.contains(u"--selection-keys"_s))
@@ -1378,11 +1866,169 @@ int runRecording(const QStringList& args)
     return saved && passed ? 0 : 4;
 }
 
+// --preview-presenter [--laser]: the presenter's white board (GitHub #189)
+// for the README, with no desktop in it: the production Presenter, ink window
+// (PresenterOverlay.qml) and toolbar (PresenterToolbar.qml) off the screen,
+// with made-up hooks in place of PresenterHost's (one monitor 1000 x 625
+// logical px, no foreground, nothing remembered on disk). The ink comes through
+// the ink window's own mouse routing; the toolbar is drawn over the board
+// where PresenterHost first puts it; presenter-board.png. --laser: the
+// laser pointer held at the end, its trail drawn.
+int runPresenter(const QStringList& args)
+{
+    using namespace capture;
+    const QDir out(valueAfter(args, kPresenterFlag));
+    QDir().mkpath(out.path());
+    QTranslator translator;
+    if (args.contains(u"--english"_s) && translator.load(u":/i18n/capture_en.qm"_s))
+        QCoreApplication::installTranslator(&translator);
+    const qreal dpr = QGuiApplication::primaryScreen()->devicePixelRatio();
+    const QSize logical(1000, 625);
+    constexpr int toolbarTop = 12; // PresenterHost's kToolbarTop
+    QVariantMap store {{QString::fromLatin1(Presenter::kRecordHintKey), true}, {QString::fromLatin1(Presenter::kThroughHintKey), true}};
+    Presenter presenter;
+    Presenter::Hooks hooks;
+    hooks.monitors = [&] { return QList<Presenter::Monitor> {{QSize(qRound(logical.width() * dpr), qRound(logical.height() * dpr)), dpr}}; };
+    hooks.screenAtPointer = [] { return 0; };
+    hooks.foreground = [] { return quintptr(0); };
+    hooks.setForeground = [](quintptr) { return false; };
+    hooks.beneathPointer = [] { return quintptr(0); };
+    hooks.load = [&](const QString& key) { return store.value(key); };
+    hooks.save = [&](const QString& key, const QVariant& value) { store.insert(key, value); };
+    presenter.setHooks(std::move(hooks));
+    presenter.open();
+    presenter.toggleBoard(int(presenter::Board::White));
+    PresenterScreen* screen = presenter.screen(0);
+    if (!screen) { say(u"FAIL: no presenter screen"_s); return 4; }
+
+    QQmlApplicationEngine engine;
+    const auto make = [&](const char* type, const QVariantMap& properties) {
+        QQmlComponent component(&engine, u"WinShun"_s, QString::fromLatin1(type));
+        auto* window = qobject_cast<QQuickWindow*>(component.createWithInitialProperties(properties));
+        if (!window) {
+            say(component.errorString());
+            return window;
+        }
+        QSurfaceFormat format = window->format();
+        format.setAlphaBufferSize(8); // as PresenterHost: drawn on nothing
+        window->setFormat(format);
+        return window;
+    };
+    QQuickWindow* ink = make("PresenterOverlay", {{u"presenter"_s, QVariant::fromValue(&presenter)}, {u"screenModel"_s, QVariant::fromValue(screen)}});
+    QQuickWindow* toolbar = make("PresenterToolbar", {{u"presenter"_s, QVariant::fromValue(&presenter)}});
+    if (!ink || !toolbar) return 3;
+    ink->resize(logical);
+    showOffScreen(ink);
+    showOffScreen(toolbar);
+    settle(ink);
+
+    const auto send = [&](QEvent::Type type, QPointF at, Qt::MouseButton button, Qt::MouseButtons buttons) {
+        QMouseEvent event(type, at, ink->mapToGlobal(at.toPoint()), button, buttons, Qt::NoModifier);
+        QCoreApplication::sendEvent(ink, &event);
+        QCoreApplication::processEvents();
+    };
+    // `stepMs` between the moves: the laser's trail fades with time (kLifeMs).
+    const auto stroke = [&](const QList<QPointF>& points, bool release = true, int stepMs = 0) {
+        send(QEvent::MouseButtonPress, points.first(), Qt::LeftButton, Qt::LeftButton);
+        for (qsizetype i = 1; i < points.size(); ++i) {
+            const QPointF from = points[i - 1], to = points[i];
+            for (int step = 1; step <= 6; ++step) {
+                send(QEvent::MouseMove, from + (to - from) * (step / 6.0), Qt::NoButton, Qt::LeftButton);
+                if (stepMs)
+                    pump(stepMs);
+            }
+        }
+        if (release)
+            send(QEvent::MouseButtonRelease, points.last(), Qt::LeftButton, Qt::NoButton);
+    };
+    const auto tool = [&](annot::Kind kind, const QVariantMap& panel) {
+        presenter.setTool(int(kind));
+        presenter.model()->setPanel(panel);
+    };
+    // The text and number boxes ask for the keys (requestActivate): a
+    // warning each, as the windows here never take the focus.
+    const auto text = [&](QPointF at, const QString& words) {
+        stroke({at});
+        presenter.model()->commitText(words);
+    };
+    const auto number = [&](QPointF at) {
+        stroke({at});
+        if (presenter.model()->editingText())
+            presenter.model()->commitText({});
+        if (presenter.model()->editingNumber())
+            presenter.model()->closeNumberEdit();
+    };
+
+    // A plan on the board: a title, three boxes with arrows and numbers,
+    // the last one ringed and ticked, a highlighted line.
+    tool(annot::Kind::Text, {{u"color"_s, u"#212121"_s}, {u"size"_s, 32}, {u"bold"_s, true}});
+    text({80, 96}, u"新版上线计划"_s);
+    tool(annot::Kind::Rect, {{u"color"_s, u"#1E88E5"_s}, {u"width"_s, 4}});
+    const QList<qreal> lefts {90, 395, 700};
+    for (const qreal x : lefts)
+        stroke({{x, 220}, {x + 210, 340}});
+    tool(annot::Kind::Text, {{u"color"_s, u"#212121"_s}, {u"size"_s, 24}, {u"bold"_s, false}});
+    const QStringList words {u"整理需求"_s, u"开发测试"_s, u"发布上线"_s};
+    for (qsizetype i = 0; i < lefts.size(); ++i)
+        text({lefts[i] + 57, 262}, words[i]);
+    tool(annot::Kind::Arrow, {{u"color"_s, u"#FB8C00"_s}, {u"width"_s, 4}});
+    stroke({{308, 280}, {387, 280}});
+    stroke({{613, 280}, {692, 280}});
+    tool(annot::Kind::Number, {{u"color"_s, u"#E53935"_s}, {u"size"_s, 18}});
+    for (const qreal x : lefts)
+        number({x, 220});
+    tool(annot::Kind::Ellipse, {{u"color"_s, u"#E53935"_s}, {u"width"_s, 4}});
+    stroke({{672, 196}, {938, 366}});
+    tool(annot::Kind::Marker, {{u"color"_s, u"#FDD835"_s}, {u"width"_s, 20}});
+    stroke({{100, 452}, {404, 452}});
+    tool(annot::Kind::Text, {{u"color"_s, u"#212121"_s}, {u"size"_s, 24}, {u"bold"_s, false}});
+    text({96, 436}, u"周五前完成测试，下周一发布"_s);
+    tool(annot::Kind::Pen, {{u"color"_s, u"#43A047"_s}, {u"width"_s, 6}});
+    stroke({{820, 410}, {846, 440}, {900, 384}});
+    const bool laser = args.contains(u"--laser"_s); // the laser held, its trail after it
+    presenter.setLaser(laser);
+    settle(ink);
+    settle(toolbar);
+    if (laser)
+        stroke({{600, 560}, {680, 520}, {760, 545}, {840, 505}}, false, 12); // held: the trail shows
+
+    bool ok = true;
+    const auto check = [&](bool passed, const QString& what) {
+        say(u"%1: %2"_s.arg(passed ? u"PASS"_s : u"FAIL"_s, what));
+        ok = passed && ok;
+    };
+    check(presenter.board() == int(presenter::Board::White) && screen->boardModel(), u"the white board is open"_s);
+    check(screen->boardModel() && screen->boardModel()->itemCount() >= 14 && screen->desk()->itemCount() == 0,
+          u"the ink is on the board, not the desktop: %1 item(s)"_s.arg(screen->boardModel() ? screen->boardModel()->itemCount() : 0));
+    const QImage board = ink->grabWindow();
+    QImage bar = toolbar->grabWindow();
+    check(!board.isNull() && !bar.isNull(), u"both windows drawn"_s);
+    say(u"toolbar %1x%2 logical"_s.arg(toolbar->width()).arg(toolbar->height()));
+    QImage picture = board.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+    {
+        QPainter painter(&picture);
+        bar = bar.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+        // Both grabs are at the windows' scale: logical px here.
+        painter.drawImage(QPoint((logical.width() - toolbar->width()) / 2, toolbarTop), bar);
+    }
+    const QString file = out.filePath(u"presenter-board.png"_s);
+    const bool saved = picture.save(file, "PNG");
+    say(u"%1 %2 %3x%4"_s.arg(saved ? u"saved"_s : u"NOT saved"_s, file).arg(picture.width()).arg(picture.height()));
+    if (laser)
+        send(QEvent::MouseButtonRelease, {840, 505}, Qt::LeftButton, Qt::NoButton);
+    presenter.close();
+    toolbar->hide();
+    delete toolbar;
+    say(u"presenter checks: %1"_s.arg(ok ? u"passed"_s : u"failed"_s));
+    return finish(ink, ok && saved);
+}
+
 } // namespace
 
 bool wanted(const QStringList& args)
 {
-    return args.contains(kCaptureToolsFlag) || args.contains(kRecordingFlag) || args.contains(kLongCaptureFlag) || args.contains(kOcrFlag) || args.contains(kSettingsFlag);
+    return args.contains(kCaptureToolsFlag) || args.contains(kRecordingFlag) || args.contains(kLongCaptureFlag) || args.contains(kOcrFlag) || args.contains(kSettingsFlag)
+        || args.contains(kPresenterFlag);
 }
 
 void note(const QString& line)
@@ -1392,7 +2038,7 @@ void note(const QString& line)
 
 void prepare(const QStringList& args)
 {
-    const QString folder = valueAfter(args, args.contains(kSettingsFlag) ? kSettingsFlag : args.contains(kOcrFlag) ? kOcrFlag : args.contains(kLongCaptureFlag) ? kLongCaptureFlag
+    const QString folder = valueAfter(args, args.contains(kPresenterFlag) ? kPresenterFlag : args.contains(kSettingsFlag) ? kSettingsFlag : args.contains(kOcrFlag) ? kOcrFlag : args.contains(kLongCaptureFlag) ? kLongCaptureFlag
                                            : args.contains(kRecordingFlag) ? kRecordingFlag : kCaptureToolsFlag);
     if (!folder.isEmpty()) {
         QDir().mkpath(folder);
@@ -1419,10 +2065,12 @@ int run(const QStringList& args)
     const bool longCaptureMode = args.contains(kLongCaptureFlag);
     const bool ocrMode = args.contains(kOcrFlag);
     const bool settingsMode = args.contains(kSettingsFlag);
-    if (valueAfter(args, settingsMode ? kSettingsFlag : ocrMode ? kOcrFlag : longCaptureMode ? kLongCaptureFlag : recordingMode ? kRecordingFlag : kCaptureToolsFlag).isEmpty()) {
+    const bool presenterMode = args.contains(kPresenterFlag);
+    if (valueAfter(args, presenterMode ? kPresenterFlag : settingsMode ? kSettingsFlag : ocrMode ? kOcrFlag : longCaptureMode ? kLongCaptureFlag : recordingMode ? kRecordingFlag : kCaptureToolsFlag).isEmpty()) {
         std::fprintf(stderr, "usage: WinShunCapture --preview-capture-tools <folder> [--toolbar-drag] [--scale 1.5] [--dark] [--renderer d3d11]\n"
                              "       WinShunCapture --preview-recording <folder> --renderer d3d11 --auto [--gif] [--clicks]\n"
                              "       WinShunCapture --preview-long-capture <folder> --renderer d3d11 [--auto]\n"
+                             "       WinShunCapture --preview-presenter <folder> [--laser] [--scale 2] [--renderer d3d11]\n"
                              "       (with --app-dir <Win顺's folder>, or WS_APP_DIR)\n");
         return 2;
     }
@@ -1430,6 +2078,8 @@ int run(const QStringList& args)
     g_edges = args.contains(u"--edges"_s);
     QGuiApplication::styleHints()->setColorScheme(args.contains(u"--dark"_s) ? Qt::ColorScheme::Dark : Qt::ColorScheme::Light);
     SystemTheme::setBackdropAvailable(false); // plain colours, as a window without Mica
+    if (presenterMode)
+        return runPresenter(args);
     if (settingsMode)
         return runSettings(args);
     if (ocrMode)

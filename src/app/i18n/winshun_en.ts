@@ -376,8 +376,16 @@
         <translation>WinShun on the taskbar</translation>
     </message>
     <message>
-        <source>触发位置与方式</source>
-        <translation>Trigger locations and methods</translation>
+        <source>触发位置</source>
+        <translation>Trigger location</translation>
+    </message>
+    <message>
+        <source>在资源管理器或桌面弹出文件夹快捷菜单</source>
+        <translation>Folder quick menu in File Explorer or on the desktop</translation>
+    </message>
+    <message>
+        <source>触发方式</source>
+        <translation>Trigger method</translation>
     </message>
     <message>
         <source>菜单里列出的内容</source>
@@ -1123,8 +1131,36 @@
         <translation>Preview shortcut</translation>
     </message>
     <message>
+        <source>用鼠标左键双击打开文件夹菜单</source>
+        <translation>Open the folder menu with a left double click</translation>
+    </message>
+    <message>
         <source>同时用中键打开文件夹菜单</source>
         <translation>Also open the folder menu with a middle click</translation>
+    </message>
+    <message>
+        <source>文件夹菜单里有“在此搜索”</source>
+        <translation>The folder menu has “Search here”</translation>
+    </message>
+    <message>
+        <source>文件夹菜单里有“在此打开命令提示符”</source>
+        <translation>The folder menu has “Open Command Prompt here”</translation>
+    </message>
+    <message>
+        <source>文件夹菜单里有“在此打开 PowerShell”</source>
+        <translation>The folder menu has “Open PowerShell here”</translation>
+    </message>
+    <message>
+        <source>文件夹菜单里有“收藏这个文件夹”</source>
+        <translation>The folder menu has “Add this folder to favorites”</translation>
+    </message>
+    <message>
+        <source>文件夹菜单里有“Win顺 设置”</source>
+        <translation>The folder menu has “WinShun Settings”</translation>
+    </message>
+    <message>
+        <source>菜单里的操作</source>
+        <translation>Actions in the menu</translation>
     </message>
     <message>
         <source>剪贴板打开位置</source>
@@ -3047,6 +3083,10 @@
         <source>卸载</source>
         <translation>Uninstall</translation>
     </message>
+    <message>
+        <source>确认</source>
+        <translation>Confirm</translation>
+    </message>
 </context>
 <context>
     <name>PluginDevSection</name>
@@ -3441,6 +3481,33 @@
         <translation>Plugins cannot see the network places you signed in to in File Explorer</translation>
     </message>
     <message>
+        <source>需要新权限的更新，会先请你确认。</source>
+        <translation>Updates that need new permissions ask you first.</translation>
+    </message>
+    <message>
+        <source>自动更新已关，新版本等你点更新。</source>
+        <translation>Automatic updates are off; click to update when you are ready.</translation>
+    </message>
+    <message>
+        <source>正在更新插件…</source>
+        <translation>Updating plugins…</translation>
+    </message>
+    <message numerus="yes">
+        <source>%n 个插件有新版本</source>
+        <translation>
+            <numerusform>%n plugin has a newer version</numerusform>
+            <numerusform>%n plugins have newer versions</numerusform>
+        </translation>
+    </message>
+    <message>
+        <source>查看</source>
+        <translation>View</translation>
+    </message>
+    <message>
+        <source>全部更新</source>
+        <translation>Update all</translation>
+    </message>
+    <message>
         <source>网络;共享;NAS;登录;令牌;plugin;network</source>
         <translation>network;share;NAS;sign in;token;plugin</translation>
     </message>
@@ -3604,8 +3671,8 @@
         <translation>Install a local plugin package…</translation>
     </message>
     <message>
-        <source>插件给搜索框加关键字命令，结果混进列表。它们只用你的普通权限；启用前会先列出权限，由你决定是否开启。</source>
-        <translation>Plugins add keyword commands to the search box and mix their results into the list. They run with your normal rights; review the permissions and choose which ones to enable.</translation>
+        <source>插件给搜索框加关键字命令，结果混进列表。它们用你的普通权限（要跟随 Win顺 管理员权限的，权限里会写明）；启用前会先列出权限，由你决定是否开启。</source>
+        <translation>Plugins add keyword commands to the search box and mix their results into the list. They run with your normal rights (one that follows Win顺&apos;s administrator rights says so in its permissions); review the permissions and choose which ones to enable.</translation>
     </message>
 </context>
 <context>
@@ -3941,11 +4008,46 @@ Right: center window · Drag: move window</translation>
 </context>
 <context>
     <name>SettingsWindow</name>
+    <message>
+        <source>键盘提示</source>
+        <translation>Keyboard hints</translation>
+    </message>
+    <message>
+        <source>显示快捷键帮助按钮</source>
+        <translation>Show shortcut help button</translation>
+    </message>
+    <message>
+        <source>在搜索框右下角显示入口，点击查看常用快捷键</source>
+        <translation>Show a button at the bottom right of the search window. Click it to see common shortcuts.</translation>
+    </message>
+    <message>
+        <source>快捷键;帮助;提示;隐藏;极简</source>
+        <translation>shortcuts;help;hints;hide;minimal</translation>
+    </message>
+    <message>
+        <source>显示底栏按键提示</source>
+        <translation>Show footer key hints</translation>
+    </message>
+    <message>
+        <source>显示 Enter、Ctrl+Enter、Tab 等操作提示；未输入时隐藏 Tab 切换范围提示</source>
+        <translation>Show key hints such as Enter, Ctrl+Enter and Tab. The Tab scope hint appears once you type a query.</translation>
+    </message>
+    <message>
+        <source>快捷键;底栏;提示;隐藏;Tab;极简</source>
+        <translation>shortcuts;footer;hints;hide;Tab;minimal</translation>
+    </message>
     <message numerus="yes">
-        <source>%n 个插件可更新</source>
+        <source>%n 个插件有新版本</source>
         <translation>
-            <numerusform>%n plugin update available</numerusform>
-            <numerusform>%n plugin updates available</numerusform>
+            <numerusform>%n plugin has a newer version</numerusform>
+            <numerusform>%n plugins have newer versions</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>%n 个插件有新版本，点击查看</source>
+        <translation>
+            <numerusform>%n plugin has a newer version, click to view</numerusform>
+            <numerusform>%n plugins have newer versions, click to view</numerusform>
         </translation>
     </message>
     <message>
@@ -4289,12 +4391,12 @@ Right: center window · Drag: move window</translation>
         <translation>Right-click a folder, a folder’s empty space or a drive to search only in it; on Windows 11 it is under “Show more options”</translation>
     </message>
     <message>
-        <source>双击空白处弹出文件夹菜单</source>
-        <translation>Folder menu on a double click</translation>
+        <source>在资源管理器或桌面弹出文件夹快捷菜单</source>
+        <translation>Folder quick menu in File Explorer or on the desktop</translation>
     </message>
     <message>
-        <source>双击;空白;空白处;收藏;收藏夹;最近;文件夹菜单;资源管理器;桌面;Listary;double-click;folder menu</source>
-        <translation>double click;blank;empty space;favorites;recent;folder menu;File Explorer;desktop;Listary</translation>
+        <source>双击;空白;空白处;收藏;收藏夹;最近;文件夹菜单;文件夹快捷菜单;资源管理器;桌面;Listary;double-click;folder menu</source>
+        <translation>double click;blank;empty space;favorites;recent;folder menu;folder quick menu;File Explorer;desktop;Listary</translation>
     </message>
     <message>
         <source>已在 Opus 的设置里加好</source>
@@ -6603,8 +6705,8 @@ Right: center window · Drag: move window</translation>
         <translation>File manager integration</translation>
     </message>
     <message>
-        <source>文件夹菜单与双击</source>
-        <translation>Folder menu and double click</translation>
+        <source>文件夹快捷菜单</source>
+        <translation>Folder quick menu</translation>
     </message>
     <message>
         <source>对话框联动</source>
@@ -6771,24 +6873,64 @@ Right: center window · Drag: move window</translation>
         <translation>Current folder first: list results from current folder and subfolders first, then other locations, matching Listary</translation>
     </message>
     <message>
-        <source>在空白处双击弹出常用文件夹菜单，选中后直接在当前窗口打开</source>
-        <translation>Double-click empty space for common folders; select one to open it in the current window</translation>
+        <source>在空白处双击或按中键弹出常用文件夹菜单，选中后直接在当前窗口打开</source>
+        <translation>Double-click or middle-click blank space to show a menu of your usual folders; picking one opens it in the current window</translation>
     </message>
     <message>
         <source>Listary 正在运行时会自动交给 Listary 处理，避免弹出两个菜单</source>
         <translation>Automatically left to Listary while it runs to avoid showing two menus</translation>
     </message>
     <message>
-        <source>触发位置与方式</source>
-        <translation>Trigger locations and methods</translation>
+        <source>触发方式</source>
+        <translation>Trigger method</translation>
     </message>
     <message>
-        <source>双击;空白;文件夹菜单;资源管理器;桌面;中键;鼠标;滚轮;Listary</source>
-        <translation>double click;blank;empty space;folder menu;File Explorer;desktop;middle click;mouse;wheel;Listary</translation>
+        <source>双击;左键;中键;鼠标;滚轮;空白;文件夹菜单;Listary;double-click;middle</source>
+        <translation>double click;left;middle click;mouse;wheel;blank;folder menu;Listary</translation>
+    </message>
+    <message>
+        <source>双击鼠标左键</source>
+        <translation>Left double click</translation>
+    </message>
+    <message>
+        <source>触发位置</source>
+        <translation>Trigger location</translation>
+    </message>
+    <message>
+        <source>空白;文件夹菜单;资源管理器;桌面;位置;Listary</source>
+        <translation>blank;folder menu;File Explorer;desktop;location;Listary</translation>
     </message>
     <message>
         <source>菜单里列出的内容</source>
         <translation>Items listed in the menu</translation>
+    </message>
+    <message>
+        <source>菜单里的操作</source>
+        <translation>Actions in the menu</translation>
+    </message>
+    <message>
+        <source>菜单末尾的“在此搜索”“收藏这个文件夹”等；没勾选的不再出现</source>
+        <translation>The actions under the lists, such as “Search here” and “Add this folder to favorites”; unticked ones no longer appear</translation>
+    </message>
+    <message>
+        <source>文件夹菜单;搜索;命令提示符;cmd;PowerShell;收藏;设置;隐藏;search;command prompt;favorites;settings</source>
+        <translation>folder menu;search;command prompt;cmd;PowerShell;favorites;settings;hide</translation>
+    </message>
+    <message>
+        <source>搜索</source>
+        <translation>Search</translation>
+    </message>
+    <message>
+        <source>命令提示符</source>
+        <translation>Command Prompt</translation>
+    </message>
+    <message>
+        <source>PowerShell</source>
+        <translation>PowerShell</translation>
+    </message>
+    <message>
+        <source>收藏</source>
+        <translation>Favorite</translation>
     </message>
     <message>
         <source>收藏夹中包含收藏的文件夹、文件、应用和自定义命令</source>
@@ -7251,12 +7393,24 @@ Right: center window · Drag: move window</translation>
         <translation>Checking the package…</translation>
     </message>
     <message>
+        <source>Win顺 马上关闭，Scoop 在新打开的窗口里更新，完成后自动重新打开。</source>
+        <translation>WinShun closes now; Scoop updates it in the window that just opened, and it starts again when done.</translation>
+    </message>
+    <message>
         <source>Win顺 马上关闭并替换程序文件，完成后自动重新打开。</source>
         <translation>WinShun will close now, replace its program files and open again when done.</translation>
     </message>
     <message>
         <source>正在安装：Win顺 会先关闭，装好后自动重新打开。为所有用户安装的，系统会先确认管理员权限。</source>
         <translation>Installing: WinShun closes first and opens again when done. Installed for all users, Windows asks for administrator permission first.</translation>
+    </message>
+    <message>
+        <source>你现在用的是 %1，是用 Scoop 装的。会打开一个窗口运行 scoop update，完成后自动重新打开，设置和索引原样保留。</source>
+        <translation>You are on %1, installed with Scoop. A window opens to run scoop update, then WinShun starts again; your settings and index are kept as they are.</translation>
+    </message>
+    <message>
+        <source>你现在用的是 %1，是用 Scoop 装的。请在 PowerShell 里运行下面的命令（全局安装要用管理员身份）：</source>
+        <translation>You are on %1, installed with Scoop. Run this command in PowerShell (a global install needs an administrator one):</translation>
     </message>
     <message>
         <source>你现在用的是 %1。下载并校验后自动替换程序文件并重新打开，data 文件夹里的设置和索引原样保留。</source>
@@ -7277,6 +7431,18 @@ Right: center window · Drag: move window</translation>
     <message>
         <source>打开下载页</source>
         <translation>Open the download page</translation>
+    </message>
+    <message>
+        <source>用 Scoop 更新</source>
+        <translation>Update with Scoop</translation>
+    </message>
+    <message>
+        <source>已复制</source>
+        <translation>Copied</translation>
+    </message>
+    <message>
+        <source>复制命令</source>
+        <translation>Copy command</translation>
     </message>
     <message>
         <source>下载并更新</source>
@@ -7499,10 +7665,6 @@ Right: center window · Drag: move window</translation>
         <source>双击 Ctrl 打开搜索。Win顺 按文件夹遍历建立索引，首次运行需要一点时间。</source>
         <translation>Press Ctrl twice to search. WinShun builds its index by walking the folders, which takes a little while the first time.</translation>
     </message>
-    <message>
-        <source>用 Win顺 搜索此处</source>
-        <translation>Search here with WinShun</translation>
-    </message>
     <message numerus="yes">
         <source>已收录 %Ln 个文件，占用 %1 磁盘空间</source>
         <translation>
@@ -7669,10 +7831,6 @@ Right: center window · Drag: move window</translation>
         <translation>Waiting for the index service to start…</translation>
     </message>
     <message>
-        <source>粘贴为文件</source>
-        <translation>Paste as file</translation>
-    </message>
-    <message>
         <source>贴到屏幕</source>
         <translation>Pin to screen</translation>
     </message>
@@ -7695,6 +7853,34 @@ Right: center window · Drag: move window</translation>
     <message>
         <source>文件夹菜单</source>
         <translation>Folder menu</translation>
+    </message>
+    <message>
+        <source>它在最前面时，Win顺 收不到%1，可以改按 %2。点这里去装上索引服务，%1 就也能用了。</source>
+        <translation>While it is in front, %1 does not reach Win顺; press %2 instead. Click to install the index service, and %1 works there too.</translation>
+    </message>
+    <message>
+        <source>它在最前面时，Win顺 收不到%1，可以改按 %2。点这里去更新索引服务，%1 就也能用了。</source>
+        <translation>While it is in front, %1 does not reach Win顺; press %2 instead. Click to update the index service, and %1 works there too.</translation>
+    </message>
+    <message>
+        <source>它在最前面时，Win顺 收不到%1，请改按 %2。</source>
+        <translation>While it is in front, %1 does not reach Win顺; press %2 instead.</translation>
+    </message>
+    <message>
+        <source>它在最前面时，Win顺 收不到%1。点这里去装上索引服务就好；也可以在设置里加一个快捷键。</source>
+        <translation>While it is in front, %1 does not reach Win顺. Click to install the index service, which fixes it; or add a shortcut in the settings.</translation>
+    </message>
+    <message>
+        <source>它在最前面时，Win顺 收不到%1。点这里去更新索引服务就好；也可以在设置里加一个快捷键。</source>
+        <translation>While it is in front, %1 does not reach Win顺. Click to update the index service, which fixes it; or add a shortcut in the settings.</translation>
+    </message>
+    <message>
+        <source>它在最前面时，Win顺 收不到%1。点这里设一个快捷键（比如 Alt+Space），在它前面也能用。</source>
+        <translation>While it is in front, %1 does not reach Win顺. Click to set a shortcut (Alt+Space, say); that works in front of it too.</translation>
+    </message>
+    <message>
+        <source>“%1”以管理员身份运行</source>
+        <translation>“%1” runs as administrator</translation>
     </message>
     <message>
         <source>开机自启没有关闭</source>
@@ -7913,10 +8099,10 @@ Right: center window · Drag: move window</translation>
         <translation>WinShun %1 is available…</translation>
     </message>
     <message numerus="yes">
-        <source>%n 个插件可更新…</source>
+        <source>%n 个插件有新版本…</source>
         <translation>
-            <numerusform>%n plugin update available…</numerusform>
-            <numerusform>%n plugin updates available…</numerusform>
+            <numerusform>%n plugin has a newer version…</numerusform>
+            <numerusform>%n plugins have newer versions…</numerusform>
         </translation>
     </message>
     <message>
@@ -11364,6 +11550,54 @@ Content index: %5</translation>
         <source>以普通用户权限更改；Win顺 不能阻止它直接改系统设置</source>
         <translation>Uses normal user rights; WinShun cannot stop it changing system settings directly</translation>
     </message>
+    <message>
+        <source>以普通用户权限运行；Win顺 以管理员身份运行时例外（见下）；内存上限 %1 MB</source>
+        <translation>Runs with your normal rights, except while Win顺 runs as administrator (see below); memory limit %1 MB</translation>
+    </message>
+    <message>
+        <source>Win顺 以管理员身份运行时，这个插件也以管理员身份运行，能操作以管理员身份打开的窗口</source>
+        <translation>While Win顺 runs as administrator, this plugin does too and can work with windows opened as administrator</translation>
+    </message>
+    <message>
+        <source>跟随 Win顺 的管理员权限</source>
+        <translation>Follow Win顺&apos;s administrator rights</translation>
+    </message>
+    <message>
+        <source>以管理员身份运行</source>
+        <translation>Runs as administrator</translation>
+    </message>
+    <message>
+        <source>要以管理员身份运行，需要你确认一次。确认前用普通权限运行</source>
+        <translation>Confirm once to let it run as administrator. Until then it runs with normal rights</translation>
+    </message>
+    <message>
+        <source>不能以管理员身份运行：%1</source>
+        <translation>Cannot run as administrator: %1</translation>
+    </message>
+    <message>
+        <source>没能确认以管理员身份运行：%1</source>
+        <translation>Could not confirm running as administrator: %1</translation>
+    </message>
+    <message>
+        <source>已确认，%1 以后以管理员身份运行</source>
+        <translation>Confirmed: %1 runs as administrator from now on</translation>
+    </message>
+    <message>
+        <source>插件的文件被改过，和你确认时不一样，现在用普通权限运行。不确定是谁改的就别确认</source>
+        <translation>The plugin&apos;s files were changed since you confirmed them, so it runs with normal rights. If you don&apos;t know who changed them, don&apos;t confirm</translation>
+    </message>
+    <message>
+        <source>正在确认，复制插件的文件……</source>
+        <translation>Confirming: copying the plugin&apos;s files…</translation>
+    </message>
+    <message>
+        <source>插件库里现在是 %1 版，先把它更新到这一版，再确认</source>
+        <translation>The library has version %1 now: update to it first, then confirm</translation>
+    </message>
+    <message>
+        <source>从插件库下载没成功，联网后再试</source>
+        <translation>Could not download it from the library. Try again when you are online</translation>
+    </message>
 </context>
 <context>
     <name>ws::PluginUpdates</name>
@@ -12736,6 +12970,38 @@ Content index: %5</translation>
     <message>
         <source>更新助手没有响应，旧版本照常可用。请重试。</source>
         <translation>The update helper didn’t respond. This version still works; try again.</translation>
+    </message>
+    <message>
+        <source>这份 Win顺 要用 Scoop 更新，请在 PowerShell 里运行下面的命令。</source>
+        <translation>This WinShun is updated with Scoop; run the command below in PowerShell.</translation>
+    </message>
+    <message>
+        <source>正在等 Win顺 退出…</source>
+        <translation>Waiting for WinShun to exit...</translation>
+    </message>
+    <message>
+        <source>还有这些程序在 Win顺 的文件夹里运行，Scoop 没法更新（比如 AI 工具启动的 WinShunMcp.exe），请先关掉它们：</source>
+        <translation>These programs still run from WinShun&apos;s folder, so Scoop cannot update (WinShunMcp.exe started by an AI tool, for example). Close them first:</translation>
+    </message>
+    <message>
+        <source>正在用 Scoop 更新 Win顺…</source>
+        <translation>Updating WinShun with Scoop...</translation>
+    </message>
+    <message>
+        <source>更新完成，正在重新打开 Win顺。</source>
+        <translation>Updated; starting WinShun again.</translation>
+    </message>
+    <message>
+        <source>没有更新成功：看上面 Scoop 的提示，或者软件源里还没有新版本。稍后可以在 PowerShell 里运行：%1。原来的 Win顺 会重新打开。</source>
+        <translation>The update did not go through: see Scoop&apos;s messages above, or the bucket does not have the new version yet. You can run this in PowerShell later: %1. The previous WinShun starts again.</translation>
+    </message>
+    <message>
+        <source>按 Enter 关闭这个窗口</source>
+        <translation>Press Enter to close this window</translation>
+    </message>
+    <message>
+        <source>没能打开 PowerShell。请自己运行：%1</source>
+        <translation>Could not open PowerShell. Run this yourself: %1</translation>
     </message>
     <message>
         <source>Win顺 已更新到 %1</source>
