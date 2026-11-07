@@ -24,10 +24,13 @@ QtObject {
     readonly property var table: [
         // what opens them (the settings only)
         { where: "global", group: qsTr("打开"), keys: c => c.openKeys, text: qsTr("打开搜索框"), setting: { page: 0, tab: 0 } },
+        { where: "global", group: qsTr("打开"), keys: c => c.panelHotkey ?? "", text: qsTr("直接打开完整搜索面板"), setting: { page: 0, tab: 0 } },
         { where: "global", group: qsTr("打开"), keys: c => c.clipboardHotkey, text: qsTr("打开剪贴板"), setting: { page: 6, tab: 1 } },
         { where: "global", group: qsTr("打开"), keys: c => c.captureKeys, text: qsTr("截图"), setting: { page: 9, tab: 0 } },
         // the search box
         { where: "launcher", group: qsTr("移动"), brief: true, keys: "↑ ↓", text: qsTr("上下移动，PgUp PgDn 翻页") },
+        { where: "launcher", group: qsTr("移动"), brief: true, keys: c => c.historyModifier ? c.historyModifier + "+↑/↓" : "",
+          text: qsTr("翻阅搜索历史，回到最新时恢复未完成输入"), when: c => !!c.historyModifier, setting: { page: 0, tab: 3 } },
         { where: "launcher", group: qsTr("移动"), keys: "Ctrl+J / N · Ctrl+K / P", text: qsTr("向下 / 向上移动") },
         { where: "launcher", group: qsTr("移动"), keys: "Ctrl+U / D", text: qsTr("向上 / 向下翻页") },
         { where: "launcher", group: qsTr("移动"), brief: true, keys: "Shift+↑ ↓", text: qsTr("选中多行，也可 Ctrl+单击、Shift+单击") },
@@ -35,7 +38,7 @@ QtObject {
         { where: "launcher", group: qsTr("范围与筛选"), brief: true, keys: "Ctrl+Tab", text: qsTr("在“文件”里切换类型，在“内容”里换个文件夹") },
         { where: "launcher", group: qsTr("范围与筛选"), brief: true, keys: "Ctrl+S", text: qsTr("切换排序；不输入时切换最近打开、最近修改") },
         { where: "launcher", group: qsTr("范围与筛选"), brief: true, keys: "Ctrl+R", text: qsTr("正则模式：每个词都按正则表达式匹配名字；再按一次关闭") },
-        { where: "launcher", group: qsTr("范围与筛选"), brief: true, keys: "Ctrl+Shift+D", text: qsTr("只搜当前文件夹，或也搜其他位置"),
+        { where: "launcher", group: qsTr("范围与筛选"), brief: true, keys: "Ctrl+Shift+D", text: qsTr("当前文件夹优先 → 只搜它 → 只搜这一层，轮换"),
           when: c => c.folderTyping },
         { where: "launcher", group: qsTr("打开与操作"), brief: true, keys: "→ / Ctrl+O", text: qsTr("打开操作菜单；→ 需光标在末尾且未选中文字") },
         { where: "launcher", group: qsTr("打开与操作"), keys: "← / Esc", text: qsTr("关闭操作菜单，返回结果列表") },
@@ -62,6 +65,7 @@ QtObject {
           when: c => c.holdKey.includes("+") && !c.intoField, setting: { page: 6, tab: 1 } },
         { where: "clipboard", group: qsTr("移动与选择"), brief: true, keys: "↑ ↓", text: qsTr("上下移动，PgUp PgDn 翻页") },
         { where: "clipboard", group: qsTr("移动与选择"), brief: true, keys: "Shift+Tab", text: qsTr("上一个分类") },
+        { where: "clipboard", group: qsTr("移动与选择"), brief: true, keys: "Ctrl+G", text: qsTr("查找分组：输入名称，Enter 进入，Esc 返回内容搜索") },
         { where: "clipboard", group: qsTr("移动与选择"), brief: true, keys: "Shift+↑ ↓", text: qsTr("选中多条，也可 Ctrl+单击、Shift+单击；按选的顺序一起粘贴") },
         { where: "clipboard", group: qsTr("移动与选择"), brief: true, keys: "→  Alt+P", text: qsTr("打开或关闭预览") },
         { where: "clipboard", group: qsTr("管理"), brief: true, keys: "Ctrl+P", text: qsTr("固定或取消固定") },

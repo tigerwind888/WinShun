@@ -1,5 +1,101 @@
 # 踩坑记录
 
+## 界面内存：平时不显示的提示、菜单一上来就全建；行内按钮按需建会卡，改为整张列表借用（2026-11-06、11-07）
+
+- **现象**：搜索框出结果后私有工作集比空搜索多约 25 MiB，用过面板后再多约 20 MiB。按组件数对象（探针 `--foreground-memory` 的 `*_breakdown`，同时沿 QObject 树和可视树走；列表的行没有 QObject 父对象，只按 `findChildren` 数会漏掉）：每个结果行 187 个对象，其中只在当前行、悬停时才显示的 7 个按钮占约 110 个，开关和音量条每行都有；每个 HoverTip 约 25 个；历史下拉常驻两个隐藏窗口；下拉菜单的条目和外框常驻。
+- **做法**：提示气泡、历史下拉、下拉菜单的条目放进 `Loader`，第一次显示时才建，之后保留（`active: made || shown`，别随显示、隐藏反复建和毁，见下面“列表行里的部件随悬停造、毁”一条）；开关和音量条只在开关行里建（只看数据，不在悬停时发生）。像素与改动前一致，出结果后私有工作集约少 10 MiB。
+- **坑**：
+  - **行内按钮不要等到悬停、成为当前行时才建**。试过把结果行的 7 个按钮、剪贴板行的 4 个按钮改成每行第一次显示时才建：出结果时能再省约 12 MiB，但方向键第一次移到某行要 2.2–3.5 ms（第二次 0.3 ms）；剪贴板第一遍滚动时，界面线程超过 2 ms 的帧从 6–7 帧增到 16–19 帧，掉帧从 3 增到 15（brand 风格）。240 Hz 一帧只有 4.2 ms，所以改回了。
+  - **现在的做法：整张列表只建 3 套按钮，借给正在显示按钮的行**（`RowActionsPool` 加 `ResultActions` / `ClipActions`）。行本身只剩约 37 个对象；出结果后私有工作集再少约 9 MiB，剪贴板滚动时约 6 MiB；像素与原来一致，逐行移动和滚动都不比原来慢。要点：
+    - **要 3 套**：Qt 6 先给新行发悬停进入、再给旧行发离开，某一刻当前行、旧悬停行、新悬停行都要按钮。借的顺序：这一行自己的、空闲的、借走它的行已不显示按钮的，最后才新建。
+    - **第一次借时 3 套一起建**：启动就建，空搜索多约 3.6 MiB；用到一套建一套，建的时间又落进悬停里。
+    - **借来的按钮在行间换来换去时什么都不新建**：按钮里的 Hook 不再 `lazy`，`Glyph` 画过的图形（复制路径）保留（`keep`）。探针检查换行前后对象总数不变。
+    - **池子要用隐藏的 `Item`**，借出时改 `parent` 到行里的鼠标区（悬停按钮仍算悬停这一行）。用 `QtObject` 当池子，`createObject` 报 “Created graphical object was not placed in the graphics scene”。
+    - **列表开着 `reuseItems`**：`onPooled` 时还回去，`onReused` 时再借。
+    - **行的 `showActions` 不能读借来的那套的属性**（如拖动柄的 `held`）：借、还发生在 `onShowActionsChanged` 里，会同步改掉 `actions`，结果是绑定循环。改由按钮写行自己的普通属性（`ClipRow.handleHeld`）；写之前先把 `host` 记下，因为一写行可能当场把这套还回去。
+    - 文案搬到新文件后，用 `qsTranslate("ResultRow", …)` 保留原来的翻译上下文。
+  - **探针点行内按钮前，先把复制、打开换成空操作**（`Launcher::setFileCopier`、`setFolderOpener`），按 `objectName` 找按钮，只点一次。有一次按位置点错，点到“复制”，把 `D:/work/notes.txt` 写进了真实剪贴板。类名后缀会叠两层（`RowAction_QMLTYPE_54_QML_60`），要用 `(_QML(TYPE)?_\d+)+$` 去掉。
+  - 提示气泡第一次显示时才建没问题：鼠标停 250 ms 后才建，约 0.5 ms，之后约 0.1 ms。
+  - 同一文件里的 `component X: …`（内联组件）看不到外层的 id；要用外层 id 就写 `Loader { sourceComponent: Item { … } }`（`pragma ComponentBehavior: Bound` 下可以）。
+  - 第一次打开时才建条目、又要马上量尺寸定位的（`DropMenu.place()`），先 `column.forceLayout()`：Column/Row 要等 polish 才更新 implicitHeight。
+  - `--preview-results` 的探针进程里引擎默认**没有**增量创建控制器（`engine->incubationController()` 为空），`asynchronous: true` 会退化成同步；正式程序用 `QQmlApplicationEngine::loadFromModule` 加载 Main，引擎带有控制器。测后台预建时探针要先 `setIncubationController(window->incubationController())`。
+- **取舍**：完整面板只在首次展开时才建，第一次展开会从约 21 ms 变成约 50 ms。所以现在启动后趁搜索框隐藏、在后台分片预建（`App::createWindow` 设 `preloadPanel`），单次占界面线程不超过 3.8 ms，首次展开约 16 ms。代价是空搜索时多约 6 MiB。数据见 `docs/validation/foreground-memory-20261106/`。
+
+## 界面风格：类型按钮条滚动时文字、图标抖动（2026-11-06）
+
+用户反复反馈「滚动后文字会抖」「连续滚动还是有问题」。前几轮靠推断改、只用 Ctrl+Tab 模拟、拿截图比对，几次都没找到根因；最后在 QML 里逐帧记录位置、用真实滚轮测，才一条条查清。
+
+### 两端渐隐用的贴图里，文字只对齐到整逻辑像素
+
+- **现象**：150% 下滑动时，文字相对按键、图标跳 1 个像素；图标不跳。
+- **原因**：渐隐用 `ShaderEffectSource` 加 `MultiEffect` 遮罩，按钮先画进贴图。贴图里的原生文字只对齐到整逻辑像素（150% 下是 1.5 个设备像素），滚动位置只要不是整逻辑像素，文字就和按键错开。另外，贴图尺寸会被取整，不是 1:1。
+- **做法**：最后去掉了渐隐（用户定：只显示完整的按钮，按按钮滚动），文字直接画在窗口里。如果还要用贴图，滚动位置要同时是整逻辑像素和整设备像素（150% 下是 2 的倍数），贴图尺寸也要两种单位都是整数。
+
+### 宽度为奇数逻辑像素，后面的按钮全落在半个设备像素上
+
+- **现象**：「不限」之后的每个按钮，外框、图标、文字的屏幕 x 都是 x.5；按键边被抗锯齿画虚，文字却自己对齐到整像素，两者差半个像素，滚动时更明显。
+- **原因**：「不限」连同分隔线是奇数个逻辑像素宽。150% 下 1 个逻辑像素是 1.5 个设备像素，后面所有按钮都被推到了半像素上。
+- **做法**：按钮宽度向上补到 `scrollStep` 的倍数（最小的 n，使 n × dpr 是整数；150% 下是 2），见 `TypeStrip.stepUp`。只用 `Math.ceil` 取整逻辑像素是不够的。
+
+### 平均分配的空余，每个按钮各自取整，间距 6、7 交替
+
+- **原因**：空余除以间隔数得到小数（1.125 等），每个按钮的累计偏移各自 `onPixel`，结果间距交替相差 1 个设备像素。
+- **做法**：先把每段间距向下取整到整设备像素，再乘以序号；剩下不到一像素的余量留在末尾。
+
+### 两段动画各走各的：一段对齐像素，一段不对齐
+
+- **现象**：连续滚动时按键和文字互相错开。
+- **原因**：滚动位置每帧对齐整像素，间距用 `Behavior on x` 单独做动画，中间值不对齐；连续滚的时候两段不停重新开始。
+- **做法**：不另开动画。间距跟滚动用同一个进度（`slideProgress`），每个按钮从开始滚动时显示的位置插值到目标，结果再 `onPixel`。
+
+### 滚轮连续转，每一格都把同一目标的滑动重新开始一次
+
+- **现象**：滚到头后继续滚，最后二十几像素慢慢爬了约 200 ms，中间有停顿；每次重新开始时往回跳 1 像素。单格滚动没问题。
+- **原因**：每格都调用 `scrollTo`，它先 `stop()`，再从当前位置用 OutCubic 重新开始，目标却和原来一样。
+- **做法**：目标没变、而且已经到位或正在滑过去时，直接返回。
+
+### 新造的部件马上被设为选中，播了一次「按下」
+
+- **现象**：拟物风格在「文件」和「内容」之间切换时，「不限」先是平的，再凹下去，灯从上方滑下来（约 100 ms）。
+- **原因**：按钮条在切换时重新生成按钮，新按钮在同一轮里先按未选中造出，紧接着才被设成选中，`Behavior` 把这次变化当成按下来播。Hook 把造出时的状态作为初始属性传入（见上文），但这里状态是造完以后才变的，那一招管不到。先怀疑是造出时尺寸为 0，传入宽高后实测没用，已撤回。
+- **做法**：`KeySurface` 加 `settled`，在 `Component.onCompleted` 里用 `Qt.callLater` 置真；键面和灯的 `Behavior` 只在 `settled` 后启用。按钮条均分间距的偏移也一样：只有滚动时（`moving`）才动，新造的按钮直接到位。
+
+### 测法：逐帧记位置，用真实滚轮
+
+- **截图看不出来**：截图连拍又慢又噪，选中颜色变化、淡入淡出都会干扰比对，几轮都没找到根因。
+- **改用代码记录**：在 QML 里临时加 `FrameAnimation`，每帧记每个按钮的外框、图标、文字的 `mapToItem(null, 0, 0)` 乘 dpr，以及透明度、`contentX`、滚动进度；用 XHR `PUT` 到 `file:///`（启动前设环境变量 `QML_XHR_ALLOW_FILE_WRITE=1`）。然后用脚本查三件事：坐标是否都是整设备像素，图标、文字相对按键是否每帧不变，静止时间距是否相等。提交前删掉。
+- **真实滚轮能发进去**：`mouse_event(0x0800)`，先 `SetProcessDPIAware` 和 `SetCursorPos`（`lt\wheel.ps1`、`lt\wheelrun2.ps1`）。前提是发送方和 Win顺 都不是管理员。之前发不进，多半是两边权限不一致；不要用 Ctrl+Tab 代替滚轮下结论。
+- **脚本坑**：`powershell -File x.ps1 -Deltas @(-120,…)` 的数组传不进去，实际只发了一格，看起来就像「只有第一格送达」。要么改成数值参数，要么在脚本里构造数组。
+- **启动坑**：前一个 `--profile` 实例还没完全退出时就启动新的，新实例会以为已有实例在跑，自己退出，没有崩溃记录。启动前要等旧进程完全消失。
+
+## 界面风格：窗口圆角不能自己画（2026-11-05）
+
+- **现象**：brand、tactile 为了做出原型里 18 px 的窗口圆角，关掉了 DWM 的圆角（`DWMWCP_DONOTROUND`）、边和 Mica，窗口透明后在 QML 里画圆角和 1 px 边，阴影放在紧贴窗口下方的分层窗口里画。用户一眼看出“Windows 11 的圆角不是原生的”，禁止这样做。
+- **原因**：DWM 只给 8（默认）/ 4（小）/ 直角；更大的圆角只能整套自己来，还得自己补阴影窗口（跟随移动、淡入淡出、Z 序、遮挡、截图排除）、透明角的点击穿透、切回 DWM 时的系统标题栏残影。看起来始终和系统窗口不一样，代码也多了一千多行。
+- **做法**：所有风格、所有窗口（菜单、提示、插件窗口）都用 DWM 的圆角、边、阴影和 Mica，自绘框整套删掉（`win::setOwnFrame`、`OwnFrame`、`Theme.ownFrame`、阴影窗口）。风格只改窗口里面：`windowRadius` 和 fluent 一样是 DWM 的 8，靠近窗口角的东西按“内圆角 = max(8 − 间距, 4)”同心（搜索框离边 10 → 4）。要不要透明由 Look 的 `backdrop` / `backdropCapable` 决定，不按风格名判断。
+- **规则**：永远不要自绘窗口圆角、窗口边或窗口阴影；要改的是窗口里的东西。详见 `src/app/qml/themes/README.md` 第 4 节。
+
+## 界面风格：列表行里的部件随悬停造、毁，滚动时掉帧（2026-11-05）
+
+- **现象**：三种界面风格下剪贴板滚动掉帧都比 main 多（3 次中位数：main 约 67，fluent 88，tactile 94，brand 117），帧时间 p50/p95 不变、没有超过 33 ms 的帧；内存多 6–15 MB。
+- **原因**：每一行的悬停底是 `Loader { active: area.containsMouse; sourceComponent: Hook {…} }`。滚动时鼠标不动，行从它下面经过（Qt 每帧按新位置重发悬停），每经过一行就造一次、毁一次 Hook 和风格的 RowHighlight（brand 的带 RectangularShadow 和两个 Behavior，tactile 的更多）。此外每行一建出来就造齐 4 个按钮的 KeySurface、提示框的 MenuFrame（fluent 是 6 个矩形的阴影，brand 两个 RectangularShadow）和只有一行显示的分隔线，绝大多数从来不显示。Hook 用 `createObject` 加逐个 `Qt.binding` 造部件，比直接写同样的部件慢 5–10 倍（qml.exe 小测）；qmlprofiler 里 brand 滚动约 12 s 内 `Hook.rebuild` 142 次、共 82 ms、最长一次 4.6 ms（带分析器），240 Hz 下一帧只有 4.2 ms。
+- **做法**：`Hook` 加 `lazy: true`（第一次显示时才造，之后只隐藏不毁）。ClipRow 的悬停底改为常驻 Hook、用 `visible` 显示和隐藏；分隔线、RowAction 的键面、HoverTip 的框都 `lazy`；HoverTip 的 dpr 由宿主传，不再每行一个 Screen 附加对象。效果完全一样（三种风格 × 浅深 × 100/150 % 的 48 张截图逐像素相同），brand 滚动时 `Hook.rebuild` 降到 88 次、共 20 ms、最长 0.9 ms（剩下的是每行第一次悬停时造一次，之后复用），fluent、tactile 同样。
+- **规则**：随状态出现/消失的风格部件不要放进 `Loader { active: … }`，用 Hook 的 `visible`；列表行里大多不显示的 Hook 写 `lazy: true`。ResultRow、PanelRow、DialogBarRow 的悬停底已同样改好（`--preview-results --picked --rows-source` 新旧逐像素相同）。
+- **副作用及做法**：晚造的部件（lazy，或复用的行里第一次显示）若造出来时状态不是默认值（选中、当前、危险……），过去会先按默认值画出、再由 Behavior 用约 100 ms 渐变到真实状态（以前在隐藏时就渐变完了，看不到）。Hook 现在把当时的全部状态（和 `extra`）作为 `createObject` 的初始属性传入：Behavior 只对部件建成之后的变化起作用，所以第一次显示直接是最终状态，之后的状态变化照常有动画。
+- **测法**：`WinShun.exe --preview-results <dir> --clipboard-scroll --style brand` 现在按阶段给出悬停换行次数、行的新建/复用、每帧 GUI/渲染线程的 CPU 时间（`QueryThreadCycleTime`，不受别的程序负载影响）和悬停换行那几帧的 CPU；掉帧数受机器负载影响很大（同一构建 56–211），要隔轮交替跑多次比较。`--grab` 出顶部、下滚、回滚和按钮提示 4 张图，前后逐像素比。
+
+## 任务管理器里 Win顺 的进程太多：随包小插件放进插件进程（2026-11-06）
+
+- **现象**：任务管理器的 Win顺 组里有 8 行：主程序、插件进程、小工具插件、`WinShunSwitches.exe`（没有说明文字）、截图、按意思找、“索引服务”两行。用户：“太多了，能不能集中成几个？”
+- **原因**：每个插件一个进程（隔离、作业限制、崩溃不连累别人）。小工具（计算器等，纯计算）和系统开关是 Win顺 自己的、常驻、从不退出，单独一个进程只多占一行和几 MB。第二个“索引服务”是服务在用户会话里起的按键监听（`--listen-keys`，UIAccess），和服务同一个 exe，所以显示同一个说明。
+- **做法**：Win顺 对随包（`Entry::Source::Bundled`）、常驻、非管理员的 `winshun.tools` 和 `winshun.switches`，在 start 消息里加 `inProcess`，runner 不起进程，在自己的线程上跑（`runner/InProcess.cpp`）：tools 编进 runner（静态库 wstools），switches 加载 `WinShunSwitchesApp.dll`（从 `WS_APP_DIR` 找 Qt，和 stub 一样）。两者照旧经管道说插件协议（SDK 的 `Plugin::serve(in, out)`、`switchplugin::Protocol(in, out, …)`），Win顺 这边其余一切不变；`started` 报 runner 的 pid，设置页不显示它的内存（那是 runner 的）。`WINSHUN_PLUGINS_APART=1` 恢复成单独的进程。服务的说明改成“Win顺 后台服务”，两个用途都对；`WinShunSwitches.exe` 补了版本信息。
+- **坑**：
+  - Qt 的 `QCoreApplication` 可以在同一线程上建了又拆、再建，但第一个用 Qt 的线程就是 Qt 的主线程；换个新线程再建会出警告、行为没保证。所以 switches 每次启动都放到同一条一直不退的线程（QtLane）上，DLL 加载后不卸载。
+  - 线程不能像进程那样杀掉。停：关掉它的输入管道（读到 EOF 就返回）；5 秒还没返回，或输出关了还在跑，runner 自己退出（`giveUp`，退出码 4），Win顺 照常把 runner 和所有插件重新起来。退出时等不到的就留给进程结束（不 join、不释放，免得线程用已释放的对象）。
+  - 标准句柄是整个进程的：插件代码里不能再用 `GetStdHandle`，要用传进来的管道端；Qt 的消息处理函数也写到传进来的 stderr。
+  - 进程内就没有作业限制和 strict 沙箱（低完整性）了。只对 Win顺 自己的、随包装在 Program Files 里的这两个这样做；第三方插件永远单独进程。
+- **验证**：`tst_plugin::builtInToolsRunInsideTheRunner`（随包 tools 答 `= 1+2*3`，pid 是 runner 的，停用后 runner 不变、再启用照样答），`tst_switchplugin::nativeProviderInsideTheRunner`（真 DLL 读七种状态、保持唤醒，停用再启用在同一 Qt 线程上又能读，旧一轮的保持唤醒已放掉）；真机 stage：WinShun 下只有一个 `WinShunPluginHost.exe`（模块里有 `WinShunSwitchesApp.dll`、`Qt6Core.dll`，私有 7.9 MB），日志“在插件进程里启动”，退出干净。
+
 ## 以管理员身份运行插件：先校验再按路径启动是不够的（2026-11-03）
 
 - **原因**：插件文件夹是用户能写的。“比对哈希，一样就 `CreateProcess` 插件文件夹里的 exe”中间有空子：校验后、启动前可以换文件；就算一直拿着句柄不让改，插件运行中还会按需加载 DLL，往文件夹里**加**一个 `version.dll` 是挡不住的。开机自启的管理员 Win顺 就成了一个不用 UAC 的提权入口。
@@ -454,6 +550,12 @@
 - **现象**：读系统入口要 1.9 秒，其中解析资源字符串只占 0.3 秒。
 - **原因**：`split(QRegularExpression(...))` 每次调用都重新编译正则，约 3000 次就是 1.5 秒。
 - **做法**：用 `static const` 的正则，或者手写切分（`splitKeywords`）。改完约 0.45 秒。
+
+### 程序删了，应用还搜得到、起始列表里还有（#207）
+
+- **现象**（用户截图）：删掉 Scoop 装的 7-Zip、手动删掉旧版 Qt Creator 的文件夹之后，“7-Zip”还排在起始列表第一，“Qt Creator 18.0.2”还能搜到（图标是空白文件），一点就弹“The specified path does not exist”；“重新索引”也不管用。
+- **原因**：`shell:AppsFolder` 只要开始菜单里的快捷方式还在，就一直列着它，不管它指向的 exe 还在不在（2026-11-05 实测：先建快捷方式、等列出来再删 exe，15 秒后仍列着；删快捷方式则一秒内消失。反过来，新建一个本来就指向不存在文件的快捷方式，AppsFolder 不列）。手动删程序文件夹不会动开始菜单，所以开始菜单的指纹（`installedAppsFingerprint`）不变，`AppCatalog` 也就不重读；10 分钟一次的重读读回来的还是它。起始列表和常用应用按历史在应用列表里找，找到就显示。托盘的“重建索引”只重建文件索引。本机就有 10 条这样的残留（删掉的 Blender 4.3/4.5、Python 3.13、钉钉卸载程序等）。
+- **做法**：`AppCatalog` 留着外壳读到的整份列表，在后台对桌面应用的目标各问一次磁盘（`presentApps` / `appTargetGone`），只有本机固定盘上、Windows 明确答“找不到文件 / 路径”的才去掉；盘符不在、可移动盘、网络盘、拒绝访问一律保留。这样搜索、起始列表、常用应用、收藏、文件夹菜单、MCP 同时生效。复查不能每次打开搜索框都做（约 300 次查询，会反复唤醒睡着的机械硬盘）：每次重读列表后立刻查（新列表查过才发布，不会闪出已删的），应用打开失败时立刻查（`checkPrograms`），其余最多 5 分钟一次（`programsCheckDue`）；没到时间就沿用上次查过的列表。复查时不更新 `m_loadedAt`，否则 10 分钟的强制重读永远等不到。“重建索引”顺带重读应用列表。
 
 ## 全局快捷键
 
@@ -1567,6 +1669,12 @@
 - **原因**：一是 `--extract` 不跳过副本，这一档 2615 个里 1431 个和前面的同样大小，建索引时根本不读（`Copies`）；二是逐段计时（不重复的 961 个 PDF、27357 页，本进程单线程）：`FPDF_LoadPage` 66%、`FPDFText_LoadPage` 28%，读文件（`m_GetBlock`）2%，打开文档、找系统字体（每个进程只枚举一次，约 3 毫秒）、取文字、我们整理文字、关页都在 1% 上下；沙箱里一个进程读这 961 个 38.4 秒，本进程 36.5–37.2 秒，差不到 5%，8 个进程一直复用。采样（xperf）看 PDFium 66%、ntdll 的堆 27%：pdfium.dll 静态链接 C 运行库，`malloc` 直接是进程堆的 `HeapAlloc`，150 个 1–5 MB 的 PDF 就分配了 4100 万次。
 - **做法**：WinShunExtract.exe 的清单里设 `heapType` 为 `SegmentHeap`：本进程 5–7% 快（沙箱里一个进程读 961 个 38.4 → 35.6 秒），读完这些的峰值内存 1.22 GB 只多约 10 MB，5847 个文档的文字和位置逐字节相同（SHA-256 比较）。换成自己的分配器（导入表里换掉 `HeapAlloc`）试过：每类大小一条空闲链表的理想情况也只快 11%，还丢了堆的加固，不值。整个文件先读进内存（`FPDF_LoadMemDocument64`）不快（读文件本来就只占 2%），字体换成别的映射会改字宽、可能改出的文字，都不做。比较前后要交替跑、各跑几次，看 PDF 平均和总时间，不要拿两次单独的结果比。
 
+### 几份大 PDF 一起读，提取进程加起来占几百 MB
+
+- **现象**：内容索引第一次建立时，8 个 WinShunExtract.exe 加起来的私有内存最多 559–584 MB（2026-11-05，`wsbench --document-pass`，6095 个文档）；读过大 PDF 的进程闲下来也不还：读一份 46 MB 的 PDF 时峰值 217 MB，读完还留着 179 MB；40.6 MB 的 182 MB、留 122 MB。
+- **原因**：一份文档读的时候要多少内存看页面内容（大矢量图），读之前只知道大小；8 个进程同时读，碰上几份大的就叠在一起。进程读完不退出，下一个文件接着用它，读大文档时占的内存大半还在它手里，要到闲 30 秒退出才还。
+- **做法**：16 MB 以上的文档一次只读一个（`ContentIndexer::pass` 里单独一条队列，名额 1、同时占文档队列的一个名额，排在最前；`DocExtractor` 的 `alone` 再把一道关），读完就结束那个进程（新进程读一个小文档连启动中位数 29 毫秒）。交替跑（不排队 7 次、排队 6 次）：总时间平均 15.8 → 15.4 秒，差在波动之内；加起来最多 559–584 → 355–379 MB。阈值按 `wsbench --document-memory` 定：每种大小读一个、各在新进程里，看峰值和读完留下的；16 MB 以下最多 70 MB。搜索自己的提取器不排队（用户正在等）。`tst_core` 的 `docExtractorReadsLargeAlone` 看着子进程数：两个线程同时读大文档，任何时候都只有一个提取进程。
+
 ## 构建、升级 Qt
 
 ### 从构建目录运行 WinShun.exe：PATH 里加了 Qt 也弹“找不到 Qt6Quick.dll”
@@ -2432,6 +2540,12 @@
 - **原因**：`QFontDatabase::addApplicationFont(路径)` 在 FreeType 字体引擎（`fontengine=freetype`，显卡加速渲染时用）下把路径交给 FreeType 用 C 运行库打开，ANSI 代码页（本机 1252）放不下的字符就打不开，静静地返回 -1，`applyUiFont()` 什么也没设，Qt 退回系统字体。GDI 引擎（省内存渲染）按文件名走的是 Windows 的宽字符 API，应该不受影响（未验证：预览固定用 freetype）。装到 `D:\软件\WinShun` 这样路径的用户都会中招；修好后在这种路径下界面字体会从雅黑变成普惠体，每行高几个像素。
 - **做法**：`main.cpp` 的 `applyUiFont()`：路径不全是 ASCII 时读出文件用 `addApplicationFontFromData` 装（两个字体文件约 17 MB 留在内存里；ASCII 路径照旧按文件名装，字体留在磁盘上按需读）；一个都没装上时 `qWarning` 一句（进 WinShun.log，预览里算一条警告）。预览日志固定打印平台插件路径和实际用的字体，两处跑出的行高不一样时先看这一行。
 
+### 截图插件的离屏预览 `--app-dir` 指到中文路径就报 `QtQuick.Shapes` 没装
+
+- **现象**：在 build 目录跑 `WinShunCapture.exe --preview-ocr <目录> --bubble --app-dir "F:\电脑便捷工具\dist\WinShun"`，退出码 3，日志是 `module "QtQuick.Shapes" is not installed`；那个目录里明明有 `qml\QtQuick\Shapes`。同一个 exe 换成 `--app-dir "C:\Program Files\WinShun"` 就 0 个警告出图（#198 的识别卡片预览）。
+- **原因**：没有查到底。两处的 QML 模块一样，差别只在路径带中文；推断和上面的字体、ninja（ANSI 代码页 1252）是同一类问题，某一步按 ANSI 处理了路径。
+- **做法**：预览的 `--app-dir` 用全 ASCII 路径的安装目录（`C:\Program Files\WinShun`，或 ASCII 的 staging 目录）。用 `Start-Process -ArgumentList` 传时带空格的路径要自己加引号（`'"C:\Program Files\WinShun"'`），否则被拆成两个参数，报 `no Qt6Core.dll in WS_APP_DIR`。
+
 ### 五个模板标签挤不进“新建插件…”那一行
 
 - **现象**：模板从三种加到五种，`ScopeTabs` 和名字输入框、“创建”按钮同在一个 `Row` 里，离屏预览里“创建”被挤出右边界只剩半个字。
@@ -2622,7 +2736,7 @@
 - **原因**：内存不紧张时，Windows 不会回收空闲进程的工作集，碰过的页面（文件索引、窗口图形）就一直算在里面。实测把工作集清空后，3 分钟内只涨回约 5 MB，空闲时真正在用的只有这么多。
 - **做法**：`platform/IdleTrim`：程序失去焦点 20 秒后、索引不忙时，在后台线程调用 `SetProcessWorkingSetSizeEx(-1, -1)`（约 10 ms / 100 MB）。页面进入备用列表，算作可用内存，用到时以软缺页拿回。清空后第一次名称搜索约 10 ms（平时 2.3 ms），所以清空过的话，打开搜索框时另起线程调用 `FileIndex::warm()`，把索引的页面一次拿回来（约 20 ms，和窗口出现同时进行），之后第一次搜索约 3 ms，和平时一样。代价是打开时内存约 150 MB，关掉 20 秒后再清空。`wsbench --trim [--warm] <查询…>` 可以量清空所用时间、预读所用时间和之后第一次搜索。
 - **忙完立刻清空**：索引加载、追赶日志、读内容、搬家时不清空，每 15 秒再看一次；`IndexService::stateChanged` 一来（加载完、追赶完）就在 5 秒后清空，不必等下一次检查。实测（`--background` 启动，2026-10-12）：启动 20 秒后 217 → 2 MB。
-- **后台工作会把页面带回来**：内容索引启动 30 秒后的第一轮、之后每 15 分钟一轮和文件变动后的一轮，`findWork` 都要走遍整个文件索引，约 90 MB 回到工作集。所以闲着时每 30 秒查一次，超过 32 MB 就再清空（查一次只读一个数）；之前每 2 分钟一次，启动后会有 2 分钟停在约 100 MB。
+- **后台工作会把页面带回来**：内容索引启动 30 秒后的第一轮、之后每 15 分钟一轮和文件变动后的一轮。常规轮只看改动过的文件（`Lookout`），不碰整个索引；只有全扫的那一轮（第一轮、选项变了、记不全了、每 24 小时兜底）要走遍整个文件索引，约 90 MB 回到工作集。所以闲着时每 30 秒查一次，超过 32 MB 就再清空（查一次只读一个数）；之前每 2 分钟一次，启动后会有 2 分钟停在约 100 MB。
 - **测试时用 `--background` 启动**：不带参数启动 WinShun.exe 会打开搜索框，算在用，不会清空。开机自启和安装程序都带 `--background`。
 - **关掉设置窗口后一直不清空（2026-10-22）**
   - **现象**：打开设置再用右上角 X 关掉，任务管理器里的内存停在 190–314 MB，不再下降；要等某个窗口（比如搜索框）激活后再失去焦点，约 20 秒才清到 5 MB 左右。
@@ -2768,6 +2882,24 @@
 - **不要给 `dopusrt /info` 传文档以外的类型**：手册只列了 `paths`、`list`、`listsel`、`open`、`select`。2026-10-14 研究时传了一个 `selected`，`dopus.exe` 当场崩溃（0xC0000005，线程 `dopus.worker`），之后的 `/info` 每次都卡 30 秒，直到 Opus 重启。
 - **替用户写 `prefs.oxc`**（用户：“能不能不让用户设置？我们帮用户做好”）。实测 Opus 13.25（2026-10-14）：运行中的 Opus **不重读**外面改过的 `prefs.oxc`（改完双击空白处没反应）；`dopusrt /cmd Close PROGRAM` 退出时**不重写**它（修改时间不变，改动还在）；再启动就生效（菜单 213–245 ms），原来开着的 lister 和文件夹都会恢复；`<dblclk>` 里没有 `<bg_commands>` 时，插一段 `<bg_commands><event …/></bg_commands>` 到 `<mouse_hook_delay>` 前面也认。但在 Opus 的首选项里点“确定”会把内存里的整份设置写回去，所以**不能趁 Opus 运行时改文件**：`filemanager::editOpusPrefs` 先关 Opus（等进程退出，15 秒不退就放弃，比如有复制任务在问），再改，再启动。只换 `<dblclk>` 里 `id="0"` 的那个 `<event>`，别的字节原样（`pathtext::withOpusBlankClick`，有单测）；原来那条存在 `[Launcher] FolderMenuOpusBefore`，“取消设置”原样放回（实测还原后整个文件哈希一致）；第一次改之前把整份文件备份到 `%LOCALAPPDATA%\WinShun\opus-prefs.oxc.bak`。用户自己启用了别的命令时不自动换，设置页显示那条命令，用户点“换成 Win顺 的菜单”才换，取消时换回。设置窗口每次到前台都重读一次状态（用户可能在 Opus 里改了）。卸载时 `WinShunSearch.exe --opus-menu-off` 把指向本副本的那条改成 `enable="no"`，免得卸载后双击空白处 Opus 报找不到程序（2026-10-14 用 ISCC 编的测试包真装真卸过：只变了这一行，重启 Opus 后双击空白处什么也不发生）。只在托盘里跑、没开窗口的 Opus，重新启动时会开出默认 lister，`dopus.exe` 没有不开窗口的命令行开关（只有它首选项里的“启动时不打开 lister”）：原来没窗口的，等新窗口出来就 `WM_CLOSE` 掉（实测约 0.5 秒后关掉，仍在托盘）。Opus 15 秒不退就放弃；之后用户才在 Opus 的提问里点“退出”的话，Opus 会关掉且不会再被启动。
 
+### Directory Opus 打字搜索：搜索框比激活的那栏文件列表宽（GitHub #82）
+
+- **现象**：2026-11-03 用户截图：左右双栏 + 右边查看栏，在右栏打字，搜索框左缘对齐右栏左缘，右边伸进查看栏，几乎贴到 Opus 右缘；框底也远在列表底部之上。
+- **原因**：0.18.0 的 `windowavoidance::corner` 取的矩形没错（焦点 `dopus.filedisplay`，就是正在打字的那一栏），但 150 % 下一栏只有约 537 逻辑像素，启动器是用户宽度 760（最窄 640），放不下时退回“从列表左上角起”，多出的全部往右伸。纵向按 8 行的预留高度（`roomWanted`）往上推，可行数又按工作区底部算：结果少时框浮在列表中间，列表比预留高度矮时框从列表顶起、往下长出列表。
+- **做法**：`windowavoidance::inList`（有单测）：宽、高都按这一栏收窄，宽不低于启动器最窄的 640（只在打开时收窄，`m_boxWidth` 临时值，不写进记住的宽度；用户拖宽后照拖的来），可行数截到列表底部上方 12 px；还放不下时仍从这一栏的右下角起，依次限制在 lister 所有可见的 `dopus.filedisplay` 合起来的范围（`folderview::opusFileLists`）、lister 客户区、工作区里，所以先盖另一栏文件列表，不先伸进目录树、查看栏。屏幕按焦点列表（不是 lister）所在的显示器取。启动器本身 640 以下没有窄版布局（底部提示一行约需 580），再窄要另做。
+
+### 资源管理器打字搜索：搜索框跑到屏幕左上角（GitHub #203）
+
+- **现象**：2026-11-04 Windows 10 22H2 用户：在文件夹里打字，搜索框带着字弹出来，却在屏幕左上角，不在文件夹旁边。诊断包里没有窗口位置，只能推算。
+- **原因**：资源管理器打字一直按 #141 的规则放：`windowavoidance::place` 在工作区里挑和原窗口重叠最少、其次离常用位置最近的点。窗口大到哪边都放不下整个搜索框、又大致居中时，工作区四个角重叠一样多，左上角和右上角离常用位置（居中、往下五分之一）又一样远，候选里先试的 x = 工作区左边，于是落在左上角（`tst_placement` 的 `explorerTypedIn` 复现：1920×1032，窗口 (260,116,1400,800)，框 760×600，结果 (0,0)）。和 Windows 10 无关，Windows 11 同样的窗口也一样；探针 `--folder-typing` 把窗口放在左三分之一，放得下，所以没测出来。
+- **做法**：只在整个搜索框都能不挡原窗口时放旁边（`windowavoidance::clearOf`）；否则和 Opus 一样进文件列表右下角（`folderview::explorerFileList`：所在标签页里看得见的 `SHELLDLL_DefView`，最大的那个；没有就用标签页，再没有用窗口客户区，有原生窗口单测），限制在窗口客户区里。在 `Placement::avoidNative` 里打开时定一次，之后行数变化不来回跳。只有资源管理器的入口传文件列表，剪贴板避开开始菜单等仍按原规则。`typing-handoff` 记录里加了 `placed`（旁边/列表/常用位置，窗口、列表、工作区和框的矩形）。
+
+### 资源管理器打字搜索：Windows 不让启动器到前台，打的字全丢（GitHub #203）
+
+- **现象**：同一位 Windows 10 22H2 用户（没装改资源管理器的软件）：框弹出来但打不进字，点一下文件夹框就没了、再打字没反应；切走再切回来，框出来了，字要点一下输入框才进；快捷键呼出的启动器也打不进，一打字它就消失，换成文件夹的框。日志里每次都是 `Could not bring the window to the front over CabinetWClass (explorer.exe)`，约 150 ms 后 `active only in Win顺 … as if it lost the focus` 和 `lost the front … it goes`，3 秒后 `TypeToSearch: 0 of N keys typed again went in`。
+- **原因**：那台机器上 Windows 每次都拒绝把 Win顺 的窗口放到前台（热键给的前台权、空鼠标输入都没用），`SendInput` 也一个都送不进（返回 0，资源管理器不是管理员权限，钩子照样收得到它的键，所以不是 UIPI）。被拒的 `SetForegroundWindow` 让启动器在 Win顺 线程里“激活”（Qt 以为它活动），前台却还是资源管理器；随后 Windows 10 又为资源管理器报一次前台事件，App 把它当成“点了别处”收起启动器。打字搜索按住的键要等启动器真到前台才重打，等不到，3 秒后送回文件夹又被 `SendInput` 拒，于是全丢；快捷键那次启动器不在前台，键还在资源管理器里，开始一轮新的打字搜索。为什么被拒，日志看不出来（怀疑安全软件拦截模拟输入/抢前台）：新加的 `front-refused` 记录（双方权限级别、前台锁、空输入是否被拒）下次能说明。Windows 11 上前台 2–7 ms 就拿到，从没走到这条路。
+- **做法**：被拒时不再依赖前台和 `SendInput`：启动器像剪贴板一样用自己的 `KeyRouter` 收键（`App::startLauncherRouting`），资源管理器保留焦点；打字搜索按住的键原样交给它（`Hold::handOver` 给出按下的键和各自的 Shift，`TypeToSearch::handOverHeld` 按资源管理器的键盘布局转成字符，有单测），不再重打；路由期间不开新一轮打字搜索、Ctrl+V 不“粘贴为文件”（`setLauncherRouted`）。路由期间资源管理器还在前台不算丢焦点；点别处（路由的鼠标钩子或原来的“点了别处”检查）、换到别的窗口照旧收起，点启动器本身它就真的到前台、路由结束。限制：这时键不经输入法，拼音直接当字母搜（拼音搜索仍能找到中文名）；只收剪贴板那套键（打字、方向键、Enter、Esc、Tab、Ctrl+A/C/V/X/Z、Ctrl+数字等），Ctrl+S 之类留给资源管理器；`SendInput` 被拒的机器上 Shift、Alt 的掩码也送不出，资源管理器的输入法可能因单按 Shift 切中英文。Windows 11 上验证用开发开关 `WINSHUN_TEST_REFUSE_FRONT=1`（永不激活）或 `=active`（只在 Win顺 线程里激活，和那台 Windows 10 一样），只影响启动器。
+
 ### 用快捷键弹出（GitHub #25）：想看菜单做了什么，日志里没有
 
 - **现象**：实测快捷键时想从 `WinShun.log` 读“菜单是关了还是丢了这一次”，文件里一行都没有：`qInfo` 只进调试输出，日志文件只记警告和错误。
@@ -2812,6 +2944,12 @@
 
 - **现象**：`wsbench --dirty-window`：新建的文件写完立刻直读，记录“不在用”或还是别的文件的；`FlushFileBuffers` 之后记录也要约 200 ms 才在磁盘上出现（数据倒是先到）。原地覆盖一个常驻文件（数据在记录里），先前打开的卷句柄读到的是旧内容，新开一个卷句柄读到新的——“打开卷句柄会让 NTFS 刷一次”只是观察，没有单独证明，**不要依赖它**。`FSCTL_GET_NTFS_FILE_RECORD` 对这次常驻覆盖也答了旧记录（LSN 没变），所以它也不是“缓存里的最新”。
 - **做法**：三道保险都在界面侧：变更日志给的修改时间 5 分钟内的文件不直读（`kBulkRecent`）；会话前取 `ContentIndex::changeSequence()` 作 `since`，会话期间被写的文件入库时直接标脏（`m_changedWhileReading`）；之后任何写事件照常让它重读。服务每个会话新开卷句柄（便宜）。`FSCTL_GET_NTFS_FILE_RECORD` 返回的记录**不带** USA（fixup 已应用）：`parseFileRecord` 对它会失败，`BulkReader::readRecordCached` 两种都接。
+
+### 直读队列先检查后入队会超额；比上限大的单个文件永远进不了队列（2026-11-05）
+
+- **现象**：第一次建内容索引时主进程私有工作集到 660–810 MB（实机 795–818），其中 310–385 MB 是等切片段的文件字节，而队列上限是 256 MB。另一个现象：把“文本和日志的大小上限”调到 256 MB 以上、盘上又有比它大的文本或日志时，那个卷的直读停在入队等待，再也不动（实测一个 300 MB 的 .txt：120 s 里 0 个文件/秒，14.8 万个只读了 3.1 万，不会自己结束）。
+- **原因**：每个卷的 feeder 先看“排队的 + 这一批 ≤ 上限”，放行后才去取，字节送到才计入。几个卷同时放行，各自的一批（当时 64 MB）就叠在快满的队列上，理论最多 256 + (卷数 − 1) × 64。一个文件单独成一批，比上限还大时“0 + 这一批 > 上限”永远成立。单个卷时读线程追得上，队列满不了（只读 E: 时最多 60 MB），所以只在多卷同时读、读得比切片段快时才显出来。
+- **做法**：放行时就把这一批计入在途（`comingBytes`，送到一个文件扣一个，没送来的批末扣掉），排队的加在途的不超过上限；两者都为 0 时，不论多大都放行这一批。上限 64 MB、每批 16 MB（`ContentIndexer::kBulkQueueBytes` / `kBulkBatchBytes`）。同机 4 个卷 49.5 万个文件，峰值 433–441 MB，耗时不变。测：`tst_core` 的 `contentBulkFileOverQueue` / `contentBulkQueueBound`；`wsbench --service --content` 末行 `bulk …` 的“at most … MB waiting for a reader”；诊断事件里的 `bulk_most_queued_bytes`。
 
 ### `$DATA` 的 VDL 之后、末簇的尾巴，盘上是垃圾
 
@@ -3123,6 +3261,18 @@
 - **现象**：预览窗口压到搜索面板上面时（`HWND_TOPMOST`），Word 的内容不见了，只剩空白的预览窗口；另一种情形里弹出窗口跑到了启动器上面。
 - **原因**：弹出窗口只在开始时插到预览窗口上面，之后挪动用了 `SWP_NOZORDER`；预览窗口自己换到最前面后，弹出窗口就被压在下面。另外“预览窗口上面那个窗口就是弹出窗口自己”时误用了 `HWND_TOPMOST`，把它提到了所有窗口最前面。
 - **做法**：每次挪动都按 `GetWindow(预览窗口, GW_HWNDPREV)` 重新插（已经紧挨着就 `SWP_NOZORDER`），预览窗口每次摆好后也让弹出窗口跟一次（`FilePreview::showWindow` 末尾的 `placeHandler`）。
+
+### 预览开着时鼠标划过大文件，Word、PowerPoint、Excel 一个个被启动（GitHub #224，2026-11-06）
+
+- **现象**：用户说预览开着、鼠标划过结果就跟着预览，遇到大文件会卡。实测（0.21.0，`size:huge ext:pdf,pptx,docx,xlsx` 八行，真鼠标每行停 400 ms 来回划 20 秒）：启动器自己不卡（另一个进程每 4 ms 给它发 `WM_NULL`，最长 48 ms 才回）；但 PowerPoint、Excel、Word 都被启动了，三个进程共用了约 10.7 秒 CPU、820 MB 内存，预览窗口有 5.5 秒一直是空的。每行停 250 ms 时，Office 已经开着，约 15 次装入，仍用了 5.3 秒 CPU。
+- **原因**：鼠标在一行上停 100 ms 就 `follow` 那一行，Office、PDF 这类文件马上 `DoPreview`。这个调用取消不了，后面的文件排在它后面；一个 84 MB 的 .pptx 要好几秒。卡的是整台电脑和预览，不是启动器的 GUI 线程。
+- **做法**：`follow` 来的文件（鼠标停留、方向键经过）要用预览程序时，等这一行停够 300 ms 才开始（加上启动器自己的 100 ms，约等于 Windows 的悬停时间）；文字、图片照旧马上显示；`show`（Alt+P、鼠标中键）不等。只从 `follow` 起算还不够：第一次改完再量，Office 照样被启动了——鼠标在 A 上停了 100 多 ms 就 `follow(A)`，接着往下移时 QML 的 100 ms 计时器一直被重置，下一行的 `follow` 还没来，A 的 300 ms 先到了。所以鼠标一移到别的行（`rowHoverMoved` 里行号变了）就 `Launcher::previewPointerMoved` → `FilePreview::postponeHandler`，没开始的那个再等 300 ms。改后同样每行 250 ms 来回划：Office 一个也没启动，预览程序共 16 ms CPU，最后停住的那行 PDF 约 0.5 秒出来；停在 84 MB 的 .pptx 上，连 PowerPoint 冷启动约 1.2 秒出来。设置里加“预览跟随：鼠标所指 / 选中的行”，选后者时鼠标划过不切换（`Launcher::previewHover` 直接返回），每行 400 ms 划也是 0 次切换、0 CPU。量法：`SendInput` 绝对坐标移动加 `SendMessageTimeout(WM_NULL)` 计时，`INPUT` 在 x64 是 40 字节，多写两个填充成 48 字节时 `SendInput` 静静地返回 0，鼠标根本没动，第一次量出的“一点都不卡”是假的。
+
+### 鼠标中键点另一行，预览关了而不是换成那一行
+
+- **现象**：预览开着、显示 A 时，鼠标中键点 B 行（鼠标刚移过去，还没停够 100 ms），预览直接关了。只预览选中行时，每次中键点别的行都这样。
+- **原因**：`rowPreviewRequested` 先 `view.currentIndex = index`，这一步通过 `Binding` 同步改了 `Launcher.currentRow`，`followPreview` 已经把预览换成 B；接着 `togglePreview(B)` 看到“正在显示 B”，按“再按一次关闭”关掉了。
+- **做法**：先 `togglePreview(index)`，再选中那一行；选中时 `follow` 看到已经是同一个文件，什么也不做。
 ## 网页搜索建议和 SVG 图标
 
 ### 百度的 JSONP 不是 JSON，而且是 GBK
@@ -3346,6 +3496,13 @@
 - **现象**（阶段 1 实测，150%）：遮罩显示时整屏截图和按热键前的截图比，除了画上去的框、标签、放大镜，只剩任务栏底部 1272..1762, 1587..1593 一条有 164 个像素不同，最大差 18；拿到剪贴板和保存的图与屏幕逐像素比 0 差。
 - **原因**：WGC 拍到的任务栏（亚克力材质）和 BitBlt 读到的合成结果本来就有这点差（阶段 0：BitBlt 对 WGC 243 个像素，最大 16，同一块地方）；不是遮罩错位。
 - **做法**：比对时把它当成已知差异，不要为它改缩放。
+
+### 只预热一个遮罩：多显示器截图时界面卡住，有一次卡了 11 秒（#221，2026-11-06，已撤回）
+
+- **现象**：为了少占提交内存，只让光标所在显示器的遮罩窗口留着显卡资源，其他的截图时现建。两块真实显示器（4K 加 2560×1600，NVIDIA）实测：光标那块的画面出来以后，界面通常卡 156–277 ms，测到过 871 ms；空闲 40 秒、`IdleTrim` 整理过以后那次卡了 11.4 s，画面一直留在屏上，取消也不理。
+- **原因**：Qt 的线程渲染循环显示一个还没有显卡资源的窗口时（`handleExposure` → `polishAndSync`），GUI 线程要等渲染线程建 QRhi（D3D11 设备）、同步完第一帧，这段时间 GUI 线程什么都处理不了。建设备要多久由驱动和当时的状态决定，慢的时候没有上限。
+- **做法**：撤回，每个显示器的遮罩都预热（`design-capture.md` 4.2）。省下的只是提交内存：工作集本来就只有约 4 MB（`IdleTrim`），不值得拿截图卡顿去换。
+- **测法**：量截图延迟和内存要先空闲到 `IdleTrim` 动过（至少 40 秒，`events.jsonl` 里有 `idle-trim`）再截图；只空闲 15 秒的几次都快，不代表平时。单独启动的插件（`WinShunCapture.exe`，`WS_APP_DIR` 指向放着 Qt 的目录）可以用协议里的 `action` `{"item":{"id":"start"}}` 开始截图、再发一次取消，不用发按键；它的日志要设 `QT_FORCE_STDERR_LOGGING=1` 才到 stderr。
 
 ### 开始菜单开着时，悬停框落在菜单后面的窗口上
 
@@ -4599,6 +4756,11 @@
 - **原因**：没细查。ctest 注册测试时带着 `QT_QPA_PLATFORM=offscreen`，测试是照这个写的。
 - **做法**：手动跑测试时，照 `tests/CMakeLists.txt` 里那个测试的 `ENVIRONMENT` 设好环境变量。
 
+### 录屏：驱动没有 D3D11 视频功能，一开始就“录屏失败：D3D11 device（0x887a0004）”（GitHub #214）
+- **现象**：Win10 LTSC 1809 上一录屏就报这句，截图正常。
+- **原因**：录屏建设备时带 `D3D11_CREATE_DEVICE_VIDEO_SUPPORT`（GPU 的视频处理器把 BGRA 转成编码器要的 NV12），虚拟机、基本显示适配器、远程桌面和老驱动不支持，`D3D11CreateDevice` 直接返回 `DXGI_ERROR_UNSUPPORTED`；软件编码那条路也要先过这一步，所以根本走不到。截图建设备不带这个标志，所以不受影响。
+- **做法**：先带视频功能建，不行就不带再建（`Graphics::video` 为假）。这时不建 `Converter` 和 `MFDXGIDeviceManager`，不试硬件编码：画面拷进 BGRA 暂存纹理读回来，`bgraToNv12` 在 CPU 上按 BT.709 有限范围转成 NV12，交给软件编码器（`Writer::video`）。日志里编码器名后面会加 `(no D3D11 video: NV12 on the CPU)`。`tst_recording` 的 `cpuNv12` 测转换本身，`encodedVideo` 的 `no-video-device-*` 用 `Options::noVideoDevice` 模拟这种驱动，连同所有行一起核对解码后的蓝色块颜色。
+
 ## 文件名搜索排在内容扫描后面（GitHub #115，2026-10-28）
 
 ### 打新词要等好几秒，打过的词马上出来
@@ -5004,7 +5166,7 @@
 
 - **现象**：用 1.0.0／1.0.1 建过索引（文件多于约 100～300 个）的用户升到 1.0.2 及以后，插件窗口报“unable to open database file Unable to fetch row”，开始更新、重建索引都报这句，索引显示 0 个文件，搜不到结果。新建的索引和单元测试都正常。
 - **原因**：插件是 `sandbox: strict`，以低完整性运行，环境变量却是用户自己的，`%TEMP%`（`AppData\Local\Temp`）没有低标签，写不进去。升级事务里 `recheckOlderPipeline` 的 `UPDATE files … WHERE … NOT(EXISTS …)` 改动整张表，SQLite 的语句日志超过 64 KiB 就落到 `%TEMP%` 的临时文件，建不出来就是 SQLITE_CANTOPEN。升级整体回滚，每个要写库的入口都重跑升级、再失败；只读入口看到旧 schema 抛“must be upgraded”，统计为空。清空大索引、大表排序（`GROUP BY`、`ORDER BY`）也会撞上。
-- **做法**：插件窗口进程拿到数据目录后建 `<数据目录>\tmp`（继承低标签），用 `SetEnvironmentVariableW` 把 `TMP`／`TEMP` 指过去（SQLite 用 `GetTempPathW` 读；路径可能有中文，不用 `qputenv`），之后启动的工作进程继承。卡住的索引下次打开就升级完，结果不丢。strict 插件要写临时文件都得这样；用 SQLite 的插件测试要在低完整性受限令牌下、用够大的旧索引跑一次。
+- **做法**：插件窗口进程拿到数据目录后建 `<数据目录>\tmp`（继承低标签），用 `SetEnvironmentVariableW` 把 `TMP`／`TEMP` 指过去（SQLite 用 `GetTempPathW` 读；路径可能有中文，不用 `qputenv`），之后启动的工作进程继承。卡住的索引下次打开就升级完，结果不丢。宿主从 0.21 起也给所有 strict 插件设好 `TEMP`／`TMP`（`Host::specFor`，`<id>.data\tmp`；管理员插件本来就用副本里的临时文件夹），`tst_plugin` 的 `jobsAndPermissions` 检查低完整性插件能在 `TEMP` 建文件；用 SQLite 的插件测试要在低完整性受限令牌下、用够大的旧索引跑一次。
 
 ### 测试：`--profile` 的插件装在 `<profile>\plugins`，不是 `<profile>\WinShun\plugins`
 
@@ -5017,3 +5179,78 @@
 - **现象**：插件窗口识别时，进度下面的当前文件只显示“C:”和下一行半截路径，没有省略号，文件名看不到。
 - **原因**：计数和路径放在同一个 `Text` 里，`wrapMode: Text.Wrap` 加 `maximumLineCount: 3` 和 `elide: Text.ElideMiddle`。Qt 只有 `ElideRight` 能和换行一起用，`ElideMiddle`／`ElideLeft` 只对单行有效（“多行文字粘贴进搜索框，灰色的字铺满整个窗口”一条也提到过），多出的行直接截掉。
 - **做法**：会很长的路径单独放一行不换行的 `Text`，用 `ElideMiddle`；要换行的说明另放一个 `Text`（`Controller::progressFile`）。
+
+### 读一次进程列表要 20 毫秒，界面每秒卡一下
+
+- **现象**：“运行状况”页每秒刷新一次，量下来每次采样约 20 ms，放在界面线程上会一顿一顿的。
+- **原因**：`NtQuerySystemInformation(SystemProcessInformation)` 每次把所有进程连同每个线程一起交回来，这台电脑 955 个进程时是 2.6 MB、约 20 ms（`CreateToolhelp32Snapshot` 内部也用它，更慢，约 34 ms），哪怕只要其中几个 WinShun*。换成用进程句柄逐个读，又打不开 LocalSystem 的后台服务（`OpenProcess` 被拒），新起的读文档进程也发现不了。
+- **做法**：进程列表放到线程池里读（`HealthMonitor::take` → `memory::look`），读完回到界面线程再算；缓冲用 `VirtualAlloc` 拿、读完 `VirtualFree` 还掉，不在堆里常驻 2.6 MB。文件索引的块地址在界面线程上拿（要索引的读锁，用 `tryReadLock`，不等写锁），逐页查驻留（`memory::map`）也在线程池里。
+- **后台也别每 10 秒读整张表**：页面没开时每 10 秒一次整表，量下来后台 CPU 是旧版的 4～6 倍。现在后台每 10 秒只按句柄重读自己和自己起的进程（`memory::again`，`GetProcessMemoryInfo` 的 `PROCESS_MEMORY_COUNTERS_EX2.PrivateWorkingSetSize`，Windows 11 22H2 起才有，读不到就退回整表），整表只在有事开始/结束时、以及读文件内容期间每分钟读一次（读文档的进程在后台服务下面）。另外整表的缓冲本身算在自己的私有工作集里（2.6 MB），读自己时要减掉。
+
+### “界面和其他”占了一大半，说不清是什么
+
+- **现象**：运行状况页把主程序分成文件索引和“界面和其他”，打开设置时后者 230 MB，用户问“为什么 300 多 MB”答不上来。
+- **原因**：主程序的私有工作集里，除了文件索引的块，其余几乎全在堆里。逐页查（`VirtualQuery` + `QueryWorkingSetEx`）可以分出程序文件（dll 的私有页）、线程栈（有 `PAGE_GUARD` 的分配），堆里谁申请的却分不出。用 xperf 的堆跟踪（`-heap -Pids … -stackwalk HeapAlloc`，`-a heap -images`）量第一次打开设置窗口：堆里多了 117 MB，Qt6Qml 40、Qt6Quick 27.5（约 10 万块）、Qt6Gui 27、Qt6Core 10、显卡驱动约 5——全是设置窗口：它在后台把 11 页和“按键一览”都建好（给设置里的搜索用），关掉也留着（下次秒开）。UMDH 在这里不好用：栈数据库满了（`StackTraceDatabaseSizeInMb` 设大也一样），只记下几千块。
+- **做法**：页面上按“是什么”分：文件索引（块的驻留页，加上它在堆上的表）、缩略图（两个缓存的字节数）、用过空着的、程序本身（dll 私有页 + 线程栈）、窗口和数据（剩下的）。“用过空着的”不能用 `HeapSummary` 的 committed − allocated：归还以后那些页早已换出，算出来还是 25 MB；要 `HeapWalk` 找空闲块，再查其中整页是否驻留。`HeapSummary` 和 `HeapWalk` 都要拿堆锁、逐块走（45 万块约 20–40 ms），这期间界面线程一分配内存就得等，所以只在打开页面 3 秒后、归还后和每分钟走一次；记空闲块的数组用 `VirtualAlloc` 拿，走堆时不能从这个堆里分配。**2026-11-06 起不再走堆**：走堆会把归还的页读回来，见下文“看内存的页面自己把内存撑高”。
+- **QML**：`property var x: cond ? { a: 1 } : { a: 2 }` 里的 `{` 被当成代码块，加括号 `({ … })` 也一样拿到 undefined（qmlcachegen 编出来的）；改成数组加 `indexOf`。
+- **测试脚本**：`FindWindow(null, "设置 - Win顺")` 在 PowerShell 5.1 里拿不到窗口，WM_CLOSE 没发出去，量到的“关掉设置后”其实是开着的；按进程枚举窗口（`Win.cs` 的 `Find`）并确认 `MainWindowTitle` 变空。
+
+### 看内存的页面自己把内存撑高：不要 HeapWalk（2026-11-06）
+
+- **现象**：用户说“打开设置窗口，内存就涨到 300 多 MB，居高不下”“搜索后也是”。实测（每秒采私有工作集）：设置窗口停在运行状况页，归还后约每分钟冲回 250–270 MB；最小化也一样，一直不降。
+- **原因**：
+  - 运行状况页为了算“用过空着的”，打开后约 3 秒、归还后、之后每分钟都 `HeapWalk` 一遍所有堆。它要读每一块的块头，归还掉的页全被读回来。一个刚归还到 11 MB 的进程，开页 6 秒后就是 270 MB；手动“现在就归还”之后的下一次走堆，又把刚还掉的读了回来。
+  - 设置窗口打开后，会在后台把 11 页全部建好，给设置里的搜索用：每页约 20 MB，冷打开从 102 MB 涨到 327 MB。
+  - 窗口最小化以后，Windows 没有别的窗口可以激活时，它仍是前台窗口（`IsIconic`），Qt 的焦点窗口也还是它。空闲归还据此认为“正在用”，于是一直不还；运行状况页也照样每秒刷新。
+- **做法**：
+  - `memory::map` 只用 `QueryWorkingSetEx` 问页在不在，不读页面，不再 `HeapWalk`。“用过空着的”这一项去掉，并入“窗口和数据”。`tst_activity` 的 `memoryMapBringsNoPageBack` 先归还，再画内存图，然后检查堆上的页没有回来。
+  - 设置窗口只建打开的那一页，其余页面等用户去看时再建；搜索框拿到键盘时，才在后台把其余页面补齐（`fillInBackground`）。现在冷打开 +23 MB。
+  - 最小化的前台窗口不算在用（`IdleTrim::inUse`），最小化后约 13 秒归还；运行状况页最小化时也停止读数。
+- **没改的**：搜索本身就要逐条扫一遍文件名，一次会读回 150–230 MB。不预读的话，第一次搜索 155–190 MB，预读也只多 30–60 MB。这部分关掉启动器 20 秒后归还。
+
+## 设置页里的滚动（GitHub #229、#232，2026-11-06）
+
+### 插件日志滚到头，滚轮带着整页一起滚
+
+- **现象**：在“插件 › 开发者”的消息日志上滚滚轮，日志滚到顶或底后，再滚就变成整页在动，正在看的日志跟着跑出视野。
+- **原因**：日志是放在页面 Flickable 里的 ListView。Flickable 到了边界就不再接收滚轮，事件交给外层页面去滚。
+- **做法**：日志内容超出框时（`interactive: contentHeight > height`）挂上 `ListWheelScroll`，它的 WheelHandler 在 `interactive` 时接收所有滚轮，到了边界也不交给页面。内容不超出时不接收，滚轮照常滚整页。
+
+### 新消息来了，`positionViewAtEnd()` 差一行
+
+- **现象**：停在最底部的日志来了新消息，视图停在倒数第二行；第一次打开日志也差一行。
+- **原因**：在 QML 里用 `Connections` 接模型的 `rowsInserted`，它比 ListView 自己更早收到这个信号，这时调用 `positionViewAtEnd()`，ListView 还不知道新的这一行。打开时 `Component.onCompleted` 里定位，框的高度还没长到最终值。
+- **做法**：在 `rowsAboutToBeInserted` 时记下“是否停在最底部”，到 `rowsInserted` 再 `Qt.callLater(positionViewAtEnd)`；框长高（`onHeightChanged`）时同样处理。用户点开某条消息后就不再跟随，否则框变高时会把刚点开的那条挤出视野。
+
+### 测试：`named()` 找不到子组件里的对象
+
+- `Preview.cpp` 的 `named(window, id)` 只查 SettingsWindow.qml 自己的 id。按需建出来的页面、PluginDevSection 这类子组件里的对象，要给它设 `objectName`，再用 `visualNamed(window->contentItem(), …)` 按可见树查找。
+
+### 页面滚动条贴着窗口右边，抓不住
+
+- **现象**：离屏探针里悬停、拖动、点轨道都通过，真机 150% 下拖滚动条却没有反应，悬停也不变宽。
+- **原因**：设置窗口的缩放边框和系统边框一样粗（`SM_CXSIZEFRAME + SM_CXPADDEDBORDER`，150% 下 10 物理像素），而且在窗口里面。`ListScrollBar` 贴着右边，画出来的细线（物理 x 1960–1964，窗口右边 1970）整条落在边框里，`WM_NCHITTEST` 返回 `HTRIGHT`。按下去是在拖窗口边框，鼠标消息也到不了 QML。离屏探针不经过系统的命中测试，所以测不出来。
+- **做法**：和搜索面板的结果滚动条（Panel.qml）一样，加 `anchors.rightMargin: window.frame.resizeMargin(window.dpr)`。探针加了一条检查：滚动条右边不能进缩放边框。以后在可缩放窗口的右边放能点的东西，都要先让出 `resizeMargin`。
+
+## 搜索面板的预览标签（GitHub #224，2026-11-06）
+
+### 从预览窗口交给预览标签，Word 文档顶部被切掉
+
+- **现象**：预览窗口开着 docx，按 Ctrl+E 进入搜索面板，预览窗口收起，预览标签显示同一个文件。页面顶部被切掉一截，切掉多少取决于前一个窗口的尺寸：标签都是 606×688，前一个窗口是 696×1233 时约 190 物理像素，663×1233 时约 270 物理像素。滚轮也滚不回去，因为 Word 认为自己停在顶部。冷启动直接在标签里看、在标签里换行再换回来，都正常。
+- **原因**：两个预览区各有自己的 `PreviewHost`，但 Word 的预览程序在同一个代理进程里。窗口那边刚卸载，标签这边就新建，看起来 Word 沿用了上一个实例按它的尺寸排好的版面（从偏移量推断，没有 Word 内部的证据）。等区域尺寸稳定再启动（试过延后 150 ms）也没有用。
+- **做法**：`PreviewHost` 的 `start()` 在 `DoPreview()` 成功后，先用高 1 像素的矩形调一次 `SetRect`，再用原矩形调一次。尺寸变过，Word 就按当前尺寸重新排版。这时弹出窗口还没显示，看不到闪动。
+- **怎么复现**：开着预览窗口看 docx，先按 Ctrl+E 进入面板（全部范围），再点“内容”；或者直接在“内容”范围按 Ctrl+E。改之前两种都能稳定复现。
+
+## 发布探针的 Unicode 路径与前台权限（2026-11-07）
+
+- **现象** 本机把 MSVC 暂存目录设为项目内中文路径时，编译器配置报 D8050。同一目录改用已有的 8.3 短路径后配置和编译通过。维护项目整洁时，暂存目录仍须采用当前编译工具可处理的路径表示，验证编译器配置后再启动完整构建。
+- **原因与适用范围** Windows 环境变量的字节接口受 ANSI 代码页影响。探针将中文索引路径转成 UTF-8 再调用 `qputenv`，在本机代码页下产生乱码，插件库随后读取失败。先前尝试的 `SetEnvironmentVariableW` 只更新进程环境，未同步 Qt 读取的 CRT 环境表，现已改用 `_wputenv_s` 设置和恢复，并断言 Qt 能读回同一路径。夹具索引文件名加入中文，覆盖英文临时根目录上的同类回归。[Microsoft CRT 文档](https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/putenv-s-wputenv-s?view=msvc-170)
+- **验证方法** 使用生产插件库读取本地索引并实例化真实卡片，要求数据角色断言通过且日志无 QML 警告。将下载失败后的无效模型值送入卡片，只会增加次生警告，不能替代检查索引是否加载成功。
+- **前台权限** 后台测试进程可能没有初始前台权限。夹具准备阶段短暂连接当前前台线程的输入队列，取得自己窗口的前台后立即断开，随后才运行生产激活逻辑和原有断言。先切换到自己的另一个窗口再最小化后台目标，避免把前台交给其他应用。隐藏启动还可能影响首次 `ShowWindow`，夹具用 `SetWindowPos(SWP_SHOWWINDOW)` 并断言可见。禁止在生产激活断言期间保留输入队列连接，避免夹具替生产代码提供额外权限。[Windows 前台权限](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setforegroundwindow)、[输入队列接口](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-attachthreadinput)
+- **串行验证** 涉及前台、焦点和输入发送的测试与截图应串行执行。本轮并行截图期间粘贴测试失败，结束截图后完整测试连续三次通过。出现类似失败时先保留日志并排除同桌面的输入竞争，再判定生产逻辑问题。
+
+## 从搜索面板回到小框，框下多出一截空白（2026-11-06）
+
+- **现象**：结果少、小框不到 360 高时（比如“内容”范围只有两行），按 Ctrl+E 进面板再按 Ctrl+E 回来，框底下多出一截空白，窗口正好 360 逻辑像素高（150% 下 540 物理像素）。0.21.0 也是这样。
+- **原因**：Main.qml 里窗口高度（`Binding { property: "height"; when: !window.panel }`）和 `minimumHeight: panel ? 360 : 0` 都跟着 `panel` 变，先后顺序不固定。高度先写进去时，面板的最小高度 360 还在，窗口被卡在 360。之后 `layout.implicitHeight` 没再变，高度也就不会再写一次。
+- **做法**：高度的 Binding 改成 `when: !window.panel && window.minimumHeight === 0`，等最小高度回到 0 再写。两个属性跟着同一个开关变时，不要假设它们的求值顺序。

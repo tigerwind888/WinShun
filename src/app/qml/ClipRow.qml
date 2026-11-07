@@ -29,7 +29,7 @@ Item {
     required property bool screenshot // a picture Win顺's capture took: tagged 截图 (when in no group)
     required property bool pasted // pasted from the list before, with 粘贴后保持位置 on (else the last pasted is on top): a check mark
     property int hint: 0 // the number that pastes this row (Alt+1...); 0 for none
-    property bool reserveHintSpace: false // keep icons aligned when hints fade or a row has no number
+    property bool reserveHintSpace: false // keep one shared gutter, including rows beyond the nine numbered entries
     property string hintModifier: "Alt" // ... with this held
     property bool hintTaken: false // one of Win顺's own shortcuts has that chord: shown struck through
     property real hintOpacity: 1
@@ -43,18 +43,70 @@ Item {
     readonly property bool picture: kind === 4 || image.length > 0
     readonly property bool current: ListView.isCurrentItem
     readonly property int selectedCount: ListView.view ? ListView.view.model.selectedCount : 0
-    readonly property bool showActions: current || area.containsMouse || moveAction.held
+    // ... also while its handle is held: dragged, the row keeps them. Told by
+    // the lent buttons (not read from them: which set the row has follows this).
+    property bool handleHeld: false
+    readonly property bool showActions: current || area.containsMouse || handleHeld
+
+    // The buttons: a set the list lends while the row shows them
+    // (RowActionsPool, ClipActions), not one made in every row.
+    property RowActionsPool actionsPool: null
+    property Item borrowed: null
+    readonly property Item actions: borrowed !== null && borrowed.host === row ? borrowed : null
+    readonly property Item actionsArea: area // where a lent set sits
+    onShowActionsChanged: borrowActions()
+    function borrowActions() {
+        if (!actionsPool)
+            return
+        if (showActions) {
+            borrowed = actionsPool.take(row)
+        } else {
+            actionsPool.give(row)
+            borrowed = null
+        }
+    }
+    function giveActions() {
+        if (actionsPool)
+            actionsPool.give(row)
+        borrowed = null
+        handleHeld = false
+    }
+    Component.onCompleted: borrowActions()
+    Component.onDestruction: giveActions()
 
     // Out of sight while in the view's reuse pool. Qt (6.12) leaves a pooled
     // row drawn where it was, and taking the mouse, when a search drops rows
     // in several separate runs and the list declares a transition
     // (docs/pitfalls.md: 搜索后列表下方留着旧行). Shown again when reused.
-    ListView.onPooled: row.visible = false
-    ListView.onReused: row.visible = true
+    ListView.onPooled: {
+        row.visible = false
+        giveActions()
+    }
+    ListView.onReused: {
+        row.visible = true
+        borrowActions()
+    }
+
+    // Its handle (ClipActions) dragged to `position`, in the handle's coordinates.
+    function handleDragged(handle: Item, position: point) {
+        const view = row.ListView.view
+        if (!view)
+            return
+        const p = handle.mapToItem(view.contentItem, position.x, position.y)
+        const to = view.indexAt(row.width / 2, p.y)
+        const over = to >= 0 && to !== row.index ? view.itemAtIndex(to) : null
+        // Only where the mouse would be on this row once moved:
+        // rows of other heights (pictures) would swap it back.
+        // Below it or above it on the screen, whichever way the
+        // list is laid out.
+        if (over && (over.y > row.y ? p.y >= over.y + over.height - row.height : p.y < over.y + row.height))
+            row.moveRequested(row.index, to)
+    }
 
     signal clicked(int index, int modifiers)
     signal pasteRequested(int index) // its paste button, a double click
     signal previewRequested(int index) // that button, with clickToPaste; a middle click
+    signal hoverLeft(int index)
     signal dragRequested(int index)
     signal moveRequested(int from, int to) // its handle dragged over row `to`
     signal moveHeld(bool held) // its handle pressed, let go
@@ -62,40 +114,54 @@ Item {
     signal actionRequested(int index, int action)
     signal hoverMoved(int index, point globalPos) // the mouse moved over it (not pressed)
 
-    // Text on whole device pixels (see ResultRow).
-    function onPixel(y) { return Math.round(y * Screen.devicePixelRatio) / Screen.devicePixelRatio }
-    function upToPixel(y) { return Math.ceil(y * Screen.devicePixelRatio - 1e-6) / Screen.devicePixelRatio }
+    // The window's, read once here (GitHub #111); text on whole device pixels (see ResultRow).
+    readonly property real dpr: Screen.devicePixelRatio
+    function onPixel(y) { return Math.round(y * dpr) / dpr }
+    function upToPixel(y) { return Math.ceil(y * dpr - 1e-6) / dpr }
 
-    Rectangle {
+    // The style's highlight (Theme.rowHighlight). The current row's is the
+    // list's own, one for all its rows (ClipboardPage); here only the hover
+    // and the picked rows it does not cover. Made the first time it shows,
+    // then only hidden: rows pass under a still mouse while the list
+    // scrolls, and making the part on each was most of the styles' cost
+    // there (a dropped frame at 240 Hz).
+    readonly property bool sharedSelected: current && (selectedCount === 0 || order > 0)
+    Hook {
         anchors.fill: parent
-        anchors.leftMargin: 6
-        anchors.rightMargin: 6
-        anchors.topMargin: 1
-        anchors.bottomMargin: 1
-        radius: Theme.largeControlRadius
-        color: row.order > 0 || (row.current && row.selectedCount === 0) ? Theme.selection
-               : area.containsMouse ? Theme.hover : "transparent"
+        anchors.leftMargin: Theme.rowInset
+        anchors.rightMargin: Theme.rowInset
+        anchors.topMargin: Theme.edge(row.dpr)
+        anchors.bottomMargin: Theme.edge(row.dpr)
+        visible: !row.sharedSelected && (row.order > 0 || area.containsMouse)
+        lazy: true
+        part: Theme.rowHighlight
+        selected: row.order > 0
+        hovered: area.containsMouse
+        role: "list"
+        dpr: row.dpr
     }
 
-    Rectangle { // "固定" listed first: a line where the rest begin
+    Hook { // "固定" listed first: a line where the rest begin (the style's seam)
         visible: row.afterPinned
+        lazy: true // one row has it
         x: 16
         // On the edge toward those: the bottom one in a list laid out bottom
         // to top (the clipboard turned over, GitHub #38).
         y: row.ListView.view?.verticalLayoutDirection === ListView.BottomToTop ? parent.height - height : 0
         width: parent.width - 32
-        height: Theme.edge(Screen.devicePixelRatio)
-        color: Theme.divider
+        height: Theme.edge(row.dpr)
+        part: Theme.separator
+        dpr: row.dpr
     }
 
-    Rectangle { // accent pill on the current row
-        visible: row.current
-        x: 7
-        anchors.verticalCenter: parent.verticalCenter
-        width: 3
-        height: 18
-        radius: Theme.smallRadius
-        color: Theme.accent
+    Rectangle {
+        objectName: "clipboardRowSeparator"
+        visible: row.ListView.view !== null && row.index < row.ListView.view.count - 1
+        x: iconSlot.x
+        y: row.ListView.view?.verticalLayoutDirection === ListView.BottomToTop ? 0 : parent.height - height
+        width: Math.max(0, parent.width - x - 16)
+        height: Theme.edge(row.dpr)
+        color: Theme.divider
     }
 
     Item {
@@ -112,14 +178,14 @@ Item {
         Rectangle { // text and links: a sign on a soft tile
             anchors.fill: parent
             visible: row.kind <= 1 && row.swatch.length === 0
-            radius: 6
-            color: Theme.badge
+            radius: Theme.largeControlRadius
+            color: row.kind === 1 ? Theme.tok("clipLinkTint", Theme.badge) : Theme.tok("clipTextTint", Theme.badge) // a style may tint it as its file icons
 
             Glyph {
                 anchors.centerIn: parent
                 glyph: row.kind === 1 ? "" : "" // Link, Font
                 size: 16
-                color: Theme.accent
+                color: row.kind === 1 ? Theme.tok("clipLinkInk", Theme.accent) : Theme.tok("clipTextInk", Theme.accent)
             }
         }
 
@@ -176,12 +242,14 @@ Item {
                 // set, the aspect kept), then drawn pixel for pixel, on whole
                 // pixels: sharp. Kept scaled (ClipThumbnailProvider), so a row
                 // scrolled back to shows its picture at once.
-                x: Math.round((parent.width - width) / 2 * dpr) / dpr
+                x: 0 // the image's leading edge follows the same gutter as text/file icons
                 y: Math.round((parent.height - height) / 2 * dpr) / dpr
                 width: ready ? implicitWidth : parent.width
                 height: ready ? implicitHeight : parent.height
                 visible: ready
-                source: row.image
+                // Not while it is pooled (the roles are undefined then, which a
+                // source takes for the file "undefined"): a source has a scheme.
+                source: row.image.indexOf(":") > 0 ? row.image : ""
                 // An image provider: sourceSize in logical pixels (Qt asks
                 // for it times the device pixel ratio); the implicit size is
                 // its pixels over the ratio.
@@ -244,7 +312,7 @@ Item {
         anchors.left: iconSlot.right
         anchors.leftMargin: 12
         anchors.right: parent.right
-        anchors.rightMargin: (row.showActions ? actions.width + actions.anchors.rightMargin
+        anchors.rightMargin: (row.showActions ? (row.actions !== null ? row.actions.actionsWidth : 0) + 14
                               : badge.visible ? badge.width + badge.anchors.rightMargin : 8) + 8
         spacing: 4
 
@@ -311,7 +379,7 @@ Item {
         objectName: "clipboardNumberSlot"
         visible: row.reserveHintSpace && row.hint > 0
         opacity: row.hintOpacity
-        x: row.onPixel(14)
+        x: row.onPixel(Theme.tok("clipHintX", 14))
         width: 24
         height: row.height
 
@@ -334,6 +402,7 @@ Item {
         anchors.fill: parent
         hoverEnabled: true
         acceptedButtons: Qt.LeftButton | Qt.MiddleButton | Qt.RightButton
+        onExited: row.hoverLeft(row.index)
         onPressed: (mouse) => {
             draggedOut = false
             pressedAt = Qt.point(mouse.x, mouse.y)
@@ -370,71 +439,11 @@ Item {
             else if (mouse.button === Qt.MiddleButton)
                 row.previewRequested(row.index)
         }
-
-        Row {
-            id: actions
-            visible: row.showActions
-            anchors.right: parent.right
-            anchors.rightMargin: 14
-            anchors.verticalCenter: parent.verticalCenter
-            spacing: 2
-
-            RowAction { // dragged up or down: to another place in its group
-                id: moveAction
-                small: row.metrics.dense
-                visible: row.movable
-                draggable: true
-                glyph: "" // GripperBarHorizontal
-                tip: qsTr("拖动调整顺序")
-                tipShortcut: "Ctrl+↑/↓"
-                onHeldChanged: row.moveHeld(held)
-                onDragMoved: (position) => {
-                    const view = row.ListView.view
-                    if (!view)
-                        return
-                    const p = moveAction.mapToItem(view.contentItem, position.x, position.y)
-                    const to = view.indexAt(row.width / 2, p.y)
-                    const over = to >= 0 && to !== row.index ? view.itemAtIndex(to) : null
-                    // Only where the mouse would be on this row once moved:
-                    // rows of other heights (pictures) would swap it back.
-                    // Below it or above it on the screen, whichever way the
-                    // list is laid out.
-                    if (over && (over.y > row.y ? p.y >= over.y + over.height - row.height : p.y < over.y + row.height))
-                        row.moveRequested(row.index, to)
-                }
-            }
-            RowAction { // a click pastes already (clickToPaste): the preview here instead
-                id: pasteAction
-                small: row.metrics.dense
-                glyph: row.clickToPaste ? "" : "" // View, Paste
-                tip: row.clickToPaste ? qsTr("预览") : row.pasteTip
-                tipShortcut: row.clickToPaste ? "Alt+P" : "Enter"
-                onClicked: row.clickToPaste ? row.previewRequested(row.index) : row.pasteRequested(row.index)
-            }
-            RowAction {
-                id: pinAction
-                small: row.metrics.dense
-                glyph: row.pinned ? "" : "" // Unpin, Pin
-                tip: row.pinned ? qsTr("取消固定") : qsTr("固定（不会过期）")
-                tipShortcut: "Ctrl+P"
-                onClicked: row.actionRequested(row.index, Clipboard.Pin)
-            }
-            RowAction {
-                id: removeAction
-                small: row.metrics.dense
-                glyph: "" // Delete
-                tip: qsTr("删除")
-                tipShortcut: "Delete"
-                onClicked: row.actionRequested(row.index, Clipboard.Remove)
-            }
-        }
     }
 
     HoverTip {
-        readonly property RowAction hovered: moveAction.tipWanted ? moveAction
-                                           : pasteAction.tipWanted ? pasteAction
-                                           : pinAction.tipWanted ? pinAction
-                                           : removeAction.tipWanted ? removeAction : null
+        dpr: row.dpr
+        readonly property RowAction hovered: row.actions !== null ? row.actions.hovered : null
         readonly property bool onKeys: !hovered && numberSlot.visible && numberSlot.opacity > 0 && row.hintTaken && area.containsMouse // (a hover handler under the area gets no hover)
                                           && numberSlot.contains(numberSlot.mapFromItem(area, area.mouseX, area.mouseY))
         readonly property bool onMark: !hovered && !onKeys && pastedMark.visible && area.containsMouse

@@ -12,6 +12,10 @@ The recording controls switch between Area and Full screen. Full screen includes
 
 Presenter and whiteboard (1.1.0): Screenshot › Presenter / whiteboard in the tray menu or `cap whiteboard`; record a hotkey for it under Shortcuts in the capture settings (none by default). It draws on the live desktop; `X` is a laser pointer, `Esc` or a right click hands the mouse and keyboard back to the programs below, `W` is a whiteboard and `K` a blackboard.
 
+识别屏幕文字（#198）：在截图设置的“快捷键”里另录一个“识别屏幕文字”的快捷键（默认不设），或用托盘菜单“截图 › 识别屏幕文字”、`cap` 搜索。按下后直接拖选一块或单击窗口，松开鼠标就识别并复制，不显示截图工具条，不写入截图历史，也不贴图、保存；选区旁的小卡片显示“已复制”和前几行字，“编辑”打开识别文字窗口。`Esc` 或右键取消。
+
+Read text on screen (#198): record a separate “Read text on screen” shortcut under Shortcuts in the capture settings (none by default), or use Screenshot › Read text on screen in the tray menu or `cap`. Drag over an area or click a window; when you let go its text is read and copied, with no capture toolbar, nothing in the screenshot history, no pin and no save. A small card beside the area says Copied and shows the first lines; Edit opens the OCR window. `Esc` or a right click cancels.
+
 1.1.0 的其他变化：贴图、保存、贴图窗口的按键可以在截图设置的“按键”里改；`WASD` 挪指针；截图时左下角有快捷键提示；工具条分两行；设置页改成卡片；共用的 PaddleOCR 文字识别读取部分有改动。
 
 Other changes in 1.1.0: the keys for pin, save and the pin window can be changed under Keys in the capture settings; `WASD` moves the pointer; shortcut hints at the bottom left while capturing; a two-row toolbar; the settings as cards; the shared PaddleOCR text reader changed.
@@ -19,6 +23,10 @@ Other changes in 1.1.0: the keys for pin, save and the pin window can be changed
 1.1.2：截图设置第一次打开时不再卡住、显示“无响应”，电脑很忙时也能马上打开。权限不变。
 
 Version 1.1.2: the capture settings no longer freeze with “Not responding” the first time they open; they open promptly even on a busy computer. Permissions are unchanged.
+
+1.1.3：“识别屏幕文字”有了自己的快捷键（#198）；贴图缩放步子更细并显示百分比，`Ctrl`+滚轮显示透明度，标注的粗细、字号、马赛克格子用滚轮或 `[` `]` 细调（#164）；显卡没有 D3D11 视频功能时录屏改用 CPU 转换画面（#214）；二维码的“打开链接”直接用浏览器打开（需要 Win顺 0.21.0，#225）；窗口跟着 Win顺 设置里的界面风格变；闲着时把内存还给系统。权限不变。
+
+Version 1.1.3: Read text on screen has a hotkey of its own (#198); pin zoom steps are finer and show the percentage, `Ctrl`+wheel shows the opacity, and the wheel or `[` `]` set annotation width, text size and mosaic cell finely (#164); without D3D11 video support recording converts frames on the CPU (#214); Open link on a QR code opens the browser (needs WinShun 0.21.0, #225); the windows follow the interface style chosen in WinShun; idle memory goes back to Windows. Permissions are unchanged.
 
 ## 权限 / Permissions
 

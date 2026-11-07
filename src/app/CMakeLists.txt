@@ -36,6 +36,8 @@ foreach(model IN LISTS ocr_models)
 endforeach()
 
 qt_add_executable(WinShun WIN32
+    platform/WindowSearch.cpp platform/WindowSearch.h
+    InteractionOptimizationProbe.cpp InteractionOptimizationProbe.h
     main.cpp
     DropPieHelper.cpp DropPieHelper.h
     AiSettings.cpp AiSettings.h
@@ -59,10 +61,14 @@ qt_add_executable(WinShun WIN32
     PieLabels.cpp PieLabels.h
     Phosphor.cpp Phosphor.h
     Preview.cpp Preview.h
+    PreviewInteractionProbe.cpp PreviewInteractionProbe.h
+    NavigationProbe.cpp NavigationProbe.h
+    ForegroundMemoryProbe.cpp ForegroundMemoryProbe.h
     ClipScrollBench.cpp ClipScrollBench.h
     ContentPaneProbe.cpp ContentPaneProbe.h
     RecentFolders.cpp RecentFolders.h
     Settings.cpp Settings.h
+    UiFont.cpp UiFont.h
     SiteIconImage.cpp SiteIconImage.h
     SvgIcon.cpp SvgIcon.h
     Switches.cpp Switches.h SwitchBackend.h
@@ -87,12 +93,18 @@ qt_add_executable(WinShun WIN32
     platform/HoldWatch.cpp platform/HoldWatch.h
     platform/Http.cpp platform/Http.h
     platform/IdleTrim.cpp platform/IdleTrim.h
+    platform/MemoryReport.cpp platform/MemoryReport.h
+    ActivityText.cpp ActivityText.h
+    BackgroundStatus.cpp BackgroundStatus.h
+    HealthMonitor.cpp HealthMonitor.h
+    platform/ProcessUsage.cpp platform/ProcessUsage.h
+    platform/InputMode.cpp platform/InputMode.h
     platform/Integrity.cpp platform/Integrity.h
     platform/KeyListener.cpp platform/KeyListener.h
     platform/PieDrop.cpp platform/PieDrop.h
     platform/ServiceDialogNav.cpp platform/ServiceDialogNav.h
     platform/ServiceKeyListener.cpp platform/ServiceKeyListener.h
-    platform/KeyRouter.cpp platform/KeyRouter.h
+    platform/KeyRouter.cpp platform/KeyRouter.h platform/QtKeys.h
     platform/MessageWindow.cpp platform/MessageWindow.h platform/NotificationTurns.h
     platform/MonoLogo.cpp platform/MonoLogo.h
     platform/NetworkNotifier.cpp platform/NetworkNotifier.h
@@ -125,10 +137,12 @@ set(qml_files
     qml/Main.qml
     qml/SearchKeys.qml
     qml/Theme.qml
+    qml/Hook.qml
     qml/UiScale.qml
     qml/WindowEdge.qml
     qml/SearchBar.qml
     qml/ScopeTabs.qml
+    qml/HealthPage.qml
     qml/TypeStrip.qml
     qml/ResultRow.qml
     qml/ElsewhereCaption.qml
@@ -150,17 +164,27 @@ set(qml_files
     qml/ClipTabs.qml
     qml/ClipRow.qml
     qml/ClipPreview.qml
+    qml/ClipHoverPreview.qml
     qml/RowAction.qml
+    qml/RowActionsPool.qml
+    qml/ResultActions.qml
+    qml/ClipActions.qml
     qml/ListScrollBar.qml
     qml/ScrollPixelAlignment.qml
     qml/ListWheelScroll.qml
     qml/ContextMenu.qml
+    qml/QueryHistoryPicker.qml
+    qml/PluginReadmeDialog.qml
     qml/DialogBarWindow.qml
     qml/DialogBarRow.qml
     qml/FolderMenuWindow.qml
+    qml/MenuPathTip.qml
+    qml/FontPicker.qml
+    qml/ClipGroupPicker.qml
     qml/DropPieWindow.qml
     qml/SoftShadow.qml
     qml/PreviewWindow.qml
+    qml/PreviewBody.qml
     qml/HoverTip.qml
     qml/ShortcutTip.qml
     qml/Shortcuts.qml
@@ -186,6 +210,7 @@ set(qml_files
     qml/ToggleSwitch.qml
     qml/SwitchLevel.qml
     qml/FlatButton.qml
+    qml/Caret.qml
     qml/InputBox.qml
     qml/WebSearchOptions.qml
     qml/WebShortcutForm.qml
@@ -234,6 +259,23 @@ foreach(file IN LISTS qml_files)
     set_source_files_properties("${file}" PROPERTIES QT_RESOURCE_ALIAS "${name}")
 endforeach()
 
+# The 界面风格 (themes/README.md): each style's Look and parts, served at
+# ":/qt/qml/WinShun/themes/<style>/" and loaded by URL (Theme.qml). Not types
+# of the module: every style names its parts the same, so no qmldir entries,
+# and no qmldir per folder either (NO_GENERATE_EXTRA_QMLDIRS) or the folder
+# would defer to the module's and its parts not be found.
+file(GLOB theme_qml CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/qml/themes/*/*.qml")
+# Pictures a style's parts use (tactile's grain), beside its parts.
+file(GLOB theme_images CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/qml/themes/*/*.png")
+foreach(file IN LISTS theme_qml)
+    file(RELATIVE_PATH alias "${CMAKE_CURRENT_SOURCE_DIR}/qml" "${file}")
+    set_source_files_properties("${file}" PROPERTIES QT_RESOURCE_ALIAS "${alias}" QT_QML_SKIP_QMLDIR_ENTRY TRUE)
+endforeach()
+foreach(file IN LISTS theme_images)
+    file(RELATIVE_PATH alias "${CMAKE_CURRENT_SOURCE_DIR}/qml" "${file}")
+    set_source_files_properties("${file}" PROPERTIES QT_RESOURCE_ALIAS "${alias}")
+endforeach()
+
 # Pictures of the 拾穗计划 page, and the sound its avatar plays when pressed,
 # at ":/qt/qml/WinShun/gleaning/".
 set(gleaning_images
@@ -262,8 +304,9 @@ qt_add_qml_module(WinShun
     URI WinShun
     VERSION 1.0
     ${qml_import_scan}
-    QML_FILES ${qml_files}
-    RESOURCES ${gleaning_images}
+    NO_GENERATE_EXTRA_QMLDIRS
+    QML_FILES ${qml_files} ${theme_qml}
+    RESOURCES ${gleaning_images} ${theme_images}
     SOURCES
         ../core/KeepAwakeText.h
         AuthorMark.cpp AuthorMark.h
@@ -293,6 +336,7 @@ qt_add_qml_module(WinShun
         Placement.cpp Placement.h
         PluginGallery.cpp PluginGallery.h
         PluginSettings.cpp PluginSettings.h
+        PluginReadme.cpp PluginReadme.h
         PluginUpdates.cpp PluginUpdates.h # the installed plugins kept up to date in the background
         MovedPlugins.cpp MovedPlugins.h # the plugins that came with 0.16.0, from the library now (GitHub #138)
         platform/OcrPackage.cpp platform/OcrPackage.h

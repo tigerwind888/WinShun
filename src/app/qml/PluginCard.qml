@@ -51,6 +51,7 @@ Rectangle {
     // 确认; "unavailable" and "confirming" (the copy being made) the line alone.
     required property string elevation
     required property string elevationNote
+    required property string elevationProblem // why the last 确认 did not work: under the note, here where it was clicked
     property bool marked: false // what the settings search found
     property bool expanded: false
     property bool animated: true // not in the offscreen preview: it draws no frames to run them
@@ -83,9 +84,22 @@ Rectangle {
 
     implicitHeight: body.implicitHeight + 24
     radius: Theme.controlRadius
-    color: marked ? Theme.selection : "transparent"
-    border.width: 1
-    border.color: Theme.cardBorder
+    color: "transparent"
+
+    Hook { // the style's card (Theme.cardPart), a plate inside the section's
+        anchors.fill: parent
+        part: Theme.cardPart
+        corner: Theme.controlRadius
+        extra: ({ inset: true })
+        dpr: card.dpr
+    }
+    Rectangle { // found by the settings search: the card's face, marked
+        visible: card.marked
+        anchors.fill: parent
+        anchors.margins: Theme.edge(card.dpr)
+        radius: Math.max(0, Theme.controlRadius - Theme.edge(card.dpr))
+        color: Theme.selection
+    }
 
     Rectangle { // found by the settings search: a mark by the name, as SettingRow has
         visible: card.marked
@@ -226,7 +240,7 @@ Rectangle {
                             y: Math.round(statusText.y + statusText.fontInfo.pixelSize * 0.62 - height / 2)
                             width: 8
                             height: 8
-                            radius: 4
+                            radius: Theme.pillRadius(width)
                             color: card.toneColor
 
                             SequentialAnimation on opacity { // starting
@@ -256,43 +270,50 @@ Rectangle {
                     Repeater {
                         model: card.keywords.filter(k => k.keyword.length > 0)
 
-                        delegate: Rectangle { // the keyword, as keys to press; a click goes to its box
+                        delegate: Item { // the keyword, as keys to press; a click goes to its box
                             id: keycap
 
                             required property var modelData
 
                             width: Math.max(28, keycapText.implicitWidth + 14)
                             height: 24
-                            radius: Theme.controlRadius
-                            color: Theme.keycap
 
+                            Hook { // the style's key (Theme.keySurface): it can be pressed
+                                id: keycapPart
+                                anchors.fill: parent
+                                part: Theme.keySurface
+                                hovered: keycapArea.containsMouse
+                                pressed: keycapArea.pressed
+                                role: "toolbar"
+                                dpr: card.dpr
+                            }
                             Text {
                                 id: keycapText
                                 anchors.centerIn: parent
+                                anchors.verticalCenterOffset: keycapPart.out("contentOffsetY", 0)
                                 text: keycap.modelData.keyword
                                 textFormat: Text.PlainText
-                                color: keycap.modelData.conflict.length > 0 ? Theme.danger : Theme.text
+                                color: keycap.modelData.conflict.length > 0 ? Theme.danger : keycapPart.out("foreground", Theme.text)
                                 font.pixelSize: Theme.fontCaption
                             }
                             MouseArea {
+                                id: keycapArea
                                 anchors.fill: parent
+                                hoverEnabled: true
                                 cursorShape: Qt.PointingHandCursor
                                 onClicked: card.focusKeyword(keycap.modelData.command)
                             }
                         }
                     }
                 }
-                Item { // `elevated` waits for the user (or cannot be): why, and the one click
+                Column { // `elevated` waits for the user (or cannot be): why, what the last 确认 came to, and the one click
                     visible: card.elevation === "unconfirmed" || card.elevation === "changed" || card.elevation === "unavailable"
                              || card.elevation === "confirming"
                     width: parent.width
-                    height: visible ? elevationText.implicitHeight + (confirmButton.visible ? 6 + confirmButton.height : 0) : 0
+                    spacing: 6
 
                     Text {
-                        id: elevationText
-                        anchors.left: parent.left
-                        anchors.right: parent.right
-                        anchors.top: parent.top
+                        width: parent.width
                         text: card.elevationNote
                         textFormat: Text.PlainText
                         color: Theme.caution
@@ -300,13 +321,24 @@ Rectangle {
                         wrapMode: Text.Wrap
                         lineHeight: 1.15
                     }
+                    Text {
+                        objectName: "elevationProblem"
+                        visible: card.elevationProblem.length > 0
+                        width: parent.width
+                        text: card.elevationProblem
+                        textFormat: Text.PlainText
+                        color: Theme.danger
+                        font.pixelSize: Theme.fontCaption
+                        wrapMode: Text.Wrap
+                        lineHeight: 1.15
+                    }
                     FlatButton {
-                        id: confirmButton
+                        dpr: card.dpr
+                        objectName: "elevationConfirm"
                         visible: card.elevation === "unconfirmed" || card.elevation === "changed"
                         anchors.right: parent.right
-                        anchors.bottom: parent.bottom
                         implicitHeight: 28
-                        text: qsTr("确认")
+                        text: card.elevationProblem.length > 0 ? qsTr("再试一次") : qsTr("确认")
                         onClicked: card.plugins.confirmElevation(card.pluginId)
                     }
                 }
@@ -319,6 +351,7 @@ Rectangle {
                 spacing: 8
 
                 FlatButton { // the plugin's own window, while it runs
+                    dpr: card.dpr
                     anchors.verticalCenter: parent.verticalCenter
                     visible: card.settingsWindow && card.usable && card.pluginEnabled
                     implicitHeight: 32
@@ -326,12 +359,14 @@ Rectangle {
                     onClicked: card.plugins.showSettings(card.pluginId)
                 }
                 ToggleSwitch {
+                    dpr: card.dpr
                     anchors.verticalCenter: parent.verticalCenter
                     enabled: card.usable
                     checked: card.pluginEnabled
                     onToggled: (on) => card.plugins.setEnabled(card.pluginId, on)
                 }
                 FlatButton { // the menu: 说明, 打开文件夹, 重新加载, 查看日志, 卸载
+                    dpr: card.dpr
                     id: menuButton
                     anchors.verticalCenter: parent.verticalCenter
                     implicitHeight: 32
@@ -472,6 +507,7 @@ Rectangle {
                                     elide: Text.ElideRight
                                 }
                                 InputBox {
+                                    dpr: card.dpr
                                     id: keywordBox
                                     anchors.left: keywordLabel.right
                                     anchors.leftMargin: 8
@@ -487,6 +523,7 @@ Rectangle {
                                     }
                                 }
                                 FlatButton { // the keyword was changed: back to the plugin's
+                                    dpr: card.dpr
                                     id: resetButton
                                     visible: keywordCell.modelData.user
                                     anchors.right: parent.right
@@ -542,6 +579,7 @@ Rectangle {
                     }
                 }
                 ToggleSwitch {
+                    dpr: card.dpr
                     id: aiSwitch
                     anchors.right: parent.right
                     y: Math.round((aiColumn.implicitHeight - height) / 2)
@@ -696,6 +734,7 @@ Rectangle {
                             Component {
                                 id: boolControl
                                 ToggleSwitch {
+                                    dpr: card.dpr
                                     checked: settingRow.modelData.value === true
                                     onToggled: (on) => card.plugins.setSettingValue(card.pluginId, settingRow.modelData.key, on)
                                 }
@@ -754,6 +793,7 @@ Rectangle {
                                         onActivated: (index) => choice.choose(index)
                                     }
                                     FlatButton {
+                                        dpr: card.dpr
                                         id: menuButton
                                         visible: !choice.fits
                                         implicitHeight: 32
@@ -788,6 +828,7 @@ Rectangle {
                                         elide: Text.ElideMiddle
                                     }
                                     FlatButton {
+                                        dpr: card.dpr
                                         implicitHeight: 32
                                         text: qsTr("选择")
                                         onClicked: settingRow.kind === "folder" ? card.plugins.pickFolderSetting(card.pluginId, settingRow.modelData.key)

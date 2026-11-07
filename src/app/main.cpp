@@ -1,3 +1,4 @@
+#include "UiFont.h"
 #include "App.h"
 #include "ClipboardDisplay.h"
 #include "ContextMenuGuard.h"
@@ -11,6 +12,8 @@
 #include "Preview.h"
 #include "RepeatFilter.h"
 #include "Settings.h"
+#include "StartupAccess.h"
+#include "platform/Integrity.h"
 #include "UninstallCleanup.h"
 #include "WindowFrame.h"
 #include "SettingsCommand.h"
@@ -155,54 +158,6 @@ bool raiseStreamLimit()
     return _setmaxstdio(8192) == 8192;
 }
 
-// UI font: complete Alibaba PuHuiTi 3.0 Regular from fonts\ next to the
-// exe. It covers Latin and CJK, so no fallback is needed for normal text.
-// Without the files, the system UI font (Microsoft YaHei UI) is kept;
-// never "Segoe UI Variable", whose CJK fallback costs ~35 MB of memory.
-//
-// Given by file name, FreeType (the engine of the GPU renderer) opens the
-// file through the C runtime, which cannot take a path outside the ANSI
-// code page (F:\电脑便捷工具\…, D:\软件\WinShun): the font silently stayed
-// unloaded and the window came up in Microsoft YaHei UI. Such a path is
-// read here and handed over as data (the ~8 MB of each file stay in
-// memory then; by name the face is read from disk as needed). What came of
-// it, for the diagnostics record.
-QJsonObject applyUiFont()
-{
-    QString uiFamily;
-    QJsonArray files;
-    const QString fontDir = QCoreApplication::applicationDirPath() + u"/fonts/"_s;
-    bool ascii = true;
-    for (const QChar c : fontDir)
-        ascii = ascii && c.unicode() < 128;
-    for (const QString& file : {u"AlibabaPuHuiTi-3-55-Regular.ttf"_s}) {
-        int id = -1;
-        if (ascii) {
-            id = QFontDatabase::addApplicationFont(fontDir + file);
-        } else {
-            QFile data(fontDir + file);
-            if (data.open(QIODevice::ReadOnly))
-                id = QFontDatabase::addApplicationFontFromData(data.readAll());
-        }
-        const QStringList families = QFontDatabase::applicationFontFamilies(id);
-        if (uiFamily.isEmpty() && !families.isEmpty())
-            uiFamily = families.first(); // Qt synthesizes heavier weights from the complete regular font
-        files.append(QJsonObject {{u"file"_s, file}, {u"loaded"_s, id >= 0}});
-    }
-    QJsonObject loaded {{u"by"_s, ascii ? u"file"_s : u"data"_s}, {u"files"_s, files}};
-    if (uiFamily.isEmpty()) {
-        qWarning("UI font: nothing loaded from %s, using the system font", qUtf8Printable(QDir::toNativeSeparators(fontDir)));
-        loaded[u"family"_s] = QGuiApplication::font().family();
-        return loaded;
-    }
-    QFont font(uiFamily);
-    // Vertical only: full hinting also moves glyphs sideways ("you ng").
-    font.setHintingPreference(QFont::PreferVerticalHinting);
-    QGuiApplication::setFont(font);
-    loaded[u"family"_s] = uiFamily;
-    return loaded;
-}
-
 // The program's icon in the title bars (TitleBar.qml), from the file's own.
 // Native separators: the shell does not parse "F:/..." and the generic
 // program icon would come back.
@@ -212,19 +167,10 @@ void setWindowIcon()
 }
 
 // The arguments as one command line (CreateProcess, ShellExecute): quoted
-// where they have spaces (a --profile folder), quotes escaped.
+// with the same Windows quoting used for custom commands and file paths.
 std::wstring commandLine(const QStringList& arguments)
 {
-    QString line;
-    for (const QString& argument : arguments) {
-        if (!line.isEmpty())
-            line += u' ';
-        if (argument.isEmpty() || argument.contains(u' ') || argument.contains(u'"') || argument.contains(u'\t'))
-            line += u'"' + QString(argument).replace(u'"', u"\\\""_s) + u'"';
-        else
-            line += argument;
-    }
-    return line.toStdWString();
+    return ws::startupaccess::commandLine(arguments).toStdWString();
 }
 
 // Starts the new copy once this one has let go (see main): as this one ran,
@@ -232,20 +178,24 @@ std::wstring commandLine(const QStringList& arguments)
 // back at all), or with the user's normal rights (through the desktop
 // shell's token while this one is elevated; without a shell, as this one
 // ran, and the log says so).
-void startAgain(const QStringList& arguments, ws::App::Elevation elevation)
+bool startAgain(const QStringList& arguments, ws::App::Elevation elevation)
 {
     const QString exe = QCoreApplication::applicationFilePath();
     const std::wstring program = QDir::toNativeSeparators(exe).toStdWString();
     const std::wstring folder = QDir::toNativeSeparators(QCoreApplication::applicationDirPath()).toStdWString();
     if (elevation == ws::App::Elevation::Elevated && ws::shell::startElevated(program, commandLine(arguments), folder))
-        return;
+        return true;
     if (elevation == ws::App::Elevation::Unelevated) {
         if (ws::shell::startUnelevated(program, commandLine(arguments), folder).valid())
-            return;
+            return true;
         qWarning() << "Restart: no shell to start Win顺 with normal rights; started as before";
     }
-    if (!QProcess::startDetached(exe, arguments))
+    const auto fallback = elevation == ws::App::Elevation::Elevated ? ws::startupaccess::fallbackArguments(arguments) : arguments;
+    if (!QProcess::startDetached(exe, fallback)) {
         qWarning() << "Restart: could not start" << exe;
+        return false;
+    }
+    return true;
 }
 
 } // namespace
@@ -316,7 +266,7 @@ int main(int argc, char* argv[])
         QGuiApplication previewApp(argc, argv);
         QGuiApplication::setApplicationDisplayName(u"Win顺"_s);
         ws::preview::note(u"loading the font"_s);
-        applyUiFont();
+        ws::uifont::initialize();
         ws::phosphor::loadFonts();
         setWindowIcon();
         if (clipboardDisplay) return ws::runClipboardDisplay(wideArgs);
@@ -381,10 +331,12 @@ int main(int argc, char* argv[])
     settingsAt.setFlags(QCommandLineOption::HiddenFromHelp);
     QCommandLineOption profile(u"profile"_s, u"Keep the settings and data in this folder."_s, u"folder"_s);
     profile.setFlags(QCommandLineOption::HiddenFromHelp); // read above
+    QCommandLineOption unelevatedOnce(u"startup-unelevated"_s, u"Continue this launch after elevation was declined."_s);
+    unelevatedOnce.setFlags(QCommandLineOption::HiddenFromHelp);
     // For tests: the running copy writes what its launcher shows into this file (App::dumpLauncher).
     QCommandLineOption dump(u"dump"_s, u"Write the launcher's rows and state to this file."_s, u"file"_s);
     dump.setFlags(QCommandLineOption::HiddenFromHelp);
-    parser.addOptions({background, toggle, query, quit, settings, settingsAt, takeAutostart, hadAutostart, uninstallCleanup, profile, dump});
+    parser.addOptions({background, toggle, query, quit, settings, settingsAt, takeAutostart, hadAutostart, uninstallCleanup, profile, dump, unelevatedOnce});
     parser.process(app);
 
     // Before the instance check: it ends this copy itself and must not hand
@@ -441,6 +393,17 @@ int main(int argc, char* argv[])
     if (portable)
         ws::copyIntoPortable(); // its first start: what the usual places hold
     ws::Backup::applyRestored(); // a backup chosen to restore, before the settings are read
+    if (ws::startupaccess::needsElevation(ws::startupaccess::storedMode(ws::Settings::filePath()), ws::userIsAdministrator(),
+            ws::integrity::processElevated(), parser.isSet(unelevatedOnce))) {
+        // Honor the saved mode for manual starts too, before creating an
+        // index or a window. The new copy must acquire the instance mutex.
+        QStringList arguments = QCoreApplication::arguments().mid(1);
+        if (!ws::Settings::profile().isEmpty())
+            arguments << u"--profile"_s << ws::Settings::profile(); // absolute, even when the caller passed a relative folder
+        if (instanceMutex)
+            ::CloseHandle(instanceMutex);
+        return startAgain(arguments, ws::App::Elevation::Elevated) ? 0 : 1;
+    }
     ws::diagnostics::initialize(ws::Settings::dataDir());
     ws::diagnostics::record(u"app-start"_s, ws::diagnostics::environment());
     g_defaultHandler = qInstallMessageHandler(logToFile); // the running copy only
@@ -448,7 +411,7 @@ int main(int argc, char* argv[])
     if (!manyStreams)
         qWarning("Fonts: only %d C runtime streams; with many fonts installed, text may turn into boxes", _getmaxstdio());
 
-    QJsonObject uiFont = applyUiFont(); // the UI font (see above)
+    QJsonObject uiFont = ws::uifont::initialize(); // bundled fallback and font-loading diagnostics
     ws::phosphor::loadFonts(); // the icons
     setWindowIcon();
     uiFont[u"platform"_s] = platform;
@@ -478,6 +441,6 @@ int main(int argc, char* argv[])
     // command. It runs with whatever rights this one had (no UAC prompt),
     // unless the 索引方式 setting asked for others (App::Elevation).
     if (restart)
-        startAgain(*restart, elevation);
+        code = startAgain(*restart, elevation) ? 0 : 1;
     return code; // logShutdown: the open counts and the handler, after the application object
 }

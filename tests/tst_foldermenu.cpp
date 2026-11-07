@@ -9,6 +9,9 @@
 #include "platform/WindowEffects.h"
 
 #include <QDir>
+#include <memory>
+#include <QGuiApplication>
+#include <QStandardPaths>
 #include <QFile>
 #include <QSignalSpy>
 #include <QTemporaryDir>
@@ -104,8 +107,9 @@ private slots:
         qmlRegisterType<PhosphorGlyph>("WinShun", 1, 0, "PhosphorGlyph");
         const QUrl folder = QUrl::fromLocalFile(QStringLiteral(WINSHUN_QML_DIR) + u'/');
         qmlRegisterSingletonType(folder.resolved(QUrl(u"Theme.qml"_s)), "WinShun", 1, 0, "Theme");
-        const int font = QFontDatabase::addApplicationFont(
-            QCoreApplication::applicationDirPath() + u"/fonts/AlibabaPuHuiTi-3-55-Regular.ttf"_s);
+        QFile data(QCoreApplication::applicationDirPath() + u"/fonts/AlibabaPuHuiTi-3-55-Regular.ttf"_s);
+        QVERIFY(data.open(QIODevice::ReadOnly));
+        const int font = QFontDatabase::addApplicationFontFromData(data.readAll());
         if (font >= 0)
             QGuiApplication::setFont(QFont(QFontDatabase::applicationFontFamilies(font).first()));
     }
@@ -253,6 +257,162 @@ private slots:
         menu.trigger(removedIndex);
         QCOMPARE(notice.size(), 1);
         QVERIFY(notice.first().first().toString().contains(u"已移除"));
+    }
+
+    // Copy path (GitHub #137): on the desktop the folder is the Desktop
+    // directory; the entry puts it on the clipboard as plain native text, and
+    // its switch hides it. Where there is no folder (the hotkey over a window
+    // that is not a file manager) the entry is not offered at all.
+    void copyPath()
+    {
+        const HWND previous = ::GetForegroundWindow();
+        const auto restore = qScopeGuard([&] {
+            if (::IsWindow(previous))
+                ::SetForegroundWindow(previous);
+        });
+        DesktopFixture desktop(L"WorkerW");
+        QVERIFY(desktop.root && desktop.view && desktop.list);
+        desktop.show(true);
+        const POINT pt = desktop.point();
+        const HWND clicked = ::WindowFromPoint(pt);
+        QCOMPARE(clicked, desktop.view);
+        // The menu only comes up where it was asked for: put the fixture in front.
+        std::unique_ptr<QWindow> wrapped(QWindow::fromWinId(reinterpret_cast<WId>(desktop.root)));
+        win::bringToFront(wrapped.get());
+        QTRY_COMPARE_WITH_TIMEOUT(::GetForegroundWindow(), desktop.root, 3000);
+
+        QWindow menuWindow;
+        FolderMenu menu(nullptr, nullptr);
+        menu.setWindow(&menuWindow);
+        menu.setRecordHistory(false);
+        QString copied; // never the real clipboard: it feeds Win+V and Win顺 history
+        menu.setClipboardWriter([&](const QString& text) { copied = text; });
+        menu.setOptions(false, false, true);
+        menu.setGroups(false, true, false);
+        QSignalSpy changed(&menu, &FolderMenu::entriesChanged);
+        const auto open = [&] {
+            changed.clear();
+            menu.doubleClicked(clicked, pt);
+            return changed.wait(5000);
+        };
+
+        QVERIFY(open());
+        const int copy = entry(menu, u"复制路径"_s);
+        QVERIFY(copy >= 0);
+        QVERIFY(entry(menu, u"Win顺 设置…"_s) > copy); // between search and the shells, above Settings
+        menu.trigger(copy);
+        QCOMPARE(copied,
+            QDir::toNativeSeparators(QStandardPaths::writableLocation(QStandardPaths::DesktopLocation)));
+
+        menu.setItems(true, false, true, true, true, true);
+        QVERIFY(open());
+        QCOMPARE(entry(menu, u"复制路径"_s), -1);
+        QVERIFY(entry(menu, u"Win顺 设置…"_s) >= 0);
+    }
+
+    void noFolderNoCopyPath()
+    {
+        QWindow source;
+        source.setTitle(u"WinShun folder menu test"_s);
+        source.resize(320, 160);
+        source.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&source));
+        win::bringToFront(&source);
+        QTRY_COMPARE_WITH_TIMEOUT(::GetForegroundWindow(), reinterpret_cast<HWND>(source.winId()), 3000);
+        QWindow menuWindow;
+        FolderMenu menu(nullptr, nullptr);
+        menu.setWindow(&menuWindow);
+        menu.setRecordHistory(false);
+        QSignalSpy changed(&menu, &FolderMenu::entriesChanged);
+        menu.hotkeyPressed();
+        QVERIFY(changed.wait(5000));
+        QCOMPARE(entry(menu, u"复制路径"_s), -1);
+        QVERIFY(entry(menu, u"Win顺 设置…"_s) >= 0);
+    }
+    void directFolderGroups()
+    {
+        QVariantList children;
+        for (int i = 0; i < 12; ++i)
+            children.append(QVariantMap {{u"text"_s, u"项目 %1"_s.arg(i)}, {u"action"_s, i}, {u"tooltip"_s, u"C:\\项目\\%1"_s.arg(i)}});
+        const QString title = u"最近的文件夹"_s;
+        for (const int count : {-1, 0, 1, 3, 10, 50}) {
+            const auto rows = FolderMenu::groupEntries(title, u"folder"_s, children, count);
+            if (count <= 0) {
+                QCOMPARE(rows.size(), 1);
+                QCOMPARE(rows.first().toMap().value(u"children"_s).toList(), children);
+                continue;
+            }
+            const int shown = std::min(count, 10);
+            QCOMPARE(rows.size(), shown + 2); // non-selectable heading, direct rows, More
+            QVERIFY(rows.first().toMap().value(u"disabled"_s).toBool());
+            QVERIFY(rows.first().toMap().value(u"heading"_s).toBool());
+            QVariantList reconstructed = rows.sliced(1, shown);
+            const auto more = rows.last().toMap();
+            QCOMPARE(more.value(u"pageTitle"_s).toString(), title);
+            reconstructed.append(more.value(u"children"_s).toList());
+            QCOMPARE(reconstructed, children); // every action preserved once, in order
+        }
+        const auto exact = FolderMenu::groupEntries(title, {}, children.first(3), 3);
+        QCOMPARE(exact.size(), 4); // no empty More page
+        QVERIFY(!exact.last().toMap().contains(u"children"_s));
+        const auto empty = FolderMenu::groupEntries(title, {}, {}, 5);
+        QCOMPARE(empty.size(), 1);
+        QVERIFY(empty.first().toMap().value(u"disabled"_s).toBool());
+    }
+
+    void shortPagePathTip_data()
+    {
+        QTest::addColumn<QPoint>("position");
+        QTest::newRow("top-left") << QPoint(8, 8);
+        QTest::newRow("bottom-right") << QPoint(432, 505);
+    }
+
+    // Run with QT_QPA_PLATFORM=offscreen: this uses the production menu QML
+    // without shell discovery, global keys or foreground-window changes.
+    void shortPagePathTip()
+    {
+        QFETCH(QPoint, position);
+        FolderMenu menu(nullptr, nullptr);
+        QQmlEngine engine;
+        QSignalSpy warnings(&engine, &QQmlEngine::warnings);
+        QQmlComponent component(&engine,
+            QUrl::fromLocalFile(QStringLiteral(WINSHUN_QML_DIR) + u"/FolderMenuWindow.qml"_s));
+        std::unique_ptr<QObject> object(component.createWithInitialProperties({
+            {u"folderMenu"_s, QVariant::fromValue(&menu)}, {u"availableArea"_s, QRectF(0, 0, 800, 600)},
+            {u"popupAnchor"_s, position}}));
+        QVERIFY2(object, qPrintable(component.errorString()));
+        auto* window = qobject_cast<QQuickWindow*>(object.get());
+        QVERIFY(window);
+        const QString path = u"C:\\项目资料\\"_s + QString(90, u'长') + u"\\outputs"_s;
+        object->setProperty("page", QVariantMap {{u"text"_s, u"已打开的文件夹"_s},
+            {u"children"_s, QVariantList {QVariantMap {{u"text"_s, u"outputs"_s}, {u"tooltip"_s, path}}}}});
+        window->setPosition(position);
+        window->show();
+        QTRY_VERIFY(visualItem(window->contentItem(), u"folderMenuEntry0"_s));
+        auto* row = visualItem(window->contentItem(), u"folderMenuEntry0"_s);
+        object->setProperty("hoveredText", path);
+        object->setProperty("hoveredEntry", QVariant::fromValue(row));
+        auto* tip = object->findChild<QQuickWindow*>(u"menuPathTip"_s);
+        QVERIFY(tip);
+        QTRY_VERIFY(tip->isVisible());
+        QCOMPARE(tip->transientParent(), window);
+        QVERIFY(tip->flags().testFlag(Qt::WindowDoesNotAcceptFocus));
+        QVERIFY(tip->flags().testFlag(Qt::WindowTransparentForInput));
+        QVERIFY(QRect(8, 8, 784, 584).contains(tip->geometry()));
+        const auto* label = visualItem(tip->contentItem(), u"menuPathLabel"_s);
+        QVERIFY(label);
+        QCOMPARE(label->property("text").toString(), path);
+        QVERIFY(label->property("paintedHeight").toReal() <= label->height() + 1);
+        QVERIFY(!label->property("truncated").toBool());
+        const QString evidence = qEnvironmentVariable("WINSHUN_MENU_EVIDENCE");
+        if (!evidence.isEmpty()) {
+            QVERIFY(QDir().mkpath(evidence));
+            QTest::qWait(50);
+            QVERIFY(tip->grabWindow().save(evidence + u"/path-tip-%1.png"_s.arg(QLatin1String(QTest::currentDataTag()))));
+        }
+        window->hide();
+        QTRY_VERIFY(!tip->isVisible());
+        QCOMPARE(warnings.count(), 0);
     }
 
     void pagesAndLongLists_data()

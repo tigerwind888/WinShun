@@ -22,6 +22,7 @@ namespace ws {
 class CliSetup;
 class FavoritesSettings;
 class PluginSettings;
+class HealthMonitor;
 class OcrPackage;
 class ShortcutCapture;
 class SystemCatalog;
@@ -30,9 +31,12 @@ class SystemCatalog;
 // away and reported through edited(); there is no OK / Cancel step.
 class SettingsEditor : public QObject {
     Q_OBJECT
+    Q_MOC_INCLUDE("HealthMonitor.h")
     QML_ELEMENT
     QML_UNCREATABLE("Provided by the application")
     Q_PROPERTY(bool doubleCtrl READ doubleCtrl WRITE setDoubleCtrl NOTIFY changed FINAL)
+    Q_PROPERTY(QString doubleTapAction READ doubleTapAction WRITE setDoubleTapAction NOTIFY changed FINAL)
+    Q_PROPERTY(QVariantList doubleTapActions READ doubleTapActions NOTIFY doubleTapActionsChanged FINAL)
     Q_PROPERTY(QString doubleTapKey READ doubleTapKey WRITE setDoubleTapKey NOTIFY changed FINAL) // ctrl | alt | shift
     Q_PROPERTY(QString doubleCtrlKey READ doubleCtrlKey WRITE setDoubleCtrlKey NOTIFY changed FINAL) // both | left | right
     // The Ctrl PowerToys' Find My Mouse also opens on with a double tap,
@@ -44,6 +48,8 @@ class SettingsEditor : public QObject {
             NOTIFY changed FINAL)
     Q_PROPERTY(QStringList doubleCtrlExcludedApps READ doubleCtrlExcludedApps NOTIFY changed FINAL)
     Q_PROPERTY(QString hotkey READ hotkey WRITE setHotkey NOTIFY changed FINAL)
+    Q_PROPERTY(QString panelHotkey READ panelHotkey WRITE setPanelHotkey NOTIFY changed FINAL)
+    Q_PROPERTY(QString panelHotkeyError READ panelHotkeyError NOTIFY hotkeyErrorChanged FINAL)
     Q_PROPERTY(QString shortcutAgain READ shortcutAgain WRITE setShortcutAgain NOTIFY changed FINAL) // close | panel
     Q_PROPERTY(QString hotkeyError READ hotkeyError NOTIFY hotkeyErrorChanged FINAL)
     Q_PROPERTY(bool recordingHotkey READ recordingHotkey WRITE setRecordingHotkey NOTIFY recordingHotkeyChanged FINAL)
@@ -73,7 +79,7 @@ class SettingsEditor : public QObject {
     Q_PROPERTY(bool explorerTyping READ explorerTyping WRITE setExplorerTyping NOTIFY changed FINAL)
     Q_PROPERTY(bool opusTyping READ opusTyping WRITE setOpusTyping NOTIFY changed FINAL)
     Q_PROPERTY(QString opusTypingScope READ opusTypingScope WRITE setOpusTypingScope NOTIFY changed FINAL) // folder | all (GitHub #82)
-    Q_PROPERTY(QString folderTyping READ folderTyping WRITE setFolderTyping NOTIFY changed FINAL) // first | only (GitHub #110)
+    Q_PROPERTY(QString folderTyping READ folderTyping WRITE setFolderTyping NOTIFY changed FINAL) // first | only | level (GitHub #110, #182)
     // The folder menu on a double click (Settings::folderMenu: on unless "off").
     Q_PROPERTY(bool folderMenu READ folderMenu WRITE setFolderMenu NOTIFY changed FINAL)
     Q_PROPERTY(bool folderMenuDouble READ folderMenuDouble WRITE setFolderMenuDouble NOTIFY changed FINAL)
@@ -83,8 +89,11 @@ class SettingsEditor : public QObject {
     Q_PROPERTY(bool folderMenuFavorites READ folderMenuFavorites WRITE setFolderMenuFavorites NOTIFY changed FINAL)
     Q_PROPERTY(bool folderMenuRecent READ folderMenuRecent WRITE setFolderMenuRecent NOTIFY changed FINAL)
     Q_PROPERTY(bool folderMenuWindows READ folderMenuWindows WRITE setFolderMenuWindows NOTIFY changed FINAL)
+    Q_PROPERTY(int folderMenuRecentInline READ folderMenuRecentInline WRITE setFolderMenuRecentInline NOTIFY changed FINAL)
+    Q_PROPERTY(int folderMenuWindowsInline READ folderMenuWindowsInline WRITE setFolderMenuWindowsInline NOTIFY changed FINAL)
     // The actions under the lists (GitHub #200).
     Q_PROPERTY(bool folderMenuItemSearch READ folderMenuItemSearch WRITE setFolderMenuItemSearch NOTIFY changed FINAL)
+    Q_PROPERTY(bool folderMenuItemCopyPath READ folderMenuItemCopyPath WRITE setFolderMenuItemCopyPath NOTIFY changed FINAL)
     Q_PROPERTY(bool folderMenuItemCmd READ folderMenuItemCmd WRITE setFolderMenuItemCmd NOTIFY changed FINAL)
     Q_PROPERTY(bool folderMenuItemPowerShell READ folderMenuItemPowerShell WRITE setFolderMenuItemPowerShell NOTIFY changed FINAL)
     Q_PROPERTY(bool folderMenuItemFavorite READ folderMenuItemFavorite WRITE setFolderMenuItemFavorite NOTIFY changed FINAL)
@@ -167,6 +176,8 @@ class SettingsEditor : public QObject {
     Q_PROPERTY(bool contentInLowPriority READ contentInLowPriority WRITE setContentInLowPriority NOTIFY changed FINAL)
     Q_PROPERTY(bool contentDocuments READ contentDocuments WRITE setContentDocuments NOTIFY changed FINAL)
     Q_PROPERTY(QString contentIndexStatus READ contentIndexStatus NOTIFY contentIndexStatusChanged FINAL)
+    // The 运行状况 page's readings and charts (App's HealthMonitor).
+    Q_PROPERTY(ws::HealthMonitor* monitor READ monitor NOTIFY monitorChanged FINAL)
     // 结果列表
     Q_PROPERTY(bool foldersFirst READ foldersFirst WRITE setFoldersFirst NOTIFY changed FINAL)
     // 优先显示的文件类型 as shown and typed: "exe; bat; cmd"; written, read as
@@ -186,15 +197,20 @@ class SettingsEditor : public QObject {
     Q_PROPERTY(QString sort READ sort WRITE setSort NOTIFY changed FINAL) // match | newest | oldest | name | folder | type | largest | smallest (kSortNames)
     Q_PROPERTY(QString startList READ startList WRITE setStartList NOTIFY changed FINAL) // opened | modified | none
     Q_PROPERTY(int recentItems READ recentItems WRITE setRecentItems NOTIFY changed FINAL)
+    Q_PROPERTY(bool mergeFileScope READ mergeFileScope WRITE setMergeFileScope NOTIFY changed FINAL)
+    Q_PROPERTY(QString queryHistoryKeys READ queryHistoryKeys WRITE setQueryHistoryKeys NOTIFY changed FINAL)
     Q_PROPERTY(bool favoritesOnStart READ favoritesOnStart WRITE setFavoritesOnStart NOTIFY changed FINAL)
     Q_PROPERTY(bool clearOnOpen READ clearOnOpen WRITE setClearOnOpen NOTIFY changed FINAL)
+    Q_PROPERTY(bool englishOnOpen READ englishOnOpen WRITE setEnglishOnOpen NOTIFY changed FINAL)
     Q_PROPERTY(QString numberKeys READ numberKeys WRITE setNumberKeys NOTIFY changed FINAL) // ctrl | alt | off
     Q_PROPERTY(QString numberHints READ numberHints WRITE setNumberHints NOTIFY changed FINAL) // held | always | off
     Q_PROPERTY(bool shortcutHelp READ shortcutHelp WRITE setShortcutHelp NOTIFY changed FINAL)
     Q_PROPERTY(bool footerHints READ footerHints WRITE setFooterHints NOTIFY changed FINAL)
+    Q_PROPERTY(bool pureSearch READ pureSearch WRITE setPureSearch NOTIFY changed FINAL)
     Q_PROPERTY(QString previewWith READ previewWith WRITE setPreviewWith NOTIFY changed FINAL) // auto | builtin
     Q_PROPERTY(QString previewHotkey READ previewHotkey WRITE setPreviewHotkey NOTIFY changed FINAL)
     Q_PROPERTY(QString previewHotkeyError READ previewHotkeyError NOTIFY changed FINAL)
+    Q_PROPERTY(bool previewFollowsPointer READ previewFollowsPointer WRITE setPreviewFollowsPointer NOTIFY changed FINAL)
     // Which of the chosen number keys are other programs' hotkeys, or Win顺's
     // own shortcuts, said for the user; empty when none (refreshNumberKeys).
     Q_PROPERTY(QString numberKeysNote READ numberKeysNote NOTIFY numberKeysNoteChanged FINAL)
@@ -273,7 +289,13 @@ class SettingsEditor : public QObject {
     Q_PROPERTY(QString transparency READ transparency WRITE setTransparency NOTIFY changed FINAL)
     Q_PROPERTY(QString taskbarIcon READ taskbarIcon WRITE setTaskbarIcon NOTIFY changed FINAL) // color | mono
     Q_PROPERTY(QString uiSize READ uiSize WRITE setUiSize NOTIFY changed FINAL) // compact | standard | roomy
+    Q_PROPERTY(QString uiFont READ uiFont WRITE setUiFont NOTIFY changed FINAL)
+    Q_PROPERTY(QStringList uiFonts READ uiFonts CONSTANT FINAL)
+    Q_PROPERTY(bool uiFontAvailable READ uiFontAvailable NOTIFY changed FINAL)
+    Q_PROPERTY(QString uiFontPreview READ uiFontPreview NOTIFY changed FINAL)
+    Q_PROPERTY(bool fontRestartRequired READ fontRestartRequired NOTIFY changed FINAL)
     Q_PROPERTY(QString corners READ corners WRITE setCorners NOTIFY changed FINAL) // round | square
+    Q_PROPERTY(QString uiStyle READ uiStyle WRITE setUiStyle NOTIFY changed FINAL) // fluent | brand | tactile | liquid
     Q_PROPERTY(bool autoUpdate READ autoUpdate WRITE setAutoUpdate NOTIFY changed FINAL)
     Q_PROPERTY(QString backupFolder READ backupFolder NOTIFY changed FINAL) // empty: no backups (see Backup)
     Q_PROPERTY(bool restartRequired READ restartRequired NOTIFY changed FINAL)
@@ -311,6 +333,7 @@ class SettingsEditor : public QObject {
     // 插件: the page's own view-model (PluginSettings), which edits the
     // [Plugin.<id>] sections here.
     Q_PROPERTY(ws::PluginSettings* plugins READ plugins CONSTANT FINAL)
+    Q_PROPERTY(bool pluginBuiltinsExpanded READ pluginBuiltinsExpanded WRITE setPluginBuiltinsExpanded NOTIFY changed FINAL)
     Q_PROPERTY(ws::OcrPackage* ocrPackage READ ocrPackage CONSTANT FINAL)
     // 收藏夹: the page's own view-model (FavoritesSettings), on the app's
     // favorites (not in the INI: 恢复默认设置 leaves them).
@@ -322,6 +345,10 @@ public:
 
     bool doubleCtrl() const { return m_settings.doubleCtrl; }
     void setDoubleCtrl(bool on);
+    QString doubleTapAction() const { return m_settings.doubleTapAction; }
+    void setDoubleTapAction(const QString& action);
+    QVariantList doubleTapActions() const;
+    void setDoubleTapPluginActions(const QVariantList& actions);
     QString doubleTapKey() const { return m_settings.doubleTapKey; }
     void setDoubleTapKey(const QString& key);
     QString doubleCtrlKey() const { return m_settings.doubleCtrlKey; }
@@ -337,6 +364,10 @@ public:
     QString shortcutAgain() const { return m_settings.shortcutAgain; }
     void setShortcutAgain(const QString& what);
     void setHotkey(const QString& hotkey);
+    QString panelHotkey() const { return m_settings.panelHotkey; }
+    void setPanelHotkey(const QString& hotkey);
+    QString panelHotkeyError() const { return m_panelHotkeyError; }
+    void setPanelHotkeyError(const QString& error);
     QString hotkeyError() const { return m_hotkeyError; }
     void setHotkeyError(const QString& error);
     bool recordingHotkey() const { return m_recordingHotkey; }
@@ -398,8 +429,14 @@ public:
     void setFolderMenuRecent(bool on);
     bool folderMenuWindows() const { return m_settings.folderMenuWindows; }
     void setFolderMenuWindows(bool on);
+    int folderMenuRecentInline() const { return m_settings.folderMenuRecentInline; }
+    int folderMenuWindowsInline() const { return m_settings.folderMenuWindowsInline; }
+    void setFolderMenuRecentInline(int count);
+    void setFolderMenuWindowsInline(int count);
     bool folderMenuItemSearch() const { return m_settings.folderMenuItemSearch; }
     void setFolderMenuItemSearch(bool on);
+    bool folderMenuItemCopyPath() const { return m_settings.folderMenuItemCopyPath; }
+    void setFolderMenuItemCopyPath(bool on);
     bool folderMenuItemCmd() const { return m_settings.folderMenuItemCmd; }
     void setFolderMenuItemCmd(bool on);
     bool folderMenuItemPowerShell() const { return m_settings.folderMenuItemPowerShell; }
@@ -535,6 +572,9 @@ public:
     void setContentInLowPriority(bool on);
     bool contentDocuments() const { return m_settings.contentDocuments; }
     void setContentDocuments(bool on);
+    HealthMonitor* monitor() const { return m_monitor; }
+    void setMonitor(HealthMonitor* monitor);
+    Q_INVOKABLE void giveMemoryBack() { emit giveBackMemoryRequested(); }
     QString contentIndexStatus() const { return m_contentIndexStatus; }
     void setContentIndexStatus(const QString& status); // "已收录 … 个文件"; set by the app
     QString renderer() const { return m_settings.renderer; }
@@ -554,9 +594,17 @@ public:
     QString taskbarIcon() const { return m_settings.taskbarIcon; }
     void setTaskbarIcon(const QString& style);
     QString uiSize() const { return m_settings.uiSize; }
+    QString uiFont() const { return m_settings.uiFont; }
+    QStringList uiFonts() const;
+    bool uiFontAvailable() const;
+    QString uiFontPreview() const;
+    bool fontRestartRequired() const;
+    void setUiFont(const QString& family);
     void setUiSize(const QString& size);
     QString corners() const { return m_settings.corners; }
     void setCorners(const QString& corners);
+    QString uiStyle() const { return m_settings.uiStyle; }
+    void setUiStyle(const QString& style);
     bool autoUpdate() const { return m_settings.autoUpdate; }
     QString backupFolder() const { return QDir::toNativeSeparators(m_settings.backupFolder); }
     void setAutoUpdate(bool on);
@@ -669,6 +717,8 @@ public:
     void setFavoritesOnStart(bool on);
     bool clearOnOpen() const { return m_settings.clearOnOpen; }
     void setClearOnOpen(bool on);
+    bool englishOnOpen() const { return m_settings.englishOnOpen; }
+    void setEnglishOnOpen(bool on);
     QString numberKeys() const { return m_settings.numberKeys; }
     void setNumberKeys(const QString& keys);
     QString numberHints() const { return m_settings.numberHints; }
@@ -677,12 +727,16 @@ public:
     void setShortcutHelp(bool on);
     bool footerHints() const { return m_settings.footerHints; }
     void setFooterHints(bool on);
+    bool pureSearch() const { return m_settings.pureSearch; }
+    void setPureSearch(bool on);
     QString numberKeysNote() const { return m_numberKeysNote; }
     QString previewWith() const { return m_settings.previewWith; }
     void setPreviewWith(const QString& with);
     QString previewHotkey() const { return m_settings.previewHotkey; }
     void setPreviewHotkey(const QString& shortcut);
     QString previewHotkeyError() const;
+    bool previewFollowsPointer() const { return m_settings.previewFollowsPointer; }
+    void setPreviewFollowsPointer(bool on);
     // Looks again at which number keys are taken (as the window comes to the
     // front: a program may have been started or closed meanwhile).
     Q_INVOKABLE void refreshNumberKeys();
@@ -903,6 +957,12 @@ public:
 
     // 插件 page
     PluginSettings* plugins() const { return m_plugins; }
+    bool pluginBuiltinsExpanded() const { return m_settings.pluginBuiltinsExpanded; }
+    bool mergeFileScope() const { return m_settings.mergeFileScope; }
+    QString queryHistoryKeys() const { return m_settings.queryHistoryKeys; }
+    void setMergeFileScope(bool merged);
+    void setQueryHistoryKeys(const QString& keys);
+    void setPluginBuiltinsExpanded(bool expanded);
     OcrPackage* ocrPackage() const { return m_ocrPackage; }
     void useOcrPackage(OcrPackage* package); // before the settings window is created
 
@@ -920,6 +980,8 @@ signals:
     void changed();
     void hotkeyErrorChanged();
     void contentIndexStatusChanged();
+    void monitorChanged();
+    void giveBackMemoryRequested();
     void indexFolderChanged();
     void recordingHotkeyChanged(); // the app suspends its hotkeys meanwhile
     void autostartChanged();
@@ -932,6 +994,7 @@ signals:
     void clipboardCountChanged();
     void numberKeysNoteChanged();
     void doubleCtrlClashChanged();
+    void doubleTapActionsChanged();
     void opusFolderMenuChanged();
     void opusRestarted(); // setOpusFolderMenu started Opus again: it came to the front
     void clipboardClearRequested();
@@ -978,11 +1041,13 @@ private:
     Settings m_settings;
     QString m_runningRenderer; // resolved: never "auto"
     QString m_hotkeyError;
+    QString m_panelHotkeyError;
     QString m_previewHotkeyError;
     QString m_numberKeysNote;
     QString m_clipboardNumberKeysNote;
     QString m_clipboardQuickPasteError;
     QString m_doubleCtrlClash;
+    QVariantList m_doubleTapPluginActions;
     QString m_folderMenuHotkeyError;
     bool m_screenshotInstalled = false;
     bool m_screenshotHistory = false;
@@ -995,6 +1060,7 @@ private:
     bool m_launcherWidthSet = false;
     int m_siteIconsArrived = 0;
     QString m_contentIndexStatus;
+    HealthMonitor* m_monitor = nullptr; // App's
     IndexFolderState m_indexFolderState;
     IndexAccessState m_indexAccessState;
     QStringList m_fileManagers {QStringLiteral("explorer")};

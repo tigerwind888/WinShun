@@ -2,6 +2,57 @@
 <!DOCTYPE TS>
 <TS version="2.1" language="en" sourcelanguage="zh_CN">
 <context>
+    <name>Activity</name>
+    <message>
+        <source>你在搜索，先停一下</source>
+        <translation>You are searching, so it paused for now</translation>
+    </message>
+    <message>
+        <source>在用电池，先暂停</source>
+        <translation>On battery, so it is paused</translation>
+    </message>
+    <message>
+        <source>硬盘上慢慢读，不卡你</source>
+        <translation>Reading the hard disk gently, so it does not slow you down</translation>
+    </message>
+    <message>
+        <source>约 %1 小时</source>
+        <translation>about %1 hours</translation>
+    </message>
+    <message>
+        <source>约 %1–%2 小时</source>
+        <translation>about %1–%2 hours</translation>
+    </message>
+    <message>
+        <source>约 %1 分钟</source>
+        <translation>about %1 minutes</translation>
+    </message>
+    <message>
+        <source>约 %1–%2 分钟</source>
+        <translation>about %1–%2 minutes</translation>
+    </message>
+    <message>
+        <source>正在整理，快好了</source>
+        <translation>Tidying up, almost done</translation>
+    </message>
+    <message>
+        <source>快好了</source>
+        <translation>almost done</translation>
+    </message>
+    <message>
+        <source>（%1）</source>
+        <translation> (%1)</translation>
+    </message>
+    <message>
+        <source>%1 小时</source>
+        <translation>%1 hours</translation>
+    </message>
+    <message>
+        <source>%1 分钟</source>
+        <translation>%1 minutes</translation>
+    </message>
+</context>
+<context>
     <name>AiAccessSection</name>
     <message>
         <source>允许 AI 打开文件和文件夹</source>
@@ -416,6 +467,10 @@
         <translation>Current folder only</translation>
     </message>
     <message>
+        <source>只搜这一层</source>
+        <translation>This level only</translation>
+    </message>
+    <message>
         <source>Tab 进入收藏文件夹</source>
         <translation>Browse favorite folders with Tab</translation>
     </message>
@@ -604,6 +659,10 @@
         <translation>Scope for searching in Directory Opus</translation>
     </message>
     <message>
+        <source>文件夹菜单里有“在菜单末尾显示 Win顺 设置”</source>
+        <translation>The folder menu has “Show WinShun Settings at the end of the menu”</translation>
+    </message>
+    <message>
         <source>拖文件时按 ` 键，弹出收藏圆盘</source>
         <translation>Press ` while dragging files to bring up the favorites pie</translation>
     </message>
@@ -666,6 +725,26 @@
     <message>
         <source>直角</source>
         <translation>Square</translation>
+    </message>
+    <message>
+        <source>界面风格</source>
+        <translation>Interface style</translation>
+    </message>
+    <message>
+        <source>精修原生</source>
+        <translation>Refined native</translation>
+    </message>
+    <message>
+        <source>品牌色彩</source>
+        <translation>Brand colours</translation>
+    </message>
+    <message>
+        <source>轻拟物质感</source>
+        <translation>Soft tactile</translation>
+    </message>
+    <message>
+        <source>液态玻璃</source>
+        <translation>Liquid glass</translation>
     </message>
     <message>
         <source>界面大小</source>
@@ -838,6 +917,10 @@
     <message>
         <source>每次打开时清空搜索</source>
         <translation>Clear the search each time it opens</translation>
+    </message>
+    <message>
+        <source>打开时切换为英文输入</source>
+        <translation>Switch the input method to English on opening</translation>
     </message>
     <message>
         <source>用数字键直接打开</source>
@@ -1143,6 +1226,10 @@
         <translation>The folder menu has “Search here”</translation>
     </message>
     <message>
+        <source>文件夹菜单里有“复制路径”</source>
+        <translation>The folder menu has “Copy path”</translation>
+    </message>
+    <message>
         <source>文件夹菜单里有“在此打开命令提示符”</source>
         <translation>The folder menu has “Open Command Prompt here”</translation>
     </message>
@@ -1153,10 +1240,6 @@
     <message>
         <source>文件夹菜单里有“收藏这个文件夹”</source>
         <translation>The folder menu has “Add this folder to favorites”</translation>
-    </message>
-    <message>
-        <source>文件夹菜单里有“Win顺 设置”</source>
-        <translation>The folder menu has “WinShun Settings”</translation>
     </message>
     <message>
         <source>菜单里的操作</source>
@@ -1487,6 +1570,26 @@
     <message>
         <source>点一下换一种：换行、空格、逗号、Tab、不分隔</source>
         <translation>Click for another: new line, space, comma, tab, nothing</translation>
+    </message>
+    <message>
+        <source>输入分组名，回车进入</source>
+        <translation>Find a group, Enter to open</translation>
+    </message>
+    <message>
+        <source>在“%1”中搜索</source>
+        <translation>Search in “%1”</translation>
+    </message>
+    <message>
+        <source>返回内容搜索</source>
+        <translation>Back to content search</translation>
+    </message>
+    <message>
+        <source>查找分组</source>
+        <translation>Find a group</translation>
+    </message>
+    <message>
+        <source>↑ ↓ 选择 · Enter 进入 · Esc 返回</source>
+        <translation>↑ ↓ Select · Enter Open · Esc Back</translation>
     </message>
 </context>
 <context>
@@ -2328,6 +2431,97 @@
     </message>
 </context>
 <context>
+    <name>HealthPage</name>
+    <message>
+        <source>%1 MB</source>
+        <translation>%1 MB</translation>
+    </message>
+    <message>
+        <source>不到 1 MB</source>
+        <translation>under 1 MB</translation>
+    </message>
+    <message>
+        <source>0 MB</source>
+        <translation>0 MB</translation>
+    </message>
+    <message>
+        <source>%1 MB/秒</source>
+        <translation>%1 MB/s</translation>
+    </message>
+    <message>
+        <source>现在</source>
+        <translation>Now</translation>
+    </message>
+    <message>
+        <source>Win顺 现在用了 %1</source>
+        <translation>WinShun is using %1</translation>
+    </message>
+    <message>
+        <source>正在读取内存占用…</source>
+        <translation>Reading memory use…</translation>
+    </message>
+    <message>
+        <source>内存;占用;任务管理器;归还;释放;卡;运行状况;CPU;磁盘;memory;ram;task manager</source>
+        <translation>memory;usage;task manager;give back;free;slow;health;CPU;disk;ram</translation>
+    </message>
+    <message>
+        <source>CPU %1 · 读取 %2</source>
+        <translation>CPU %1 · reading %2</translation>
+    </message>
+    <message>
+        <source>后台还在忙，归还后它会再用回一些</source>
+        <translation>The background is still busy and will take some back</translation>
+    </message>
+    <message>
+        <source>现在就归还</source>
+        <translation>Give back now</translation>
+    </message>
+    <message>
+        <source>后台服务</source>
+        <translation>Background service</translation>
+    </message>
+    <message>
+        <source>总数和任务管理器里 Win顺 那一行的“内存”是同一个数；后台服务在那里单独一行，不算在内。</source>
+        <translation>The total is the same number as the Memory column of WinShun&apos;s row in Task Manager; the background service has a row of its own there and is not counted.</translation>
+    </message>
+    <message>
+        <source>读磁盘、建索引；任务管理器里单独一行，不算在总数里</source>
+        <translation>reads the disk, builds the index; its own row in Task Manager, not in the total</translation>
+    </message>
+    <message>
+        <source>现在在做什么</source>
+        <translation>What it is doing now</translation>
+    </message>
+    <message>
+        <source>正在读取…</source>
+        <translation>Reading…</translation>
+    </message>
+    <message>
+        <source>后台;进度;剩余时间;建立索引;何时结束;progress;busy</source>
+        <translation>background;progress;time left;building the index;when done;busy</translation>
+    </message>
+    <message>
+        <source>各个进程</source>
+        <translation>Processes</translation>
+    </message>
+    <message>
+        <source>读磁盘、建索引；任务管理器里单独一行</source>
+        <translation>reads the disks, builds the index; its own row in Task Manager</translation>
+    </message>
+    <message>
+        <source>读完 30 秒后退出</source>
+        <translation>quits 30 seconds after it is done</translation>
+    </message>
+    <message>
+        <source>搜索框、剪贴板、设置都在这里</source>
+        <translation>the search box, clipboard and settings</translation>
+    </message>
+    <message>
+        <source>主进程：工作集 %1 · 私有提交 %2</source>
+        <translation>Main process: working set %1 · private commit %2</translation>
+    </message>
+</context>
+<context>
     <name>HotkeyRecorder</name>
     <message>
         <source>正在录制快捷键</source>
@@ -2455,6 +2649,10 @@
 </context>
 <context>
     <name>McpClients</name>
+    <message>
+        <source>无法确定用户配置目录</source>
+        <translation>Cannot determine the user configuration folder</translation>
+    </message>
     <message>
         <source>读不了 %1</source>
         <translation>Cannot read %1</translation>
@@ -3044,6 +3242,10 @@
         <translation>Keywords</translation>
     </message>
     <message>
+        <source>再试一次</source>
+        <translation>Try again</translation>
+    </message>
+    <message>
         <source>设置</source>
         <translation>Settings</translation>
     </message>
@@ -3267,6 +3469,26 @@
     <message>
         <source>卸载网页搜索插件后，网站、关键词和图标会保留，重新安装后可继续使用。</source>
         <translation>Your sites, keywords and icons will be kept when the web search plugin is uninstalled, ready to use after reinstalling.</translation>
+    </message>
+    <message>
+        <source>安装“%1”？</source>
+        <translation>Install “%1”?</translation>
+    </message>
+    <message>
+        <source>仍要安装</source>
+        <translation>Install anyway</translation>
+    </message>
+    <message>
+        <source>查看来源</source>
+        <translation>View source</translation>
+    </message>
+    <message>
+        <source>将安装 %1；启用前仍需确认它申请的权限。</source>
+        <translation>Version %1 will be installed. Its requested permissions still need your approval before enabling it.</translation>
+    </message>
+    <message>
+        <source>这是未审核的原生插件，包含可执行程序或动态库。校验值只能核对下载是否完整，不代表代码安全。请自行查看来源并判断是否信任；此类插件每次更新都需要确认。</source>
+        <translation>This unreviewed native plugin contains executable code or libraries. A matching checksum verifies the download, not the safety of its code. Check the source and decide whether you trust it. Every update requires confirmation.</translation>
     </message>
 </context>
 <context>
@@ -3674,6 +3896,29 @@
         <source>插件给搜索框加关键字命令，结果混进列表。它们用你的普通权限（要跟随 Win顺 管理员权限的，权限里会写明）；启用前会先列出权限，由你决定是否开启。</source>
         <translation>Plugins add keyword commands to the search box and mix their results into the list. They run with your normal rights (one that follows Win顺&apos;s administrator rights says so in its permissions); review the permissions and choose which ones to enable.</translation>
     </message>
+    <message>
+        <source>收起</source>
+        <translation>Collapse</translation>
+    </message>
+    <message>
+        <source>展开</source>
+        <translation>Expand</translation>
+    </message>
+    <message>
+        <source>收起内置功能</source>
+        <translation>Collapse built-in features</translation>
+    </message>
+    <message>
+        <source>展开内置功能</source>
+        <translation>Expand built-in features</translation>
+    </message>
+</context>
+<context>
+    <name>PreviewBody</name>
+    <message>
+        <source>正在读取…</source>
+        <translation>Reading…</translation>
+    </message>
 </context>
 <context>
     <name>PreviewWindow</name>
@@ -3684,10 +3929,6 @@
     <message>
         <source>打开</source>
         <translation>Open</translation>
-    </message>
-    <message>
-        <source>正在读取…</source>
-        <translation>Reading…</translation>
     </message>
 </context>
 <context>
@@ -3787,6 +4028,10 @@
         <source>复制网址</source>
         <translation>Copy address</translation>
     </message>
+    <message>
+        <source>复制窗口标题</source>
+        <translation>Copy window title</translation>
+    </message>
 </context>
 <context>
     <name>ResultTile</name>
@@ -3884,6 +4129,26 @@ Right: center window · Drag: move window</translation>
     <message>
         <source>展开为搜索面板</source>
         <translation>Expand to the search panel</translation>
+    </message>
+    <message>
+        <source>搜索 %1</source>
+        <translation>Search %1</translation>
+    </message>
+    <message>
+        <source>隐藏筛选侧栏</source>
+        <translation>Hide filter sidebar</translation>
+    </message>
+    <message>
+        <source>显示筛选侧栏</source>
+        <translation>Show filter sidebar</translation>
+    </message>
+    <message>
+        <source>显示筛选侧栏（筛选仍生效）</source>
+        <translation>Show filter sidebar (filters are still active)</translation>
+    </message>
+    <message>
+        <source>搜索历史</source>
+        <translation>Search history</translation>
     </message>
 </context>
 <context>
@@ -4008,6 +4273,30 @@ Right: center window · Drag: move window</translation>
 </context>
 <context>
     <name>SettingsWindow</name>
+    <message>
+        <source>界面字体</source>
+        <translation>Interface font</translation>
+    </message>
+    <message>
+        <source>字体;雅黑;普惠体;清晰;font;typeface;YaHei</source>
+        <translation>font;typeface;YaHei;Alibaba;clarity</translation>
+    </message>
+    <message>
+        <source>输入名称查找，示例即时预览；重启后应用</source>
+        <translation>Type a font name to preview it. Restart WinShun to apply.</translation>
+    </message>
+    <message>
+        <source>此电脑未安装“%1”，暂用默认字体</source>
+        <translation>“%1” is not installed on this PC. Using the default font.</translation>
+    </message>
+    <message>
+        <source>文件搜索 · 剪贴板 · 设置  WinShun 0123456789</source>
+        <translation>File search · Clipboard · Settings  WinShun 0123456789</translation>
+    </message>
+    <message>
+        <source>重启后应用</source>
+        <translation>Restart to apply</translation>
+    </message>
     <message>
         <source>键盘提示</source>
         <translation>Keyboard hints</translation>
@@ -4579,6 +4868,14 @@ Right: center window · Drag: move window</translation>
         <translation>Needs the “GPU” drawing method under Advanced</translation>
     </message>
     <message>
+        <source>当前界面风格的窗口不透明；可切换到精修原生、品牌色彩或液态玻璃</source>
+        <translation>Windows are opaque in this style; switch to Refined native, Brand colours or Liquid glass for transparency</translation>
+    </message>
+    <message>
+        <source>使用系统亚克力模糊窗口背后的内容；关闭后保留实色玻璃质感</source>
+        <translation>Blur content behind windows with system Acrylic; turn off for solid glass surfaces</translation>
+    </message>
+    <message>
         <source>窗口背景透出桌面壁纸的颜色（云母效果）</source>
         <translation>Window backgrounds take on the colours of your wallpaper (Mica)</translation>
     </message>
@@ -5094,6 +5391,10 @@ Right: center window · Drag: move window</translation>
         <translation>Current folder only</translation>
     </message>
     <message>
+        <source>只搜这一层</source>
+        <translation>This level only</translation>
+    </message>
+    <message>
         <source>在 Directory Opus 的空白处双击</source>
         <translation>Double-click blank space in Directory Opus</translation>
     </message>
@@ -5416,6 +5717,18 @@ Right: center window · Drag: move window</translation>
     <message>
         <source>打开时搜索框是空的，回到“全部”；关掉时保留上次的文字并选中，直接输入就会替换</source>
         <translation>Opens with an empty box, back in All; when off, the last words stay, selected, so typing replaces them</translation>
+    </message>
+    <message>
+        <source>打开时切换为英文输入</source>
+        <translation>Switch the input method to English on opening</translation>
+    </message>
+    <message>
+        <source>输入法;英文;字母;中文;拼音首字母;IME;English</source>
+        <translation>input method;IME;English;letters;Chinese;pinyin;initials</translation>
+    </message>
+    <message>
+        <source>中文输入法在搜索框里先用英文，直接打字母和拼音首字母；在框里切回中文照常可用，关掉后恢复原样</source>
+        <translation>A Chinese input method starts in English in the search box, so letters and pinyin initials go straight in; switching back to Chinese in the box still works, and it is put back on closing</translation>
     </message>
     <message>
         <source>扩展;脚本;PowerShell;Python;内置功能;模块;网页搜索;搜索引擎;网址;web;plugin;extension;module</source>
@@ -6270,6 +6583,10 @@ Right: center window · Drag: move window</translation>
         <translation>What to index</translation>
     </message>
     <message>
+        <source>资源;性能;走势;图表;进程;health;performance</source>
+        <translation>resources;performance;chart;processes;health</translation>
+    </message>
+    <message>
         <source>按键一览</source>
         <translation>Keys at a glance</translation>
     </message>
@@ -6322,12 +6639,44 @@ Right: center window · Drag: move window</translation>
         <translation>Whole computer</translation>
     </message>
     <message>
+        <source>文件夹菜单;搜索;复制路径;复制地址;copy path;命令提示符;cmd;PowerShell;收藏;设置;隐藏;search;command prompt;favorites;settings</source>
+        <translation>folder menu;search;copy path;copy address;command prompt;cmd;PowerShell;favorites;settings;hide</translation>
+    </message>
+    <message>
         <source>所有快捷键都在这里；带“去设置”的可以自己改。</source>
         <translation>All shortcuts are here; the ones with “Go to settings” can be changed.</translation>
     </message>
     <message>
         <source>未设置</source>
         <translation>Not set</translation>
+    </message>
+    <message>
+        <source>界面风格</source>
+        <translation>Interface style</translation>
+    </message>
+    <message>
+        <source>风格;外观;样式;皮肤;精修原生;品牌色彩;轻拟物;拟物;质感;液态玻璃;玻璃;Fluent;Liquid Glass;style;skin;look</source>
+        <translation>style;interface style;look;skin;appearance;refined native;brand colours;soft tactile;tactile;fluent;liquid glass;glass;风格;皮肤;玻璃</translation>
+    </message>
+    <message>
+        <source>所有窗口的样子；浅色、深色仍按上面的主题</source>
+        <translation>How every window looks; light or dark still follows the theme above</translation>
+    </message>
+    <message>
+        <source>精修原生</source>
+        <translation>Refined native</translation>
+    </message>
+    <message>
+        <source>品牌色彩</source>
+        <translation>Brand colours</translation>
+    </message>
+    <message>
+        <source>轻拟物质感</source>
+        <translation>Soft tactile</translation>
+    </message>
+    <message>
+        <source>液态玻璃</source>
+        <translation>Liquid glass</translation>
     </message>
     <message>
         <source>搜索框、剪贴板和对话框旁搜索框的文字和行高；设置窗口不变。剪贴板可在“剪贴板”页单独设置</source>
@@ -6617,6 +6966,34 @@ Right: center window · Drag: move window</translation>
         <translation>Use QuickLook or Seer when running; otherwise use WinShun&apos;s built-in preview</translation>
     </message>
     <message>
+        <source>预览跟随</source>
+        <translation>Preview follows</translation>
+    </message>
+    <message>
+        <source>预览;跟随;鼠标;悬停;指向;划过;选中;大文件;卡;hover;preview</source>
+        <translation>preview;follow;mouse;hover;pointer;selected;selection;large files;lag;slow</translation>
+    </message>
+    <message>
+        <source>预览开着时，鼠标停在哪一行就预览哪一行；Word、PPT、PDF 这类文件要停稳一下才打开</source>
+        <translation>While the preview is open, it shows the row the mouse rests on; Word, PowerPoint and PDF files open once the mouse holds still for a moment</translation>
+    </message>
+    <message>
+        <source>只预览选中的行：单击或用方向键选中。鼠标划过时不切换，大文件不会被一个个打开</source>
+        <translation>Only the selected row is previewed: select it with a click or the arrow keys. Moving the mouse over rows does not switch, so large files are not opened one after another</translation>
+    </message>
+    <message>
+        <source>只预览选中的行：用方向键选中，或用鼠标中键点一行。鼠标划过时不切换，大文件不会被一个个打开</source>
+        <translation>Only the selected row is previewed: select it with the arrow keys, or middle-click a row. Moving the mouse over rows does not switch, so large files are not opened one after another</translation>
+    </message>
+    <message>
+        <source>鼠标所指</source>
+        <translation>Under the mouse</translation>
+    </message>
+    <message>
+        <source>选中的行</source>
+        <translation>Selected row</translation>
+    </message>
+    <message>
         <source>预览快捷键</source>
         <translation>Preview shortcut</translation>
     </message>
@@ -6813,6 +7190,10 @@ Right: center window · Drag: move window</translation>
         <translation>Data import and clearing</translation>
     </message>
     <message>
+        <source>运行状况</source>
+        <translation>Health</translation>
+    </message>
+    <message>
         <source>网络、存储与诊断</source>
         <translation>Network, storage and diagnostics</translation>
     </message>
@@ -6869,8 +7250,8 @@ Right: center window · Drag: move window</translation>
         <translation>Press Ctrl+Shift+D while searching to toggle scope temporarily</translation>
     </message>
     <message>
-        <source>当前文件夹优先：先列出当前文件夹及子文件夹的结果，再列出其他位置的结果，与 Listary 一致</source>
-        <translation>Current folder first: list results from current folder and subfolders first, then other locations, matching Listary</translation>
+        <source>当前文件夹优先：先列出当前文件夹及子文件夹的结果，再列出其他位置的结果，与 Listary 一致。只搜这一层：只列当前文件夹里直接放着的，不含子文件夹</source>
+        <translation>Current folder first: list results from current folder and subfolders first, then other locations, matching Listary. This level only: list only what sits directly in the current folder, no subfolders</translation>
     </message>
     <message>
         <source>在空白处双击或按中键弹出常用文件夹菜单，选中后直接在当前窗口打开</source>
@@ -6909,16 +7290,16 @@ Right: center window · Drag: move window</translation>
         <translation>Actions in the menu</translation>
     </message>
     <message>
-        <source>菜单末尾的“在此搜索”“收藏这个文件夹”等；没勾选的不再出现</source>
-        <translation>The actions under the lists, such as “Search here” and “Add this folder to favorites”; unticked ones no longer appear</translation>
-    </message>
-    <message>
-        <source>文件夹菜单;搜索;命令提示符;cmd;PowerShell;收藏;设置;隐藏;search;command prompt;favorites;settings</source>
-        <translation>folder menu;search;command prompt;cmd;PowerShell;favorites;settings;hide</translation>
+        <source>菜单末尾的“在此搜索”“复制路径”“收藏这个文件夹”等；没勾选的不再出现</source>
+        <translation>The actions under the lists, such as “Search here”, “Copy path” and “Add this folder to favorites”; unticked ones no longer appear</translation>
     </message>
     <message>
         <source>搜索</source>
         <translation>Search</translation>
+    </message>
+    <message>
+        <source>复制路径</source>
+        <translation>Copy path</translation>
     </message>
     <message>
         <source>命令提示符</source>
@@ -6997,16 +7378,112 @@ Right: center window · Drag: move window</translation>
         <translation>Other windows</translation>
     </message>
     <message>
-        <source>双击空白处或单击鼠标中键弹出</source>
-        <translation>Double-click empty space or middle-click to open</translation>
-    </message>
-    <message>
         <source>至少保留一项</source>
         <translation>Keep at least one</translation>
     </message>
     <message>
         <source>最近文件夹</source>
         <translation>Recent folders</translation>
+    </message>
+    <message>
+        <source>直接打开搜索面板</source>
+        <translation>Open the full search panel</translation>
+    </message>
+    <message>
+        <source>一个组合键打开完整搜索面板并聚焦搜索框，例如 Ctrl+Alt+F</source>
+        <translation>Open the full search panel and focus its search field with one shortcut, such as Ctrl+Alt+F.</translation>
+    </message>
+    <message>
+        <source>完整窗口;面板;全局;热键;快捷键;full search;panel;hotkey</source>
+        <translation>full window;panel;global;shortcut;full search;hotkey</translation>
+    </message>
+    <message>
+        <source>直接显示最近的文件夹</source>
+        <translation>Recent folders shown directly</translation>
+    </message>
+    <message>
+        <source>直接显示已打开的文件夹</source>
+        <translation>Open folders shown directly</translation>
+    </message>
+    <message>
+        <source>0：收进二级菜单；1–10：直接显示前几个，其余放进“更多…”</source>
+        <translation>0: keep in a submenu. 1–10: show this many directly, with the rest under “More…”.</translation>
+    </message>
+    <message>
+        <source>文件夹菜单;最近;已打开;数量;更多;展开;inline;recent;folders</source>
+        <translation>folder menu;recent;open;count;more;expand;inline;folders</translation>
+    </message>
+    <message>
+        <source>启动时请求管理员权限，直接读取主文件表和变更日志；取消后本次用普通权限，保留选择。开机自启也以管理员身份</source>
+        <translation>Ask for administrator permission at startup to read the MFT and change journal directly. Cancelling uses normal permissions for this launch and keeps your choice. Login startup also uses administrator permissions.</translation>
+    </message>
+    <message>
+        <source>记住搜索和打开过的项目</source>
+        <translation>Remember searches and opened items</translation>
+    </message>
+    <message>
+        <source>记住打开过的项目和最近 100 条搜索词；同样的字常打开的项目排在前面。插件命令不记入搜索历史</source>
+        <translation>Remember opened items and up to 100 search queries. Frequently opened matches rank higher. Plugin commands are excluded from query history.</translation>
+    </message>
+    <message>
+        <source>搜索历史快捷键</source>
+        <translation>Query history shortcuts</translation>
+    </message>
+    <message>
+        <source>在搜索框中翻阅；回到最新位置时恢复未完成的输入，也可点时钟图标浏览和删除</source>
+        <translation>Browse previous queries in search; return to the newest position to restore your draft. The clock button lets you browse and delete entries.</translation>
+    </message>
+    <message>
+        <source>历史;上一个;下一个;history;Ctrl;Alt</source>
+        <translation>history;previous;next;Ctrl;Alt</translation>
+    </message>
+    <message>
+        <source>清除搜索和最近使用记录</source>
+        <translation>Clear searches and recent items</translation>
+    </message>
+    <message>
+        <source>共 %1 项；搜索词可在搜索历史中单独删除，打开记录可右键移除</source>
+        <translation>%1 entries. Delete queries in search history; right-click an opened item to remove it.</translation>
+    </message>
+    <message>
+        <source>合并“全部”和“文件”</source>
+        <translation>Combine All and Files</translation>
+    </message>
+    <message>
+        <source>在“全部”下常驻文件类型筛选，应用仍优先显示；按住 Ctrl 查看类型关键词</source>
+        <translation>Keep file-type filters visible in All, with apps ranked first. Hold Ctrl to show type keywords.</translation>
+    </message>
+    <message>
+        <source>合并;全部;文件;类型;筛选;merge;scope</source>
+        <translation>combine;All;Files;type;filter;merge;scope</translation>
+    </message>
+    <message>
+        <source>连按两下 %1，执行下方选择的动作</source>
+        <translation>Tap %1 twice to perform the action selected below</translation>
+    </message>
+    <message>
+        <source>双击后做什么</source>
+        <translation>Double-tap action</translation>
+    </message>
+    <message>
+        <source>剪贴板;截图;插件;双击;动作;clipboard;plugin;double tap</source>
+        <translation>clipboard;screenshot;plugin;double tap;action</translation>
+    </message>
+    <message>
+        <source>纯净搜索模式</source>
+        <translation>Minimal search mode</translation>
+    </message>
+    <message>
+        <source>搜索框空着时只保留输入栏；输入后恢复结果和操作按钮。完整搜索窗口、文件夹内搜索和任务栏搜索不受影响</source>
+        <translation>Keep only the input when the search box is empty. Results and controls return as you type. Full search, folder search and taskbar search keep their controls.</translation>
+    </message>
+    <message>
+        <source>纯净;极简;空白;底栏;最近;收藏;pure;minimal</source>
+        <translation>minimal;clean;empty;footer;recent;favorites;pure</translation>
+    </message>
+    <message>
+        <source>每个双击键只执行一个动作。列表只显示支持此功能的已启用插件；原组合键仍可使用</source>
+        <translation>Each gesture performs one action. Only enabled plugins that support this feature are listed. Their original shortcuts still work.</translation>
     </message>
 </context>
 <context>
@@ -7165,8 +7642,8 @@ Right: center window · Drag: move window</translation>
         <translation>Regular expressions: every word is matched against names as a regular expression; press again to turn off</translation>
     </message>
     <message>
-        <source>只搜当前文件夹，或也搜其他位置</source>
-        <translation>Only the current folder, or elsewhere too</translation>
+        <source>当前文件夹优先 → 只搜它 → 只搜这一层，轮换</source>
+        <translation>Cycles: current folder first, only it, only this level</translation>
     </message>
     <message>
         <source>打开与操作</source>
@@ -7280,6 +7757,18 @@ Right: center window · Drag: move window</translation>
         <source>关闭；选中了多条时先取消选择</source>
         <translation>Close; with several selected, unselect them first</translation>
     </message>
+    <message>
+        <source>直接打开完整搜索面板</source>
+        <translation>Open the full search panel directly</translation>
+    </message>
+    <message>
+        <source>查找分组：输入名称，Enter 进入，Esc 返回内容搜索</source>
+        <translation>Find a group: type its name, Enter to open, Esc to return to content search</translation>
+    </message>
+    <message>
+        <source>翻阅搜索历史，回到最新时恢复未完成输入</source>
+        <translation>Browse query history; return to the newest position to restore your draft</translation>
+    </message>
 </context>
 <context>
     <name>ShortcutsButton</name>
@@ -7340,6 +7829,10 @@ Right: center window · Drag: move window</translation>
     <message>
         <source>内容索引</source>
         <translation>Content index</translation>
+    </message>
+    <message>
+        <source>所有应用、文件和文件夹</source>
+        <translation>All applications, files and folders</translation>
     </message>
 </context>
 <context>
@@ -7646,10 +8139,6 @@ Right: center window · Drag: move window</translation>
         <translation>, this round %1 / %2</translation>
     </message>
     <message>
-        <source>正在建立内容索引 %1 / %2</source>
-        <translation>Building the content index %1 / %2</translation>
-    </message>
-    <message>
         <source>文件索引一建好，就开始建立</source>
         <translation>Starts building as soon as the file index is ready</translation>
     </message>
@@ -7717,10 +8206,6 @@ Right: center window · Drag: move window</translation>
             <numerusform>%Ln item indexed</numerusform>
             <numerusform>%Ln items indexed</numerusform>
         </translation>
-    </message>
-    <message>
-        <source>正在建立索引…</source>
-        <translation>Building the index…</translation>
     </message>
     <message>
         <source>打开 Win顺</source>
@@ -7881,6 +8366,22 @@ Right: center window · Drag: move window</translation>
     <message>
         <source>“%1”以管理员身份运行</source>
         <translation>“%1” runs as administrator</translation>
+    </message>
+    <message>
+        <source>它的对话框 Win顺 转不过去，只能复制路径。点这里装上索引服务（只要一次管理员权限），就能直接转过去；以管理员身份运行 Win顺 也行。</source>
+        <translation>WinShun cannot take its dialogs to a folder, only copy the path. Click here to install the index service (administrator rights once) and they go straight there; running WinShun as administrator works too.</translation>
+    </message>
+    <message>
+        <source>它的对话框 Win顺 转不过去，只能复制路径：这台电脑的索引服务属于另一份 Win顺。以管理员身份运行这一份 Win顺 就能转过去。</source>
+        <translation>WinShun cannot take its dialogs to a folder, only copy the path: the index service on this PC belongs to another copy of WinShun. Run this copy as administrator and they go straight there.</translation>
+    </message>
+    <message>
+        <source>它的对话框 Win顺 转不过去，只能复制路径。以管理员身份运行 Win顺 就能转过去。</source>
+        <translation>WinShun cannot take its dialogs to a folder, only copy the path. Run WinShun as administrator and they go straight there.</translation>
+    </message>
+    <message>
+        <source>正在加载索引…</source>
+        <translation>Loading the index…</translation>
     </message>
     <message>
         <source>开机自启没有关闭</source>
@@ -8339,6 +8840,77 @@ Right: center window · Drag: move window</translation>
     <message>
         <source>网页搜索插件未启用或没有可用的网站，请在设置 → 插件中安装并启用网页搜索</source>
         <translation>Web search is disabled or has no sites. Install and enable Web search in Settings → Plugins.</translation>
+    </message>
+    <message>
+        <source>双击动作暂不可用</source>
+        <translation>Double-tap action unavailable</translation>
+    </message>
+    <message>
+        <source>请启用对应插件，并在“打开 Win顺”的双击设置中重新选择动作。</source>
+        <translation>Enable the plugin, then select its action again in Open WinShun → Double-tap.</translation>
+    </message>
+</context>
+<context>
+    <name>ws::BackgroundStatus</name>
+    <message>
+        <source>，</source>
+        <translation>, </translation>
+    </message>
+    <message>
+        <source>现在没有在忙，闲着时会把内存还给系统</source>
+        <translation>Nothing is running now; when idle, WinShun gives its memory back to Windows</translation>
+    </message>
+    <message>
+        <source>正在加载索引…</source>
+        <translation>Loading the index…</translation>
+    </message>
+    <message>
+        <source>正在建立文件索引，已收录 %1 项</source>
+        <translation>Building the file index, %1 items so far</translation>
+    </message>
+    <message>
+        <source>正在重建文件索引</source>
+        <translation>Rebuilding the file index</translation>
+    </message>
+    <message>
+        <source>正在同步文件的变化</source>
+        <translation>Catching up with file changes</translation>
+    </message>
+    <message>
+        <source>正在建立内容索引</source>
+        <translation>Building the content index</translation>
+    </message>
+    <message>
+        <source>正在更新内容索引</source>
+        <translation>Updating the content index</translation>
+    </message>
+    <message>
+        <source>正在搬索引文件夹 %1%</source>
+        <translation>Moving the index folder %1%</translation>
+    </message>
+    <message>
+        <source>正在下载更新 %1%</source>
+        <translation>Downloading the update %1%</translation>
+    </message>
+    <message>
+        <source>正在保存索引</source>
+        <translation>Saving the index</translation>
+    </message>
+    <message>
+        <source>文件索引建好了</source>
+        <translation>The file index is ready</translation>
+    </message>
+    <message>
+        <source>用了 %1。</source>
+        <translation>It took %1.</translation>
+    </message>
+    <message>
+        <source>内容索引建好了</source>
+        <translation>The content index is ready</translation>
+    </message>
+    <message>
+        <source>用了 %1。现在可以搜文件里的字了。</source>
+        <translation>It took %1. You can now search the text inside files.</translation>
     </message>
 </context>
 <context>
@@ -9033,8 +9605,12 @@ Right: center window · Drag: move window</translation>
         <translation>The file changed while being read. Refresh to try again.</translation>
     </message>
     <message>
-        <source>此文件的预览处理程序不可用，可查看文本或打开文件</source>
-        <translation>The preview handler is unavailable. View the text or open the file.</translation>
+        <source>正在向插件获取详情…</source>
+        <translation>Asking the plugin for details…</translation>
+    </message>
+    <message>
+        <source>插件结果（不是文件，不计入报告）：%1</source>
+        <translation>Plugin results (not files, not in the report): %1</translation>
     </message>
     <message>
         <source>当前命中文件：%1
@@ -9306,14 +9882,6 @@ Content index: %5</translation>
         <source>打印失败，请检查打印机后重试</source>
         <translation>Printing failed. Check the printer and try again.</translation>
     </message>
-    <message>
-        <source>正在加载文件预览…</source>
-        <translation>Loading file preview…</translation>
-    </message>
-    <message>
-        <source>此文件没有可用的预览处理程序，可查看文本或打开文件</source>
-        <translation>No preview handler is available. View the text or open the file.</translation>
-    </message>
 </context>
 <context>
     <name>ws::DialogBar</name>
@@ -9473,6 +10041,14 @@ Content index: %5</translation>
     <message>
         <source>暂时无法接收文件拖放，请松开鼠标后重试。</source>
         <translation>File drops are temporarily unavailable. Release the mouse button and try again.</translation>
+    </message>
+    <message>
+        <source>收藏圆盘打不开</source>
+        <translation>Favorites pie cannot open</translation>
+    </message>
+    <message>
+        <source>Esc 下面的 ` 键被另一个程序设成了快捷键，拖动文件时按它打不开圆盘。请在那个程序里换掉这个快捷键。</source>
+        <translation>Another program uses the ` key (below Esc) as its shortcut, so pressing it while dragging files cannot open the pie. Change that shortcut in the other program.</translation>
     </message>
 </context>
 <context>
@@ -9692,6 +10268,18 @@ Content index: %5</translation>
         <translation>Nothing to preview on this row</translation>
     </message>
     <message>
+        <source>插件没有提供内容</source>
+        <translation>The plugin gave no content</translation>
+    </message>
+    <message>
+        <source>插件提供的文字 · 前 %1 行</source>
+        <translation>Text from the plugin · first %1 lines</translation>
+    </message>
+    <message>
+        <source>插件提供的文字 · %1 行</source>
+        <translation>Text from the plugin · %1 lines</translation>
+    </message>
+    <message>
         <source>找不到这个文件，可能已被移动或删除</source>
         <translation>The file is not there; it may have been moved or deleted</translation>
     </message>
@@ -9793,6 +10381,10 @@ Content index: %5</translation>
         <translation>Add this folder to favorites</translation>
     </message>
     <message>
+        <source>复制路径</source>
+        <translation>Copy path</translation>
+    </message>
+    <message>
         <source>在此打开命令提示符</source>
         <translation>Open Command Prompt here</translation>
     </message>
@@ -9842,6 +10434,149 @@ Content index: %5</translation>
     <message>
         <source>未知</source>
         <translation>Unknown</translation>
+    </message>
+</context>
+<context>
+    <name>ws::HealthMonitor</name>
+    <message>
+        <source>Win顺 主程序</source>
+        <translation>WinShun</translation>
+    </message>
+    <message>
+        <source>后台服务</source>
+        <translation>Background service</translation>
+    </message>
+    <message>
+        <source>读文档</source>
+        <translation>Document reader</translation>
+    </message>
+    <message>
+        <source>插件运行环境</source>
+        <translation>Plugin host</translation>
+    </message>
+    <message>
+        <source>截图录屏</source>
+        <translation>Screenshot &amp; recording</translation>
+    </message>
+    <message>
+        <source>图片文字搜索</source>
+        <translation>Text in pictures</translation>
+    </message>
+    <message>
+        <source>语义搜索</source>
+        <translation>Semantic search</translation>
+    </message>
+    <message>
+        <source>翻译</source>
+        <translation>Translate</translation>
+    </message>
+    <message>
+        <source>书签</source>
+        <translation>Bookmarks</translation>
+    </message>
+    <message>
+        <source>休息提醒</source>
+        <translation>Break reminder</translation>
+    </message>
+    <message>
+        <source>LocalSend</source>
+        <translation>LocalSend</translation>
+    </message>
+    <message>
+        <source>资源管理器标签</source>
+        <translation>Explorer tabs</translation>
+    </message>
+    <message>
+        <source>系统开关</source>
+        <translation>System switches</translation>
+    </message>
+    <message>
+        <source>小工具</source>
+        <translation>Tools</translation>
+    </message>
+    <message>
+        <source>AI 助手连接</source>
+        <translation>AI assistant link</translation>
+    </message>
+    <message>
+        <source>更新程序</source>
+        <translation>Updater</translation>
+    </message>
+    <message>
+        <source>文件索引</source>
+        <translation>File index</translation>
+    </message>
+    <message>
+        <source>搜文件名用的</source>
+        <translation>what name searches use</translation>
+    </message>
+    <message>
+        <source>窗口和数据</source>
+        <translation>Windows and data</translation>
+    </message>
+    <message>
+        <source>搜索框、设置、剪贴板历史等正在用的</source>
+        <translation>the search box, settings, clipboard history and the like, in use</translation>
+    </message>
+    <message>
+        <source>缩略图</source>
+        <translation>Thumbnails</translation>
+    </message>
+    <message>
+        <source>列表和剪贴板里的小图，再看时不用重读</source>
+        <translation>small pictures in the lists and the clipboard, kept so they are not read again</translation>
+    </message>
+    <message>
+        <source>程序本身</source>
+        <translation>The program itself</translation>
+    </message>
+    <message>
+        <source>Win顺、Qt 和系统的代码，各个线程</source>
+        <translation>code of WinShun, Qt and Windows, the threads</translation>
+    </message>
+    <message>
+        <source>主程序</source>
+        <translation>Main program</translation>
+    </message>
+    <message>
+        <source>正在细分…</source>
+        <translation>Telling the parts apart…</translation>
+    </message>
+    <message>
+        <source>插件</source>
+        <translation>Plugins</translation>
+    </message>
+    <message>
+        <source>各自一个进程，见下面</source>
+        <translation>each a process of its own, see below</translation>
+    </message>
+    <message>
+        <source>读完 30 秒后退出</source>
+        <translation>quits 30 seconds after it is done</translation>
+    </message>
+    <message>
+        <source>还没有归还过</source>
+        <translation>Nothing given back yet</translation>
+    </message>
+    <message>
+        <source>上次归还：%1，还了 %2 MB</source>
+        <translation>Last given back: %1, %2 MB</translation>
+    </message>
+    <message>
+        <source>正在建立内容索引</source>
+        <translation>Building the content index</translation>
+    </message>
+    <message>
+        <source>约 3–5 分钟</source>
+        <translation>about 3–5 minutes</translation>
+    </message>
+    <message>
+        <source>；映射文件另有 %1 MB 驻留，由系统按需缓存</source>
+        <translation>; %1 MB of mapped files are also resident, cached by Windows as needed</translation>
+    </message>
+    <message>
+        <source>；约 %1 MB 当前未驻留，不代表实际磁盘占用</source>
+        <translation>; about %1 MB is currently nonresident, not a measure of disk usage</translation>
     </message>
 </context>
 <context>
@@ -10057,6 +10792,26 @@ Content index: %5</translation>
         <translation>Search elsewhere too</translation>
     </message>
     <message>
+        <source>只在 %1 这一层搜，不含子文件夹</source>
+        <translation>Searching only this level of %1, no subfolders</translation>
+    </message>
+    <message>
+        <source>没有搜子文件夹里的</source>
+        <translation>Subfolders are not searched</translation>
+    </message>
+    <message>
+        <source>包含子文件夹里的</source>
+        <translation>Subfolders are included</translation>
+    </message>
+    <message>
+        <source>含子文件夹</source>
+        <translation>Include subfolders</translation>
+    </message>
+    <message>
+        <source>只搜这一层</source>
+        <translation>This level only</translation>
+    </message>
+    <message>
         <source>这个文件夹不在索引范围内</source>
         <translation>This folder is not in the index</translation>
     </message>
@@ -10166,6 +10921,18 @@ Content index: %5</translation>
     <message>
         <source>在原窗口定位</source>
         <translation>Locate in the original window</translation>
+    </message>
+    <message>
+        <source>正在向插件获取详情…</source>
+        <translation>Asking the plugin for details…</translation>
+    </message>
+    <message>
+        <source>插件没有给出可显示的详情</source>
+        <translation>The plugin gave no details to show</translation>
+    </message>
+    <message>
+        <source>无法获取详情：插件没有回答</source>
+        <translation>Could not get details: the plugin did not answer</translation>
     </message>
     <message>
         <source>“%1”没有“启动程序”权限，没能打开 %2</source>
@@ -10776,6 +11543,26 @@ Content index: %5</translation>
         <source>Win顺 设置</source>
         <translation>WinShun Settings</translation>
     </message>
+    <message>
+        <source>切换到窗口</source>
+        <translation>Switch to window</translation>
+    </message>
+    <message>
+        <source>复制窗口标题</source>
+        <translation>Copy window title</translation>
+    </message>
+    <message>
+        <source>窗口已关闭或内容已改变，请重新搜索</source>
+        <translation>The window closed or its content changed. Search again.</translation>
+    </message>
+    <message>
+        <source>无法切换到此窗口，请从任务栏打开</source>
+        <translation>Could not switch to this window. Open it from the taskbar.</translation>
+    </message>
+    <message>
+        <source>复制路径或窗口标题</source>
+        <translation>Copy paths or window titles</translation>
+    </message>
 </context>
 <context>
     <name>ws::OcrPackage</name>
@@ -11120,6 +11907,26 @@ Content index: %5</translation>
         <source>连不上 GitHub。网络没问题的话，要设置网络代理才能访问。</source>
         <translation>Cannot reach GitHub. If the network is fine, a network proxy is needed to reach it.</translation>
     </message>
+    <message>
+        <source>官方插件</source>
+        <translation>Official plugin</translation>
+    </message>
+    <message>
+        <source>已审核源码</source>
+        <translation>Source reviewed</translation>
+    </message>
+    <message>
+        <source>未审核的原生插件</source>
+        <translation>Unreviewed native plugin</translation>
+    </message>
+    <message>
+        <source>原生插件 · 审核状态未标注</source>
+        <translation>Native plugin · review status unspecified</translation>
+    </message>
+    <message>
+        <source>审核状态未标注</source>
+        <translation>Review status unspecified</translation>
+    </message>
 </context>
 <context>
     <name>ws::PluginSettings</name>
@@ -11363,6 +12170,14 @@ Content index: %5</translation>
         <translation>Your plugins folder</translation>
     </message>
     <message>
+        <source>没能确认，再试一次</source>
+        <translation>Couldn&apos;t confirm. Try again.</translation>
+    </message>
+    <message>
+        <source>没能确认：%1</source>
+        <translation>Couldn&apos;t confirm: %1</translation>
+    </message>
+    <message>
         <source>选择文件夹</source>
         <translation>Choose a folder</translation>
     </message>
@@ -11573,14 +12388,6 @@ Content index: %5</translation>
     <message>
         <source>不能以管理员身份运行：%1</source>
         <translation>Cannot run as administrator: %1</translation>
-    </message>
-    <message>
-        <source>没能确认以管理员身份运行：%1</source>
-        <translation>Could not confirm running as administrator: %1</translation>
-    </message>
-    <message>
-        <source>已确认，%1 以后以管理员身份运行</source>
-        <translation>Confirmed: %1 runs as administrator from now on</translation>
     </message>
     <message>
         <source>插件的文件被改过，和你确认时不一样，现在用普通权限运行。不确定是谁改的就别确认</source>
@@ -11812,6 +12619,22 @@ Content index: %5</translation>
     <message>
         <source>外观、快捷键与插件</source>
         <translation>Appearance, shortcuts and plugins</translation>
+    </message>
+    <message>
+        <source>切换到窗口 · %1</source>
+        <translation>Switch to window · %1</translation>
+    </message>
+    <message>
+        <source>正在运行</source>
+        <translation>Running</translation>
+    </message>
+    <message>
+        <source>已打开</source>
+        <translation>Open</translation>
+    </message>
+    <message>
+        <source>窗口</source>
+        <translation>Window</translation>
     </message>
 </context>
 <context>
@@ -12708,6 +13531,18 @@ Content index: %5</translation>
         <source>这个快捷键已用于全局操作，请换一个</source>
         <translation>This shortcut is already used by a global action. Choose another.</translation>
     </message>
+    <message>
+        <source>搜索框</source>
+        <translation>Search box</translation>
+    </message>
+    <message>
+        <source>剪贴板</source>
+        <translation>Clipboard</translation>
+    </message>
+    <message>
+        <source>暂不可用：%1 · %2</source>
+        <translation>Unavailable: %1 · %2</translation>
+    </message>
 </context>
 <context>
     <name>ws::SwitchAudio</name>
@@ -13119,6 +13954,87 @@ Content index: %5</translation>
     <message>
         <source>无法完成增强识别安装，原来的文件已保留。</source>
         <translation>Installation could not finish. Your existing recognition files have been kept.</translation>
+    </message>
+</context>
+<context>
+    <name>FontPicker</name>
+    <message>
+        <source>默认（阿里巴巴普惠体）</source>
+        <translation>Default (Alibaba PuHuiTi)</translation>
+    </message>
+    <message>
+        <source>界面字体</source>
+        <translation>Interface font</translation>
+    </message>
+</context>
+<context>
+    <name>ClipGroupPicker</name>
+    <message>
+        <source>%1，%2 项</source>
+        <translation>%1, %2 items</translation>
+    </message>
+    <message>
+        <source>没有匹配的分组</source>
+        <translation>No matching groups</translation>
+    </message>
+    <message>
+        <source>还没有分组</source>
+        <translation>No groups yet</translation>
+    </message>
+</context>
+<context>
+    <name>FolderMenu</name>
+    <message>
+        <source>更多…</source>
+        <translation>More…</translation>
+    </message>
+</context>
+<context>
+    <name>QueryHistoryPicker</name>
+    <message>
+        <source>搜索历史 · %1</source>
+        <translation>Search history · %1</translation>
+    </message>
+    <message>
+        <source>移除这条搜索记录</source>
+        <translation>Remove this query</translation>
+    </message>
+    <message>
+        <source>还没有搜索记录</source>
+        <translation>No search history yet</translation>
+    </message>
+</context>
+<context>
+    <name>PluginReadmeDialog</name>
+    <message>
+        <source>%1 · 使用说明</source>
+        <translation>%1 · User guide</translation>
+    </message>
+    <message>
+        <source>关闭说明（Esc / Q）</source>
+        <translation>Close guide (Esc / Q)</translation>
+    </message>
+</context>
+<context>
+    <name>PluginReadme</name>
+    <message>
+        <source>无法读取插件说明，请确认插件文件完整</source>
+        <translation>Cannot read the guide. Check that the plugin files are complete.</translation>
+    </message>
+    <message>
+        <source>插件说明超过 1 MB，暂时无法显示</source>
+        <translation>This guide is larger than 1 MB and cannot be displayed.</translation>
+    </message>
+    <message>
+        <source>读取插件说明失败</source>
+        <translation>Could not read the plugin guide.</translation>
+    </message>
+</context>
+<context>
+    <name>Launcher</name>
+    <message>
+        <source>已清除搜索和最近使用记录</source>
+        <translation>Searches and recent items cleared</translation>
     </message>
 </context>
 </TS>

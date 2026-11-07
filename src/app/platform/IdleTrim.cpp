@@ -2,9 +2,11 @@
 
 #include "DiagnosticLog.h"
 
+#include <QDateTime>
 #include <QDebug>
 #include <QGuiApplication>
 #include <QJsonObject>
+#include <QWindow>
 
 #include <algorithm>
 #include <thread>
@@ -27,8 +29,10 @@ constexpr int kAfterUseMs = 20'000;
 constexpr int kSettleMs = 5'000; // after busy work ended (poke)
 constexpr int kBusyRecheckMs = 15'000; // while the index loads, catches up or reads content
 // While unused: background work brings pages back. The content indexer's
-// passes (30 s after start, then every 15 minutes and after changes) go
-// through the whole file index, ~90 MB; copies, journal changes and saves.
+// passes (30 s after start, then every 15 minutes and after changes) look
+// only at the files that changed; just a full one (the first pass, other
+// options, lost track, every 24 hours) goes through the whole file index,
+// ~90 MB; copies, journal changes and saves.
 // A check reads one number; only a working set above kTrimAbove is emptied.
 constexpr int kRecheckMs = 30'000;
 constexpr SIZE_T kTrimAbove = 32 * 1024 * 1024; // private working set; ~5 MB is what idling itself touches
@@ -86,10 +90,16 @@ bool IdleTrim::inUse() const
     // the focus, or the foreground window (a native dialog too) is ours.
     if (QGuiApplication::applicationState() != Qt::ApplicationActive)
         return false;
-    if (QGuiApplication::focusWindow())
+    // Minimized, a window may stay the foreground one (and Qt's focus window,
+    // the application active) when Windows has no other to give it to: not in
+    // use. Measured 2026-11-06: the settings minimized kept ~120 MB for good.
+    const HWND foreground = ::GetForegroundWindow();
+    if (foreground && ::IsIconic(foreground))
+        return false;
+    if (const QWindow* focus = QGuiApplication::focusWindow(); focus && focus->visibility() != QWindow::Minimized)
         return true;
     DWORD owner = 0;
-    if (const HWND foreground = ::GetForegroundWindow())
+    if (foreground)
         ::GetWindowThreadProcessId(foreground, &owner);
     return owner == ::GetCurrentProcessId();
 }
@@ -147,6 +157,13 @@ bool IdleTrim::takeSlept()
     return passed - awakeFor > kSleptMs;
 }
 
+void IdleTrim::noteTrim(qint64 megabytes) noexcept
+{
+    m_lastTrimMb = megabytes;
+    m_trimmed = true; // the next opening brings the pages a search reads back (App)
+    m_lastTrimAtMs = QDateTime::currentMSecsSinceEpoch();
+}
+
 void IdleTrim::check()
 {
     if (takeSlept())
@@ -180,8 +197,10 @@ void IdleTrim::check()
         // ~10 ms per 100 MB (wsbench --trim): not on the GUI thread, so a
         // hotkey pressed meanwhile is not held up.
         m_trimmed = true;
-        std::thread([] {
+        std::thread([this, bytes] {
             ::SetProcessWorkingSetSizeEx(::GetCurrentProcess(), static_cast<SIZE_T>(-1), static_cast<SIZE_T>(-1), 0);
+            const SIZE_T after = privateWorkingSet();
+            noteTrim(static_cast<qint64>((bytes > after ? bytes - after : 0) / (1024 * 1024)));
         }).detach();
     }
     m_timer.start(kRecheckMs);

@@ -7,6 +7,8 @@ ListView {
     id: view
     required property ContentPane pane
     property bool textView: false
+    property real dpr: 0 // the window's, passed by the host (GitHub #111)
+    readonly property real pixelRatio: dpr > 0 ? dpr : Screen.devicePixelRatio // Screen only without one
     objectName: textView ? "contentTextLines" : "contentHitLines"
     model: textView ? pane.textLines : pane.hits
     clip: true
@@ -54,17 +56,15 @@ ListView {
                 font.pixelSize: Theme.uiCaption
             }
         }
-        Rectangle {
+        Hook { // the style's highlight: the current line chosen, the others that matched lightly
             anchors.top: headingBox.bottom
             anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
-            radius: Theme.controlRadius
-            color: row.current ? Theme.badge : row.hit ? Theme.hover : "transparent"
-            Rectangle {
-                width: 3; radius: Theme.smallRadius
-                anchors.left: parent.left; anchors.top: parent.top; anchors.bottom: parent.bottom
-                visible: row.current
-                color: Theme.accent
-            }
+            part: Theme.rowHighlight
+            selected: row.current
+            hovered: row.hit && !row.current
+            current: row.current
+            role: "list"
+            dpr: view.pixelRatio
         }
         Text {
             x: 6; y: headingBox.height + 6
@@ -100,7 +100,7 @@ ListView {
         anchors.centerIn: parent
         width: parent.width - 32
         visible: view.count === 0 && !view.pane.busy
-        text: view.pane.path.length > 0 ? qsTr("没有可显示的内容，请检查筛选条件或读取提示") : qsTr("选择左侧文件查看详情")
+        text: view.pane.title.length > 0 ? qsTr("没有可显示的内容，请检查筛选条件或读取提示") : qsTr("选择左侧文件查看详情")
         wrapMode: Text.Wrap
         horizontalAlignment: Text.AlignHCenter
         color: Theme.subtext

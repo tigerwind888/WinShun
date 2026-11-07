@@ -1,4 +1,7 @@
 #include "ClipboardDisplayReplica.h"
+#include "UiFont.h"
+#include <QFont>
+#include <cstdio>
 
 #include "Clipboard.h"
 #include "ClipThumbnailProvider.h"
@@ -144,7 +147,8 @@ DisplayReplica::DisplayReplica(QQmlEngine* engine) : QQmlPropertyMap(this, nullp
         if (!m_applying) send({{u"type"_s, u"set"_s}, {u"name"_s, name}, {u"value"_s, QJsonValue::fromVariant(value)}});
     });
     connect(&m_rows, &DisplayRows::highlightColorChanged, this, [this] {
-        send({{u"type"_s, u"highlight"_s}, {u"color"_s, m_rows.property("highlightColor").value<QColor>().name(QColor::HexArgb)}});
+        send({{u"type"_s, u"highlight"_s}, {u"color"_s, m_rows.property("highlightColor").value<QColor>().name(QColor::HexArgb)},
+            {u"weight"_s, m_rows.property("highlightWeight").toInt()}});
     });
     connect(this, &DisplayReplica::groupNameRequested, this, [this](int row, qint64 group) {
         if (!m_applying) invoke(u"groupNameRequested"_s, {row, group});
@@ -169,6 +173,15 @@ bool DisplayReplica::connectTo(const QString& pipe, DWORD parentPid)
     if (!m_socket.waitForConnected(3000)) return false;
     ULONG actual = 0;
     if (!::GetNamedPipeServerProcessId(reinterpret_cast<HANDLE>(m_socket.socketDescriptor()), &actual) || actual != parentPid)
+        return false;
+    QElapsedTimer deadline;
+    deadline.start();
+    while (!m_failed && !m_fontReady && deadline.elapsed() < 3000) {
+        receive();
+        if (!m_fontReady)
+            m_socket.waitForReadyRead(std::max(1, 3000 - int(deadline.elapsed())));
+    }
+    if (m_failed || !m_fontReady)
         return false;
     m_watch.start();
     return true;
@@ -240,7 +253,7 @@ QVariant DisplayReplica::invoke(const QString& name, const QVariantList& argumen
         if (!screen && m_window) screen = m_window->screen();
         return screen ? QRectF(screen->availableGeometry()) : QRectF();
     }
-    static const QStringList returnsValue {u"heldRow"_s, u"canMove"_s, u"addGroup"_s, u"selectAll"_s,
+    static const QStringList returnsValue {u"heldRow"_s, u"canMove"_s, u"addGroup"_s, u"enterGroup"_s, u"selectAll"_s,
         u"preview"_s, u"menuItems"_s, u"categoryMenuItems"_s};
     if (!returnsValue.contains(name)) {
         send({{u"type"_s, u"call"_s}, {u"id"_s, 0}, {u"name"_s, name}, {u"args"_s, QJsonArray::fromVariantList(arguments)}});
@@ -279,6 +292,7 @@ void DisplayReplica::applyState(const QJsonObject& object)
     QGuiApplication::styleHints()->setColorScheme(object.value(u"dark"_s).toBool() ? Qt::ColorScheme::Dark : Qt::ColorScheme::Light);
     SystemTheme::setUiSize(object.value(u"uiSize"_s).toString());
     SystemTheme::setRoundedCorners(object.value(u"rounded"_s).toBool(true));
+    SystemTheme::setUiStyle(object.value(u"uiStyle"_s).toString());
     SystemTheme::setBackdropOn(object.value(u"backdrop"_s).toBool());
     const QString language = object.value(u"language"_s).toString();
     if (m_language != language) {
@@ -328,7 +342,10 @@ void DisplayReplica::deliverKey(const QJsonObject& object)
 void DisplayReplica::dispatch(const QJsonObject& object)
 {
     const QString type = object.value(u"type"_s).toString();
-    if (type == u"reply") {
+    if (type == u"font" && !m_fontReady) {
+        uifont::apply(object.value(u"family"_s).toString());
+        m_fontReady = true;
+    } else if (type == u"reply") {
         if (!object.value(u"ok"_s).toBool()) { failed(); return; }
         m_replies.insert(object.value(u"id"_s).toInteger(), object.value(u"value"_s).toVariant());
     } else if (type == u"state") {
@@ -388,7 +405,7 @@ void DisplayReplica::dispatch(const QJsonObject& object)
         if (name == u"groupNameRequested" && args.size() == 2) emit groupNameRequested(args[0].toInt(), args[1].toInteger());
         else if (name == u"stepped" && args.size() == 1) emit stepped(args[0].toInt());
         else if (QStringList {u"shown"_s, u"placed"_s, u"listChanged"_s, u"browseStepRequested"_s,
-                     u"contextMenuKeyPressed"_s, u"pinyinHintRequested"_s}.contains(name))
+                     u"contextMenuKeyPressed"_s, u"groupSearchRequested"_s, u"pinyinHintRequested"_s}.contains(name))
             QMetaObject::invokeMethod(this, name.toUtf8().constData(), Qt::DirectConnection);
         m_applying = false;
     }
@@ -461,6 +478,13 @@ int runClipboardDisplay(const QStringList& args)
     win::styleFramelessWindow(window.get(), SystemTheme::backdropAvailable());
     win::keepDarkFrameOnShow(window.get());
     replica.setWindow(window.get(), &placement, &frame);
+    if (probe) {
+        win::setCloaked(window.get(), true); // probes exercise input/state without displaying on the user's desktop
+        const auto* field = window->findChild<QQuickItem*>(u"clipboardSearchField"_s);
+        const QString family = field ? field->property("font").value<QFont>().family() : QString();
+        std::fprintf(stderr, "clipboard-display-font: %s\n", qUtf8Printable(family));
+        std::fflush(stderr);
+    }
     ContextMenuGuard guard;
     QGuiApplication::instance()->installEventFilter(&guard);
     using GetBand = BOOL(WINAPI*)(HWND, DWORD*);

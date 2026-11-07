@@ -2,6 +2,7 @@
 
 #include "ContentDetails.h"
 #include "ContentReport.h"
+#include "FilePreview.h"
 #include "SearchEngine.h"
 
 #include <QAbstractListModel>
@@ -18,7 +19,6 @@ class QQuickItem;
 namespace ws {
 class ComWorker;
 class IndexService;
-class PreviewHost;
 
 class ContentLines final : public QAbstractListModel {
     Q_OBJECT
@@ -29,7 +29,7 @@ public:
     QVariant data(const QModelIndex& index, int role) const override;
     QHash<int, QByteArray> roleNames() const override;
     void assign(std::shared_ptr<const contentdetails::Matches> matches, std::vector<int> rows,
-        std::vector<int> visibleMatches, QColor color,
+        std::vector<int> visibleMatches, QColor color, bool bold,
         std::shared_ptr<const std::vector<contentdetails::Match>> refinements = {});
     void setCurrent(int sourceLine);
     int indexOf(int sourceLine) const;
@@ -42,6 +42,7 @@ private:
     std::vector<int> m_visibleMatches;
     std::shared_ptr<const std::vector<contentdetails::Match>> m_refinements;
     QColor m_color;
+    bool m_bold = true;
     int m_current = -1;
 };
 
@@ -57,6 +58,7 @@ class ContentPane final : public QObject {
     Q_PROPERTY(bool active READ active WRITE setActive NOTIFY activeChanged FINAL)
     Q_PROPERTY(bool busy READ busy NOTIFY changed FINAL)
     Q_PROPERTY(QString path READ path NOTIFY changed FINAL)
+    Q_PROPERTY(QString title READ title NOTIFY changed FINAL)
     Q_PROPERTY(QString message READ message NOTIFY changed FINAL)
     Q_PROPERTY(QString matchStatus READ matchStatus NOTIFY changed FINAL)
     Q_PROPERTY(QVariantList terms READ terms NOTIFY changed FINAL)
@@ -72,19 +74,37 @@ class ContentPane final : public QObject {
     Q_PROPERTY(QString reportStatus READ reportStatus NOTIFY reportChanged FINAL)
     Q_PROPERTY(QString reportPreview READ reportPreview NOTIFY reportChanged FINAL)
     Q_PROPERTY(QVariantMap reportOptions READ reportOptions NOTIFY reportChanged FINAL)
-    Q_PROPERTY(QString previewMessage READ previewMessage NOTIFY previewChanged FINAL)
+    // The 预览 tab's: what the launcher's own preview shows, here in the
+    // page (a picture, text, a document's handler, or what is known; GitHub #224).
+    Q_PROPERTY(ws::FilePreview* filePreview READ filePreview CONSTANT FINAL)
     Q_PROPERTY(QColor highlightColor READ highlightColor WRITE setHighlightColor NOTIFY changed FINAL)
+    // The style's match weight (Theme.matchWeight): bold from DemiBold up.
+    Q_PROPERTY(int highlightWeight READ highlightWeight WRITE setHighlightWeight NOTIFY changed FINAL)
     Q_PROPERTY(QString filterText READ filterText NOTIFY changed FINAL)
     Q_PROPERTY(bool matchCase READ matchCase NOTIFY changed FINAL)
     Q_PROPERTY(bool wholeWord READ wholeWord NOTIFY changed FINAL)
     Q_PROPERTY(bool regex READ regex NOTIFY changed FINAL)
 public:
+    // What the details are of: a file's row, or a plugin's (GitHub #202).
+    struct Subject {
+        QString key; // the row: a file's path, a plugin row's (winshun-plugin:…); empty: none
+        QString file; // what is read: the file's path, the file a plugin's row opens or names
+        QString title; // the header; empty: the file's name
+        // A plugin's details as text, in place of a file; `cut`: only the
+        // start of what it gave (plugin::kMaxDetailsText).
+        std::shared_ptr<const QString> text;
+        bool cut = false;
+        QString message; // nothing to read, and why (still asked for: `waiting`)
+        bool waiting = false;
+        friend bool operator==(const Subject&, const Subject&) = default;
+    };
     explicit ContentPane(IndexService* index, QObject* parent = nullptr);
     ~ContentPane() override;
     void loadPreferences(const QString& file);
     void update(SearchEngine::Request request, const QString& words, const QString& key,
-        SearchResults files, SearchResults selected, const QString& current,
-        int scanned, int total, bool complete, bool searching, const ContentLeftOut& leftOut);
+        SearchResults files, SearchResults selected, const Subject& current,
+        int scanned, int total, bool complete, bool searching, const ContentLeftOut& leftOut, int pluginRows = 0);
+    static constexpr int PreviewTab = 3; // the tabs: 摘要, 匹配, 文本, 预览, 报告
     bool opened() const { return m_opened; }
     void setOpened(bool value);
     int preferredWidth() const { return m_width; }
@@ -95,6 +115,7 @@ public:
     void setActive(bool value);
     bool busy() const { return m_busy; }
     QString path() const { return m_path; }
+    QString title() const;
     QString message() const { return m_message; }
     QString matchStatus() const;
     QVariantList terms() const;
@@ -113,13 +134,19 @@ public:
     QString reportPreview() const { return m_reportPreview; }
     std::shared_ptr<const contentreport::Report> reportSnapshot() const { return m_report; }
     QVariantMap reportOptions() const;
-    QString previewMessage() const { return m_previewMessage; }
+    FilePreview* filePreview() const { return m_filePreview.get(); }
+    // Text files besides the usual ones, shown as text (the content search's kinds).
+    void setTextExtensions(const QStringList& extensions);
+    // Shows a file's matches, text or preview now (a plugin's details are asked for then).
+    bool showsDetails() const { return m_active && m_opened && m_tab >= 1 && m_tab <= 3; }
     QColor highlightColor() const { return m_color; }
     QString filterText() const { return m_filter.text; }
     bool matchCase() const { return m_filter.matchCase; }
     bool wholeWord() const { return m_filter.wholeWord; }
     bool regex() const { return m_filter.regex; }
     void setHighlightColor(const QColor& color);
+    int highlightWeight() const { return m_weight; }
+    void setHighlightWeight(int weight);
     Q_INVOKABLE void setFilter(const QString& text, bool matchCase, bool wholeWord, bool regex);
     Q_INVOKABLE void toggleTerm(int index);
     Q_INVOKABLE void nextMatch(int delta);
@@ -134,10 +161,12 @@ public:
     Q_INVOKABLE void copyReport();
     Q_INVOKABLE void saveReport(int format);
     Q_INVOKABLE void printReport();
-    // Called only by the preview tab, with the actual clipped viewport.
+    // Called only by the preview tab: its page, while it is there.
     Q_INVOKABLE void setPreviewArea(QQuickItem* area, bool dark);
     Q_INVOKABLE void movePreview();
     void closePreview();
+    // The 预览 tab is on show (the page laid out, its window visible).
+    bool previewShown() const;
     bool ownsForeground() const;
     std::optional<QRect> previewRect() const;
     bool modalOperation() const { return m_dialogOpen; }
@@ -149,9 +178,9 @@ signals:
     void changed();
     void summaryChanged();
     void reportChanged();
-    void previewChanged();
     void positionRequested(int hitRow, int textRow);
-    void openRequested(const QString& path, int line);
+    // `key`: the Subject's, whose row it is (a plugin's opens as its permissions allow).
+    void openRequested(const QString& key, const QString& path, int line);
 private:
     struct Worker;
     void schedule();
@@ -170,6 +199,7 @@ private:
     int m_context = 1;
     bool m_busy = false;
     QString m_path, m_message, m_key;
+    Subject m_subject; // m_path: its file
     QStringList m_terms;
     std::vector<bool> m_enabled;
     contentdetails::Filter m_filter;
@@ -178,6 +208,7 @@ private:
     contentdetails::Rows m_rows;
     int m_current = -1;
     QColor m_color;
+    int m_weight = 700; // QFont::Bold
     QTimer m_debounce;
     SearchEngine::Request m_request;
     SearchResults m_files, m_selected;
@@ -198,11 +229,9 @@ private:
     quint64 m_auditId = 0;
     SearchResults m_auditFiles;
     std::shared_ptr<Worker> m_detailState, m_reportState;
-    std::unique_ptr<PreviewHost> m_preview;
+    std::unique_ptr<FilePreview> m_filePreview;
     QPointer<QQuickItem> m_previewArea;
     bool m_dark = false;
-    QString m_previewPath, m_previewMessage;
-    quint64 m_previewTicket = 0;
     // Last: destroyed before the states and models tasks may use.
     std::unique_ptr<ComWorker> m_detailWorker, m_reportWorker;
 };

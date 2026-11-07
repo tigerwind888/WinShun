@@ -11,6 +11,7 @@ import WinShun
 // install or removal shows over the cards.
 SettingsSection {
     id: pluginsSection
+    objectName: "pluginsSection"
 
     required property PluginSettings plugins
     // Rows on the 开发者 tab shown only in developer mode (PluginDevSection.lockedRows).
@@ -18,6 +19,7 @@ SettingsSection {
     // The built-in features drawn as cards here (PasteFileCard, BuiltinCard);
     // null in a preview without one.
     property SettingsEditor editor: null
+    property bool builtinRevealed: false // search navigation may reveal a card without changing the saved preference
 
     // The cards unfolded, by plugin id: here, not in the cards, for the list
     // is reset (the cards made again) when a plugin comes or goes. Until the
@@ -64,6 +66,7 @@ SettingsSection {
     // The settings window hidden (SettingsWindow.resetForReopen): every card
     // folded, as in a window made anew; the menus are closed by the window.
     function resetForReopen() {
+        builtinRevealed = false
         expandedIds = []
         revealTimer.stop()
         revealed = ""
@@ -101,6 +104,7 @@ SettingsSection {
         Component.onCompleted: if (shown) pluginsSection.plugins.gallery.readList()
 
         FlatButton {
+            dpr: pluginsSection.dpr
             objectName: "viewPluginUpdates"
             text: qsTr("查看")
             onClicked: {
@@ -110,6 +114,7 @@ SettingsSection {
             }
         }
         FlatButton {
+            dpr: pluginsSection.dpr
             objectName: "updateAllFromNotice"
             visible: pluginsSection.plugins.gallery.updatableCount > 0 || pluginsSection.plugins.gallery.updatingAll
             highlighted: true
@@ -127,6 +132,7 @@ SettingsSection {
         shown: pluginsSection.plugins.recoveryMessage.length > 0
 
         FlatButton {
+            dpr: pluginsSection.dpr
             objectName: "retryPluginRecovery"
             text: pluginsSection.plugins.recovering ? qsTr("正在恢复…") : qsTr("重试恢复")
             enabled: !pluginsSection.plugins.recovering
@@ -138,6 +144,7 @@ SettingsSection {
             spacing: 8
 
             FlatButton {
+                dpr: pluginsSection.dpr
                 objectName: "installRecoveryArchive"
                 text: qsTr("从本地安装插件包…")
                 enabled: !pluginsSection.plugins.recovering
@@ -166,6 +173,7 @@ SettingsSection {
         shown: pluginsSection.plugins.message.length > 0
 
         FlatButton {
+            dpr: pluginsSection.dpr
             text: qsTr("知道了")
             flat: true
             onClicked: pluginsSection.plugins.clearMessage()
@@ -186,6 +194,9 @@ SettingsSection {
     // open_settings does), the row on the feature's own page comes first.
     SettingRow {
         id: builtinRow
+        objectName: "pluginBuiltinsRow"
+        readonly property bool expanded: searching || pluginsSection.builtinRevealed || (pluginsSection.editor?.pluginBuiltinsExpanded ?? false)
+        bodyShown: expanded
 
         // The names and words of the cards, and whether the words searched fit each.
         readonly property var pasteTerms: pasteCard.item ? pasteCard.item.searchTerms : []
@@ -221,21 +232,41 @@ SettingsSection {
         description: qsTr("随 Win顺 一起提供，用到哪个开哪个；关闭后停止对应功能，暂不支持单独卸载")
         shown: pluginsSection.editor !== null
         onRevealRequested: {
+            pluginsSection.builtinRevealed = true
             if (pasteFound && pasteCard.item && pluginsSection.editor.pasteFileEnabled)
                 pasteCard.item.expanded = true
         }
 
+        FlatButton {
+            objectName: "pluginBuiltinsToggle"
+            dpr: pluginsSection.dpr
+            flat: true
+            text: builtinRow.expanded ? qsTr("收起") : qsTr("展开")
+            trailingGlyph: builtinRow.expanded ? "\uE70E" : "\uE70D"
+            enabled: !builtinRow.searching
+            Accessible.name: builtinRow.expanded ? qsTr("收起内置功能") : qsTr("展开内置功能")
+            onClicked: {
+                const expand = !builtinRow.expanded
+                pluginsSection.builtinRevealed = false
+                pluginsSection.editor.pluginBuiltinsExpanded = expand
+            }
+        }
+
         body: Column {
+            objectName: "pluginBuiltinCards"
+            visible: builtinRow.expanded
             width: parent.width
             spacing: 8
 
             FlatButton {
+                dpr: pluginsSection.dpr
                 id: foldMeasure
                 visible: false
                 text: qsTr("收起设置")
                 trailingGlyph: String.fromCharCode(0xE70E)
             }
             FlatButton {
+                dpr: pluginsSection.dpr
                 id: linkMeasure
                 visible: false
                 text: qsTr("更多设置")
@@ -336,6 +367,7 @@ SettingsSection {
 
     SettingRow {
         id: listRow
+        objectName: "installedPluginsRow"
 
         title: qsTr("已安装的插件")
         keywords: qsTr("插件;扩展;关键字;命令;安装;plugin;extension").split(";")
@@ -361,6 +393,7 @@ SettingsSection {
                      : qsTr("还没有插件：点“添加插件”，或把插件文件夹、.zip / .wsplugin 拖到这里")
 
         FlatButton {
+            dpr: pluginsSection.dpr
             id: addButton
             text: qsTr("添加插件")
             glyph: "" // Add
@@ -463,6 +496,7 @@ SettingsSection {
         description: pluginsSection.plugins.userDir
 
         FlatButton {
+            dpr: pluginsSection.dpr
             text: qsTr("打开")
             glyph: "" // FolderOpen
             onClicked: pluginsSection.plugins.openUserDir()

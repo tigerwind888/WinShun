@@ -1,5 +1,32 @@
 find_package(Qt6 6.8 REQUIRED COMPONENTS Test QuickTest)
 
+qt_add_executable(tst_windowsearch tst_windowsearch.cpp ${PROJECT_SOURCE_DIR}/src/app/platform/WindowSearch.cpp)
+target_include_directories(tst_windowsearch PRIVATE ${PROJECT_SOURCE_DIR}/src/app)
+target_link_libraries(tst_windowsearch PRIVATE wscore Qt6::Test user32 dwmapi)
+set_target_properties(tst_windowsearch PROPERTIES WIN32_EXECUTABLE FALSE QT_QML_MODULE_NO_IMPORT_SCAN TRUE)
+add_test(NAME tst_windowsearch COMMAND tst_windowsearch -o -,txt)
+set_tests_properties(tst_windowsearch PROPERTIES
+    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+
+qt_add_executable(tst_queryhistory tst_queryhistory.cpp)
+target_link_libraries(tst_queryhistory PRIVATE wscore Qt6::Test)
+qt_add_executable(tst_pluginreadme tst_pluginreadme.cpp ${PROJECT_SOURCE_DIR}/src/app/PluginReadme.cpp)
+target_include_directories(tst_pluginreadme PRIVATE ${PROJECT_SOURCE_DIR}/src/app)
+target_link_libraries(tst_pluginreadme PRIVATE winshun_options Qt6::Gui Qt6::Test)
+foreach(test IN ITEMS tst_queryhistory tst_pluginreadme)
+    set_target_properties(${test} PROPERTIES WIN32_EXECUTABLE FALSE QT_QML_MODULE_NO_IMPORT_SCAN TRUE)
+    add_test(NAME ${test} COMMAND ${test} -o -,txt)
+    set_tests_properties(${test} PROPERTIES ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+endforeach()
+
+qt_add_executable(tst_paster tst_paster.cpp ${PROJECT_SOURCE_DIR}/src/app/platform/Paster.cpp)
+target_include_directories(tst_paster PRIVATE ${PROJECT_SOURCE_DIR}/src/app ${PROJECT_SOURCE_DIR}/src/core)
+target_link_libraries(tst_paster PRIVATE winshun_options Qt6::Test user32 comctl32)
+set_target_properties(tst_paster PROPERTIES WIN32_EXECUTABLE FALSE QT_QML_MODULE_NO_IMPORT_SCAN TRUE)
+add_test(NAME tst_paster COMMAND tst_paster -o -,txt)
+set_tests_properties(tst_paster PROPERTIES RUN_SERIAL TRUE
+    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+
 qt_add_executable(tst_pluginhotkeys tst_pluginhotkeys.cpp
     ${PROJECT_SOURCE_DIR}/src/app/platform/PluginHotkeys.cpp)
 target_include_directories(tst_pluginhotkeys PRIVATE ${PROJECT_SOURCE_DIR}/src/app)
@@ -69,6 +96,31 @@ add_test(NAME tst_settingsscroll COMMAND $<TARGET_FILE:WinShun>
 set_tests_properties(tst_settingsscroll PROPERTIES RUN_SERIAL TRUE TIMEOUT 90
     ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
 
+# #230: a plugin's 管理员 确认 that fails says why on its card, with 再试一次 there.
+add_test(NAME tst_pluginconfirm COMMAND $<TARGET_FILE:WinShun>
+    --preview-plugins "${CMAKE_CURRENT_BINARY_DIR}/plugin-confirm.png" --elevated --confirm)
+set_tests_properties(tst_pluginconfirm PROPERTIES RUN_SERIAL TRUE TIMEOUT 90
+    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+
+# #235: the fourth style is reachable, saved and keyboard-operable in the
+# actual settings view. Controls also run against the production launcher.
+foreach(liquid_mode IN ITEMS light dark square)
+    set(liquid_args --style liquid --renderer d3d11)
+    if(NOT liquid_mode STREQUAL "light")
+        list(APPEND liquid_args --dark --scale 1.5)
+    endif()
+    if(liquid_mode STREQUAL "square")
+        list(APPEND liquid_args --corners square)
+    endif()
+    add_test(NAME tst_liquid_buttons_${liquid_mode} COMMAND $<TARGET_FILE:WinShun>
+        --preview-results "${CMAKE_CURRENT_BINARY_DIR}/liquid-buttons-${liquid_mode}" --style-buttons ${liquid_args})
+    add_test(NAME tst_liquid_picker_${liquid_mode} COMMAND $<TARGET_FILE:WinShun>
+        --preview-settings "${CMAKE_CURRENT_BINARY_DIR}/liquid-picker-${liquid_mode}" --style-picker ${liquid_args})
+    set_tests_properties(tst_liquid_buttons_${liquid_mode} tst_liquid_picker_${liquid_mode} PROPERTIES
+        RUN_SERIAL TRUE TIMEOUT 90
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+endforeach()
+
 # The screenshot hotkey row and its 按键一览 entry follow the capture plugin's state.
 add_test(NAME tst_settingscapturehotkey COMMAND $<TARGET_FILE:WinShun>
     --preview-settings "${CMAKE_CURRENT_BINARY_DIR}/settings-capture-hotkey" --capture-hotkey --scale 1.5)
@@ -129,7 +181,21 @@ add_test(NAME tst_opusfocus COMMAND tst_opusfocus)
 set_tests_properties(tst_opusfocus PROPERTIES
     ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
 
+qt_add_executable(tst_explorerview tst_explorerview.cpp ${PROJECT_SOURCE_DIR}/src/app/platform/FolderViewHit.cpp)
+target_include_directories(tst_explorerview PRIVATE ${PROJECT_SOURCE_DIR}/src/app)
+target_link_libraries(tst_explorerview PRIVATE winshun_options Qt6::Test oleacc oleaut32 ole32 user32)
+set_target_properties(tst_explorerview PROPERTIES WIN32_EXECUTABLE FALSE QT_QML_MODULE_NO_IMPORT_SCAN TRUE)
+add_test(NAME tst_explorerview COMMAND tst_explorerview)
+set_tests_properties(tst_explorerview PROPERTIES
+    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+
 qt_add_executable(tst_previewplacement tst_previewplacement.cpp)
+add_test(NAME tst_previewinteractions COMMAND WinShun --preview-results
+    "${CMAKE_CURRENT_BINARY_DIR}/preview-interactions" --preview-interactions)
+add_test(NAME tst_previewinteractions_scaled COMMAND WinShun --preview-results
+    "${CMAKE_CURRENT_BINARY_DIR}/preview-interactions-scaled" --preview-interactions --scale 1.5 --english)
+set_tests_properties(tst_previewinteractions tst_previewinteractions_scaled PROPERTIES TIMEOUT 40 RUN_SERIAL TRUE
+    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
 target_include_directories(tst_previewplacement PRIVATE ${PROJECT_SOURCE_DIR}/src/app)
 target_link_libraries(tst_previewplacement PRIVATE Qt6::Core Qt6::Test)
 set_target_properties(tst_previewplacement PROPERTIES WIN32_EXECUTABLE FALSE)
@@ -159,6 +225,16 @@ set_tests_properties(tst_shortcutpanel PROPERTIES RUN_SERIAL TRUE TIMEOUT 90
 add_test(NAME tst_searchnavigation COMMAND $<TARGET_FILE:WinShun>
     --preview-results "${CMAKE_CURRENT_BINARY_DIR}/search-navigation" --search-navigation --renderer d3d11)
 set_tests_properties(tst_searchnavigation PROPERTIES RUN_SERIAL TRUE TIMEOUT 90
+    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+
+add_test(NAME tst_foregroundmemory COMMAND $<TARGET_FILE:WinShun>
+    --preview-results "${CMAKE_CURRENT_BINARY_DIR}/foreground-memory" --foreground-memory --require-lazy-panel --renderer d3d11 --scale 1.5)
+set_tests_properties(tst_foregroundmemory PROPERTIES RUN_SERIAL TRUE TIMEOUT 90
+    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+# The same, with the panel made ahead in the background, as the app does.
+add_test(NAME tst_foregroundpreload COMMAND $<TARGET_FILE:WinShun>
+    --preview-results "${CMAKE_CURRENT_BINARY_DIR}/foreground-preload" --foreground-memory --require-lazy-panel --preload-panel --renderer d3d11 --scale 1.5)
+set_tests_properties(tst_foregroundpreload PROPERTIES RUN_SERIAL TRUE TIMEOUT 90
     ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
 
 # #153: production Main.qml/Launcher/SearchEngine over temporary OOXML/text
@@ -192,6 +268,15 @@ target_link_libraries(tst_admintaphint PRIVATE winshun_options Qt6::Test)
 set_target_properties(tst_admintaphint PROPERTIES WIN32_EXECUTABLE FALSE)
 add_test(NAME tst_admintaphint COMMAND tst_admintaphint)
 set_tests_properties(tst_admintaphint PROPERTIES
+    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+
+# The same for file dialogs of such programs (GitHub #216).
+qt_add_executable(tst_admindialoghint tst_admindialoghint.cpp)
+target_include_directories(tst_admindialoghint PRIVATE ${PROJECT_SOURCE_DIR}/src/app)
+target_link_libraries(tst_admindialoghint PRIVATE winshun_options Qt6::Test)
+set_target_properties(tst_admindialoghint PROPERTIES WIN32_EXECUTABLE FALSE)
+add_test(NAME tst_admindialoghint COMMAND tst_admindialoghint)
+set_tests_properties(tst_admindialoghint PROPERTIES
     ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
 
 qt_add_executable(tst_wsl tst_wsl.cpp)
@@ -260,6 +345,7 @@ set_tests_properties(tst_shelllaunch PROPERTIES
 # Folder-menu commands use the production shell worker and temporary files.
 qt_add_executable(tst_foldermenu tst_foldermenu.cpp
     ${PROJECT_SOURCE_DIR}/src/app/FolderMenu.cpp
+    ${PROJECT_SOURCE_DIR}/src/app/WindowFrame.cpp
     ${PROJECT_SOURCE_DIR}/src/app/FileIconProvider.cpp
     ${PROJECT_SOURCE_DIR}/src/app/SiteIconImage.cpp
     ${PROJECT_SOURCE_DIR}/src/app/SvgIcon.cpp
@@ -311,7 +397,7 @@ target_include_directories(tst_commandline PRIVATE ${PROJECT_SOURCE_DIR}/src/app
 target_link_libraries(tst_commandline PRIVATE wscore Qt6::Gui Qt6::Test
     ole32 oleaut32 oleacc shell32 shlwapi user32 advapi32 taskschd userenv)
 target_compile_definitions(tst_commandline PRIVATE WINSHUN_FAKE_WS="$<TARGET_FILE:fake_ws>")
-add_dependencies(tst_commandline fake_ws)
+add_dependencies(tst_commandline fake_ws WinShunMcp)
 set_target_properties(tst_commandline PROPERTIES WIN32_EXECUTABLE FALSE)
 add_test(NAME tst_commandline COMMAND tst_commandline)
 set_tests_properties(tst_commandline PROPERTIES
@@ -646,6 +732,15 @@ endforeach()
 qt_add_executable(tst_core tst_core.cpp)
 target_link_libraries(tst_core PRIVATE wscore wsextract miniz Qt6::Test)
 
+qt_add_executable(tst_activity tst_activity.cpp ${PROJECT_SOURCE_DIR}/src/app/ActivityText.cpp
+    ${PROJECT_SOURCE_DIR}/src/app/platform/ProcessUsage.cpp)
+target_include_directories(tst_activity PRIVATE ${PROJECT_SOURCE_DIR}/src/app)
+target_link_libraries(tst_activity PRIVATE winshun_options Qt6::Test psapi)
+set_target_properties(tst_activity PROPERTIES WIN32_EXECUTABLE FALSE QT_QML_MODULE_NO_IMPORT_SCAN TRUE)
+add_test(NAME tst_activity COMMAND tst_activity -o -,txt)
+set_tests_properties(tst_activity PROPERTIES
+    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+
 qt_add_executable(tst_diagnostics tst_diagnostics.cpp ${PROJECT_SOURCE_DIR}/src/app/Diagnostics.cpp
     ${PROJECT_SOURCE_DIR}/src/service/Log.cpp)
 target_include_directories(tst_diagnostics PRIVATE ${PROJECT_SOURCE_DIR}/src/app ${PROJECT_SOURCE_DIR}/src/service)
@@ -896,8 +991,10 @@ qt_add_resources(tst_ocrpackage "ocr_package_test"
         "${PROJECT_SOURCE_DIR}/third_party/ppocr/LICENSE")
 add_test(NAME tst_ocrpackage COMMAND tst_ocrpackage)
 
-qt_add_executable(tst_uifont tst_uifont.cpp)
-target_link_libraries(tst_uifont PRIVATE winshun_options Qt6::Gui Qt6::Test)
+qt_add_executable(tst_uifont tst_uifont.cpp ${PROJECT_SOURCE_DIR}/src/app/UiFont.cpp)
+target_include_directories(tst_uifont PRIVATE ${PROJECT_SOURCE_DIR}/src/app)
+set_target_properties(tst_uifont PROPERTIES WIN32_EXECUTABLE FALSE QT_QML_MODULE_NO_IMPORT_SCAN TRUE)
+target_link_libraries(tst_uifont PRIVATE winshun_options Qt6::Quick Qt6::Test)
 add_test(NAME tst_uifont_freetype COMMAND tst_uifont)
 set_tests_properties(tst_uifont_freetype PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=windows:fontengine=freetype")
 add_test(NAME tst_uifont_gdi COMMAND tst_uifont)
@@ -1065,6 +1162,7 @@ qt_add_executable(tst_translate tst_translate.cpp ${PROJECT_SOURCE_DIR}/src/tran
 add_dependencies(tst_translate WinShunTranslate)
 target_include_directories(tst_translate PRIVATE ${PROJECT_SOURCE_DIR}/src/translate-plugin ${PROJECT_SOURCE_DIR}/src/plugins-sdk)
 target_link_libraries(tst_translate PRIVATE winshun_options Qt6::Test Qt6::Network winhttp)
+target_compile_definitions(tst_translate PRIVATE WINSHUN_TRANSLATE_MANIFEST="${PROJECT_SOURCE_DIR}/src/translate-plugin/package/plugin.json")
 set_target_properties(tst_translate PROPERTIES WIN32_EXECUTABLE FALSE)
 add_test(NAME tst_translate COMMAND tst_translate)
 set_tests_properties(tst_translate PROPERTIES
@@ -1078,12 +1176,33 @@ add_executable(plugin_fake plugin_fake.cpp)
 target_link_libraries(plugin_fake PRIVATE wsplugin_lite)
 set_target_properties(plugin_fake PROPERTIES AUTOMOC OFF MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 qt_add_executable(tst_plugin tst_plugin.cpp)
+qt_add_executable(plugin_qt plugin_qt.cpp)
+target_link_libraries(plugin_qt PRIVATE winshun_options Qt6::Quick)
+set_target_properties(plugin_qt PROPERTIES WIN32_EXECUTABLE FALSE QT_QML_MODULE_NO_IMPORT_SCAN TRUE)
+set(shared_qt_dir "${CMAKE_CURRENT_BINARY_DIR}/shared-qt-runtime")
+add_custom_command(OUTPUT "${shared_qt_dir}/deployed.stamp"
+    COMMAND Qt6::windeployqt --dir "${shared_qt_dir}" --qmldir "${PROJECT_SOURCE_DIR}/src/app/qml"
+        --no-translations --no-compiler-runtime --no-system-d3d-compiler --no-system-dxc-compiler --no-opengl-sw
+        --include-plugins qoffscreen $<IF:$<CONFIG:Debug>,--debug,--release> "$<TARGET_FILE:plugin_qt>"
+    COMMAND ${CMAKE_COMMAND} -E touch "${shared_qt_dir}/deployed.stamp"
+    DEPENDS plugin_qt
+    VERBATIM)
+add_custom_target(tst_plugin_qt_runtime DEPENDS "${shared_qt_dir}/deployed.stamp")
+target_compile_definitions(tst_plugin PRIVATE WINSHUN_PLUGIN_QT="$<TARGET_FILE:plugin_qt>" WINSHUN_SHARED_QT_DIR="${shared_qt_dir}")
+add_dependencies(tst_plugin tst_plugin_qt_runtime)
+add_test(NAME tst_puresearch COMMAND $<TARGET_FILE:WinShun>
+    --preview-results "${CMAKE_CURRENT_BINARY_DIR}/pure-search" --pure-search --renderer d3d11 --scale 1.5)
+add_test(NAME tst_pluginreviewsettings COMMAND $<TARGET_FILE:WinShun>
+    --preview-settings "${CMAKE_CURRENT_BINARY_DIR}/plugin-review-settings" --plugin-review-settings --renderer d3d11 --scale 1.5)
+set_tests_properties(tst_puresearch tst_pluginreviewsettings PROPERTIES RUN_SERIAL TRUE TIMEOUT 90
+    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
 target_include_directories(tst_plugin PRIVATE ${PROJECT_SOURCE_DIR}/src/app)
 target_link_libraries(tst_plugin PRIVATE wsplugin miniz Qt6::Test) # miniz: the test writes zips to install
 target_compile_definitions(tst_plugin PRIVATE
     WINSHUN_PLUGIN_HOST="$<TARGET_FILE:WinShunPluginHost>"
     WINSHUN_PLUGIN_FAKE="$<TARGET_FILE:plugin_fake>"
     WINSHUN_TEST_PLUGINS="${CMAKE_CURRENT_SOURCE_DIR}/plugins"
+    WINSHUN_SOURCE_PLUGINS="${PROJECT_SOURCE_DIR}/plugins"
     WINSHUN_TEST_DATA="${CMAKE_CURRENT_SOURCE_DIR}/data")
 add_dependencies(tst_plugin WinShunPluginHost plugin_fake)
 

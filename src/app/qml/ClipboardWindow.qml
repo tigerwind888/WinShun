@@ -83,7 +83,12 @@ Window {
     Binding {
         target: window.clipboard.items
         property: "highlightColor"
-        value: Theme.accent
+        value: Theme.matchColor
+    }
+    Binding {
+        target: window.clipboard.items
+        property: "highlightWeight"
+        value: Theme.matchWeight
     }
     Binding { // with the fewest rows: kept room for below the window
         target: window.placement
@@ -120,6 +125,10 @@ Window {
         if (!visible)
             page.windowHidden()
     }
+    onXChanged: page.clearHover()
+    onYChanged: page.clearHover()
+    onWidthChanged: page.clearHover()
+    onHeightChanged: page.clearHover()
 
     Connections {
         target: window.placement
@@ -162,5 +171,8 @@ Window {
         }
     }
 
-    WindowEdge {}
+    WindowEdge {
+        id: windowEdge
+        fill: Theme.background
+    }
 }

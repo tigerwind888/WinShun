@@ -53,6 +53,10 @@ public:
     void start(const QJsonObject& appearance, bool hostHotkeys = false);
     QQmlEngine& engine() { return m_qml; }
 
+    // 编辑 on 识别屏幕文字's card (OcrBubble.qml): the words read, in the OCR
+    // window, not read again.
+    Q_INVOKABLE void editOcrText(const QString& text);
+
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
 
@@ -66,6 +70,9 @@ private:
     void applyHotkeys();
     void reportHotkeyProblems(const CaptureSettings::Problems& problems);
     void applyAppearance(const QJsonObject& appearance);
+    // The Theme made, the first time C++ draws by its look (the pins, the
+    // countdown, the tray menu): it writes SystemTheme::nativeLook.
+    void ensureTheme();
     capture::PinManager& pins();
     capture::CaptureEditor* editor();
     PresenterHost& presenter();
@@ -75,9 +82,17 @@ private:
     capture::SmartHooks smartHooks();
     void showCaptureOcr(const QImage& image, double dpr, const QRect& where, const QStringList* texts = nullptr);
     void closeCaptureOcr(bool destroy = false);
-    enum class OcrThen { Copy, Search, Web };
+    // Bubble: 识别屏幕文字's, copied and said in the card by the region.
+    enum class OcrThen { Copy, Search, Web, Bubble };
     void captureOcrThen(const QImage& image, double dpr, const QRect& where, OcrThen then);
     void quickOcrDone();
+    // 识别屏幕文字 (#198): the hotkey, the search box, the tray menu.
+    void startOcr();
+    void readScreenText(const QImage& image, double dpr, const QRect& where);
+    void showOcrBubble(const QString& phase, const QString& words, const QString& detail);
+    bool closeOcrBubble(); // whether it was up
+    // `window` (logical size) beside `where` (physical, virtual desktop) on its monitor.
+    void placeNear(QQuickWindow* window, const QRect& where);
     void notifySaved(const QString& path, const QString& error);
     void pinPicture(const QString& path, bool screenshot);
     void pinCurrentImage(); // clipboard picture first, otherwise the editable last capture
@@ -119,6 +134,9 @@ private:
     std::unique_ptr<capture::CaptureOcr> m_captureOcr;
     std::unique_ptr<capture::CaptureOcr> m_quickOcr;
     OcrThen m_quickOcrThen = OcrThen::Copy;
+    QRect m_quickOcrWhere; // the region read, physical: the card goes by it
+    std::unique_ptr<WindowFrame> m_bubbleFrame;
+    QPointer<QQuickWindow> m_bubbleWindow;
     std::unique_ptr<WindowFrame> m_ocrFrame;
     QPointer<QQuickWindow> m_ocrWindow;
     bool m_resumeOcr = false; // the original picture waits while the settings window installs OCR
@@ -139,6 +157,7 @@ private:
     QTimer m_applyLater;
     bool m_started = false;
     bool m_pinPending = false;
+    bool m_themeMade = false; // ensureTheme
 };
 
 } // namespace ws::captureplugin

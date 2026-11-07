@@ -146,6 +146,9 @@ public:
         // Names only: 内容 is given the folder in its text, as typed.
         QString currentFolder;
         bool currentFolderOnly = false;
+        // With currentFolderOnly: not its subfolders either, only what lies
+        // directly in it (GitHub #182). Set alone, it means both.
+        bool currentFolderLevel = false;
         // The panel's column order; Rank: rankBy.
         SortOrder order;
         // The panel: with nothing typed, every file and folder the filters
@@ -177,6 +180,9 @@ public:
         // The GUI's internal settings action, also available with app/place
         // searching disabled. Empty for callers that cannot execute it.
         QString settingsName;
+        // Optional desktop integration. Called on the name worker, only for
+        // a plain 全部 query; the caller owns no mutable UI state here.
+        std::function<SearchResults()> openWindows;
         QStringList contentExtensions; // e.g. {"txt"}
         ContentSizeLimits contentSizeLimits; // by kind of file
         bool contentDocuments = true; // and Word, Excel, PowerPoint, PDF (documentExtensions())

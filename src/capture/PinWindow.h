@@ -57,6 +57,10 @@ public:
         std::function<void(PinWindow*)> save; // Ctrl+S
         std::function<bool()> dark; // the border's grey
         std::function<QColor()> accent; // a fill that carries white words
+        // The 界面风格's (Theme.windowEdge, Theme.controlRadius in logical px);
+        // empty or invalid: the grey by `dark`, 4.
+        std::function<QColor()> edge;
+        std::function<qreal()> pillRadius;
         std::function<void(const QString&)> copyText; // the text picked
         // Reads the lines of the picture (their corners and characters' places,
         // in its pixels); `done` is called on the GUI thread, once, or never.
@@ -103,6 +107,7 @@ public:
     void setShown(bool shown);
     // Out of sight for 隐藏全部贴图, and back; independent of setShown.
     void setAllHidden(bool hidden);
+    void restyle(); // PinManager::restyle
     bool visibleNow() const { return m_shown && !m_allHidden; }
 
     void setTopmost(bool on);
@@ -166,6 +171,9 @@ private:
     double shownZoom() const { return m_form == PinForm::Full ? m_zoom : 1.0; }
     QRect workArea() const; // of the monitor nearest to the picture
     void drawTextLayer(QImage& canvas, const QRect& picture);
+    void drawHint(QImage& canvas, const QRect& picture); // the zoom or opacity, a moment after it changes
+    void showHint(const QString& text); // (re)starts the moment
+    void hintTick(); // the moment's timer: fades the hint out
     void updatePicked(QPoint cursor);
     void finishEncode(const EncodeJob* job);
     QPoint toImage(QPoint screen) const; // a screen point in the picture's pixels
@@ -190,6 +198,10 @@ private:
     bool m_dragging = false;
     QPoint m_grab; // the cursor less m_origin at the press
     int m_wheel = 0; // wheel delta not yet a whole notch (touchpads)
+    // "150%" in a pill on the picture for a moment after a zoom (#164).
+    QString m_hint;
+    qint64 m_hintSince = 0; // steady clock, ms
+    int m_hintAlpha = 0; // 0: not drawn
     // Dragging a corner: which, and the picture as it was at the press.
     Corner m_corner = Corner::None;
     QRect m_resizeStart;

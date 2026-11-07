@@ -8,6 +8,7 @@
 #include "Capture.h"
 #include "CaptureSession.h"
 #include "CaptureOcr.h"
+#include "CaptureEditor.h"
 #include "WindowFrame.h"
 #include "platform/OcrFiles.h"
 #include "RawClicks.h"
@@ -431,6 +432,28 @@ int runOcr(const QStringList& args)
     WindowFrame frame(false);
     QQmlApplicationEngine engine;
     engine.addImportPath(QDir(valueAfter(args, u"--app-dir")).filePath(u"qml"_s));
+    // --bubble: 识别屏幕文字's card (#198) in its three states, ocr-bubble-<state>.png.
+    if (args.contains(u"--bubble"_s)) {
+        QQmlComponent card(&engine, u"WinShun"_s, u"OcrBubble"_s);
+        auto* window = qobject_cast<QQuickWindow*>(card.createWithInitialProperties({
+            {u"frame"_s, QVariant::fromValue(&frame)}, {u"host"_s, QVariant::fromValue<QObject*>(&reader)}}));
+        if (!window) { say(card.errorString()); return 3; }
+        frame.setWindow(window);
+        showOffScreen(window);
+        bool all = true;
+        const std::tuple<QString, QString, QString> states[] {
+            {u"reading"_s, QString(), QString()},
+            {u"copied"_s, u"识别屏幕文字（#198）：按下快捷键直接框选，松开鼠标就识别并复制。\n第二行：Win顺 WinShun 0.20.0\n第三行，比较长的一行文字，用来看看三行之后是否会被省略号截断。\n第四行不该显示"_s, QString()},
+            {u"none"_s, QString(), QString()},
+        };
+        for (const auto& [state, words, detail] : states) {
+            QMetaObject::invokeMethod(window, "present", Q_ARG(QVariant, state), Q_ARG(QVariant, words), Q_ARG(QVariant, detail));
+            settle(window);
+            say(u"bubble %1: %2 x %3"_s.arg(state).arg(window->width()).arg(window->height()));
+            all = saveGrab(window, out.filePath(u"ocr-bubble-%1.png"_s.arg(state))) && all;
+        }
+        return finish(window, all);
+    }
     QQmlComponent component(&engine, u"WinShun"_s, u"OcrPanel"_s);
     auto* window = qobject_cast<QQuickWindow*>(component.createWithInitialProperties({
         {u"ocr"_s, QVariant::fromValue(&reader)}, {u"frame"_s, QVariant::fromValue(&frame)}}));
@@ -1315,8 +1338,61 @@ int runKeyHints(const QStringList& args)
     return finish(window, ok);
 }
 
+// --preview-capture-tools <dir> --edit-window: the editing window (EditWindow,
+// 编辑 on a pin or a picture) over a plain picture, off the screen, in the
+// 界面风格 asked for: its title bar, toolbar and canvas (edit-window.png).
+int runEditWindow(const QStringList& args)
+{
+    using namespace capture;
+    const QDir out(valueAfter(args, kCaptureToolsFlag));
+    QDir().mkpath(out.path());
+    QQmlApplicationEngine engine;
+    CaptureEditor editor;
+    CaptureEditor::Hooks hooks;
+    hooks.window.show = [](QQuickWindow* window) { showOffScreen(window); };
+    hooks.window.nativeRect = [](QQuickWindow* window) {
+        const qreal dpr = window->devicePixelRatio();
+        return QRect(QPoint(qRound(window->x() * dpr), qRound(window->y() * dpr)),
+            QSize(qRound(window->width() * dpr), qRound(window->height() * dpr)));
+    };
+    editor.setHooks(std::move(hooks));
+    WindowFrame frame(true); // its own title bar, as CaptureApp makes it
+    QQmlComponent component(&engine, u"WinShun"_s, u"EditWindow"_s);
+    auto* window = qobject_cast<QQuickWindow*>(component.createWithInitialProperties({
+        {u"editor"_s, QVariant::fromValue(&editor)}, {u"frame"_s, QVariant::fromValue(&frame)}}));
+    if (!window) { say(component.errorString()); return 3; }
+    frame.setWindow(window);
+    editor.attach(window);
+    QImage picture(720, 420, QImage::Format_RGB32);
+    picture.fill(QColor(248, 249, 251));
+    {
+        QPainter painter(&picture);
+        painter.setPen(QColor(35, 40, 45));
+        QFont font = QGuiApplication::font();
+        font.setPixelSize(22);
+        painter.setFont(font);
+        painter.drawText(32, 52, u"贴图编辑 · 界面风格预览"_s);
+        painter.fillRect(QRect(32, 90, 300, 180), QColor(79, 157, 255));
+        painter.fillRect(QRect(360, 90, 300, 180), QColor(63, 191, 127));
+    }
+    bool ok = editor.openImage(picture);
+    if (!ok)
+        say(u"edit window: the picture did not open"_s);
+    if (!window->isVisible())
+        showOffScreen(window);
+    settle(window);
+    pump(400);
+    settle(window, 2);
+    ok = saveGrab(window, out.filePath(u"edit-window.png"_s)) && ok;
+    say(u"edit window: %1"_s.arg(ok ? u"passed"_s : u"failed"_s));
+    editor.close();
+    return finish(window, ok);
+}
+
 int runCaptureTools(const QStringList& args)
 {
+    if (args.contains(u"--edit-window"_s))
+        return runEditWindow(args);
     if (args.contains(u"--key-hints"_s))
         return runKeyHints(args);
     if (args.contains(u"--save-options"_s))
@@ -2078,6 +2154,7 @@ int run(const QStringList& args)
     g_edges = args.contains(u"--edges"_s);
     QGuiApplication::styleHints()->setColorScheme(args.contains(u"--dark"_s) ? Qt::ColorScheme::Dark : Qt::ColorScheme::Light);
     SystemTheme::setBackdropAvailable(false); // plain colours, as a window without Mica
+    SystemTheme::setUiStyle(valueAfter(args, u"--style", u"fluent"_s)); // --style fluent|brand|tactile
     if (presenterMode)
         return runPresenter(args);
     if (settingsMode)

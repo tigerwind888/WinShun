@@ -1,4 +1,8 @@
 #include "SettingsEditor.h"
+#include "DoubleTapAction.h"
+#include "UiFont.h"
+
+#include "HealthMonitor.h"
 #include "PreviewShortcut.h"
 #include "platform/OcrFiles.h"
 #include "platform/OcrPackage.h"
@@ -38,6 +42,7 @@
 #include <QFileInfo>
 #include <QFileSystemWatcher>
 #include <QGuiApplication>
+#include <QFont>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QKeyEvent>
@@ -205,6 +210,7 @@ void SettingsEditor::setSettings(const Settings& settings)
     if (settings == m_settings)
         return;
     const bool keys = settings.numberKeys != m_settings.numberKeys || settings.hotkey != m_settings.hotkey
+        || settings.panelHotkey != m_settings.panelHotkey
         || settings.clipboardNumberKeys != m_settings.clipboardNumberKeys
         || settings.clipboardHotkey != m_settings.clipboardHotkey
         || settings.folderMenuHotkey != m_settings.folderMenuHotkey;
@@ -214,6 +220,7 @@ void SettingsEditor::setSettings(const Settings& settings)
     m_settings = settings;
     m_previewHotkeyError.clear();
     emit changed();
+    emit doubleTapActionsChanged();
     if (shares)
         emit sharesChanged();
     if (drives)
@@ -366,6 +373,14 @@ void SettingsEditor::setClearOnOpen(bool on)
     commit();
 }
 
+void SettingsEditor::setEnglishOnOpen(bool on)
+{
+    if (m_settings.englishOnOpen == on)
+        return;
+    m_settings.englishOnOpen = on;
+    commit();
+}
+
 void SettingsEditor::setNumberKeys(const QString& keys)
 {
     if (m_settings.numberKeys == keys || (keys != u"ctrl" && keys != u"alt" && keys != u"off"))
@@ -399,6 +414,14 @@ void SettingsEditor::setFooterHints(bool on)
     commit();
 }
 
+void SettingsEditor::setPureSearch(bool on)
+{
+    if (m_settings.pureSearch == on)
+        return;
+    m_settings.pureSearch = on;
+    commit();
+}
+
 void SettingsEditor::setPreviewWith(const QString& with)
 {
     if (m_settings.previewWith == with || (with != u"auto" && with != u"builtin"))
@@ -413,7 +436,7 @@ void SettingsEditor::setPreviewHotkey(const QString& shortcut)
     QString error;
     if (!shortcut.trimmed().isEmpty() && value.isEmpty())
         error = tr("这个快捷键用于输入或其他操作，请换一个");
-    if (previewkeys::usedGlobally(value, {m_settings.hotkey, m_settings.clipboardHotkey, m_settings.folderMenuHotkey}))
+    if (previewkeys::usedGlobally(value, {m_settings.hotkey, m_settings.panelHotkey, m_settings.clipboardHotkey, m_settings.folderMenuHotkey}))
         error = tr("这个快捷键已用于全局操作，请换一个");
     m_previewHotkeyError = error;
     if (!error.isEmpty() || value == m_settings.previewHotkey) {
@@ -424,9 +447,17 @@ void SettingsEditor::setPreviewHotkey(const QString& shortcut)
     commit();
 }
 
+void SettingsEditor::setPreviewFollowsPointer(bool on)
+{
+    if (m_settings.previewFollowsPointer == on)
+        return;
+    m_settings.previewFollowsPointer = on;
+    commit();
+}
+
 QString SettingsEditor::previewHotkeyError() const
 {
-    if (previewkeys::usedGlobally(m_settings.previewHotkey, {m_settings.hotkey, m_settings.clipboardHotkey, m_settings.folderMenuHotkey}))
+    if (previewkeys::usedGlobally(m_settings.previewHotkey, {m_settings.hotkey, m_settings.panelHotkey, m_settings.clipboardHotkey, m_settings.folderMenuHotkey}))
         return tr("这个快捷键已用于全局操作，请换一个");
     return m_previewHotkeyError;
 }
@@ -476,6 +507,7 @@ QString describeNumberKeys(const QString& keys, const Settings& settings)
     for (int n = 1; n <= 9; ++n) {
         const QString c = chord(n);
         const bool mine = settings.hotkey.compare(c, Qt::CaseInsensitive) == 0
+            || settings.panelHotkey.compare(c, Qt::CaseInsensitive) == 0
             || settings.clipboardHotkey.compare(c, Qt::CaseInsensitive) == 0
             || settings.folderMenuHotkey.compare(c, Qt::CaseInsensitive) == 0;
         if (mine)
@@ -522,6 +554,44 @@ void SettingsEditor::setDoubleTapKey(const QString& key)
     m_settings.doubleTapKey = key;
     commit();
     refreshDoubleCtrlClash();
+}
+
+QVariantList SettingsEditor::doubleTapActions() const
+{
+    QVariantList actions {
+        QVariantMap {{u"value"_s, u"launcher"_s}, {u"text"_s, tr("搜索框")}},
+        QVariantMap {{u"value"_s, u"clipboard"_s}, {u"text"_s, tr("剪贴板")}}};
+    actions.append(m_doubleTapPluginActions);
+    if (std::ranges::none_of(actions, [this](const QVariant& action) {
+            return action.toMap().value(u"value"_s).toString() == m_settings.doubleTapAction;
+        })) {
+        const auto plugin = doubletap::decode(m_settings.doubleTapAction);
+        actions.append(QVariantMap {{u"value"_s, m_settings.doubleTapAction},
+            {u"text"_s, tr("暂不可用：%1 · %2").arg(plugin.plugin, plugin.key)}});
+    }
+    return actions;
+}
+
+void SettingsEditor::setDoubleTapPluginActions(const QVariantList& actions)
+{
+    if (m_doubleTapPluginActions == actions)
+        return;
+    m_doubleTapPluginActions = actions;
+    emit doubleTapActionsChanged();
+}
+
+void SettingsEditor::setDoubleTapAction(const QString& action)
+{
+    if (action == m_settings.doubleTapAction || !doubletap::valid(action))
+        return;
+    const QVariantList available = doubleTapActions();
+    if (std::ranges::none_of(available, [&](const QVariant& item) {
+            return item.toMap().value(u"value"_s).toString() == action;
+        }))
+        return;
+    m_settings.doubleTapAction = action;
+    commit();
+    emit doubleTapActionsChanged();
 }
 
 void SettingsEditor::setDoubleCtrlKey(const QString& key)
@@ -616,6 +686,45 @@ void SettingsEditor::setHotkey(const QString& hotkey)
     if (m_settings.hotkey == value)
         return;
     m_settings.hotkey = value;
+    commit();
+}
+
+void SettingsEditor::setPanelHotkey(const QString& hotkey)
+{
+    const QString value = hotkey.trimmed();
+    if (m_settings.panelHotkey == value)
+        return;
+    m_settings.panelHotkey = value;
+    commit();
+}
+
+void SettingsEditor::setPanelHotkeyError(const QString& error)
+{
+    if (m_panelHotkeyError == error)
+        return;
+    m_panelHotkeyError = error;
+    emit hotkeyErrorChanged();
+}
+
+void SettingsEditor::setPluginBuiltinsExpanded(bool expanded)
+{
+    if (m_settings.pluginBuiltinsExpanded == expanded)
+        return;
+    m_settings.pluginBuiltinsExpanded = expanded;
+    commit();
+}
+
+void SettingsEditor::setMergeFileScope(bool merged)
+{
+    if (m_settings.mergeFileScope == merged) return;
+    m_settings.mergeFileScope = merged;
+    commit();
+}
+
+void SettingsEditor::setQueryHistoryKeys(const QString& keys)
+{
+    if (m_settings.queryHistoryKeys == keys || (keys != u"ctrl" && keys != u"alt" && keys != u"off")) return;
+    m_settings.queryHistoryKeys = keys;
     commit();
 }
 
@@ -777,6 +886,14 @@ void SettingsEditor::setContentDocuments(bool on)
     commit();
 }
 
+void SettingsEditor::setMonitor(HealthMonitor* monitor)
+{
+    if (m_monitor == monitor)
+        return;
+    m_monitor = monitor;
+    emit monitorChanged();
+}
+
 void SettingsEditor::setContentIndexStatus(const QString& status)
 {
     if (m_contentIndexStatus == status)
@@ -873,11 +990,36 @@ void SettingsEditor::setUiSize(const QString& size)
     commit();
 }
 
+QStringList SettingsEditor::uiFonts() const { return uifont::families(); }
+bool SettingsEditor::uiFontAvailable() const { return uifont::available(m_settings.uiFont); }
+QString SettingsEditor::uiFontPreview() const { return uifont::resolvedFamily(m_settings.uiFont); }
+bool SettingsEditor::fontRestartRequired() const
+{
+    return uiFontPreview().compare(QGuiApplication::font().family(), Qt::CaseInsensitive) != 0;
+}
+
+void SettingsEditor::setUiFont(const QString& family)
+{
+    const QString trimmed = family.trimmed();
+    if (m_settings.uiFont == trimmed || !uifont::available(trimmed))
+        return;
+    m_settings.uiFont = trimmed;
+    commit();
+}
+
 void SettingsEditor::setCorners(const QString& corners)
 {
     if (m_settings.corners == corners || (corners != u"round" && corners != u"square"))
         return;
     m_settings.corners = corners;
+    commit();
+}
+
+void SettingsEditor::setUiStyle(const QString& style)
+{
+    if (m_settings.uiStyle == style || (style != u"fluent" && style != u"brand" && style != u"tactile" && style != u"liquid"))
+        return;
+    m_settings.uiStyle = style;
     commit();
 }
 
@@ -1164,7 +1306,7 @@ void SettingsEditor::setOpusTypingScope(const QString& scope)
 
 void SettingsEditor::setFolderTyping(const QString& how)
 {
-    if (m_settings.folderTyping == how || (how != u"first" && how != u"only"))
+    if (m_settings.folderTyping == how || (how != u"first" && how != u"only" && how != u"level"))
         return;
     m_settings.folderTyping = how;
     commit();
@@ -1244,11 +1386,37 @@ void SettingsEditor::setFolderMenuWindows(bool on)
     commit();
 }
 
+void SettingsEditor::setFolderMenuRecentInline(int count)
+{
+    count = std::clamp(count, 0, 10);
+    if (m_settings.folderMenuRecentInline == count)
+        return;
+    m_settings.folderMenuRecentInline = count;
+    commit();
+}
+
+void SettingsEditor::setFolderMenuWindowsInline(int count)
+{
+    count = std::clamp(count, 0, 10);
+    if (m_settings.folderMenuWindowsInline == count)
+        return;
+    m_settings.folderMenuWindowsInline = count;
+    commit();
+}
+
 void SettingsEditor::setFolderMenuItemSearch(bool on)
 {
     if (m_settings.folderMenuItemSearch == on)
         return;
     m_settings.folderMenuItemSearch = on;
+    commit();
+}
+
+void SettingsEditor::setFolderMenuItemCopyPath(bool on)
+{
+    if (m_settings.folderMenuItemCopyPath == on)
+        return;
+    m_settings.folderMenuItemCopyPath = on;
     commit();
 }
 
@@ -2925,6 +3093,7 @@ void SettingsEditor::retranslateFolders()
 {
     m_knownFolders = Settings::knownFolders(); // 桌面 or Desktop: translated as they are read
     emit foldersChanged();
+    emit doubleTapActionsChanged();
 }
 
 QString SettingsEditor::addFolder(const QString& text)

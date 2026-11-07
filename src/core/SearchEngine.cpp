@@ -515,26 +515,37 @@ SearchResult fromDisk(const QString& path, const RecentOnDisk::Item& item)
 // recent items are taken in rounds, the paths of a round looked up together.
 using RecentItem = std::variant<SearchResult, QString>;
 
-// Whether entries lie under one folder, cached by parent folder (files next
+// Whether entries lie under given folders, cached by parent folder (files next
 // to each other share it).
 class UnderFolder {
 public:
     UnderFolder(const FileIndex& index, EntryId folder)
         : m_index(index)
-        , m_folder(folder)
     {
+        if (folder != kNoEntry)
+            m_folders.push_back(folder);
         m_cache.fill({kNoEntry, false});
     }
+    UnderFolder(const FileIndex& index, const std::vector<std::wstring>& folders)
+        : UnderFolder(index, kNoEntry)
+    {
+        for (const std::wstring& path : folders) {
+            const EntryId id = index.findPath(path);
+            if (id != kNoEntry)
+                m_folders.push_back(id);
+        }
+    }
+    bool contains(EntryId id) const { return std::ranges::find(m_folders, id) != m_folders.end(); }
     bool operator()(EntryId id)
     {
         const EntryId parent = m_index.entry(id).parent;
-        if (m_folder == kNoEntry || parent == kNoEntry)
+        if (m_folders.empty() || parent == kNoEntry)
             return false;
         Slot& slot = m_cache[parent & (m_cache.size() - 1)];
         if (slot.parent != parent) {
             bool under = false;
             for (EntryId cur = parent; cur != kNoEntry && !under; cur = m_index.entry(cur).parent)
-                under = cur == m_folder;
+                under = contains(cur);
             slot = {parent, under};
         }
         return slot.under;
@@ -546,7 +557,7 @@ private:
         bool under;
     };
     const FileIndex& m_index;
-    EntryId m_folder;
+    std::vector<EntryId> m_folders;
     std::array<Slot, 4096> m_cache {};
 };
 
@@ -657,13 +668,12 @@ ContentScope::Place resolvePlace(const FileIndex& index, const ContentFolderSpec
 
     // Your own first, then elsewhere, hidden ones, system and program
     // folders; the shallowest first in each.
-    const EntryId profile = index.findPath(win32::expandEnvironment(L"%USERPROFILE%"));
-    UnderFolder inProfile(index, profile);
+    UnderFolder inProfile(index, win32::userFolders());
     const auto rank = [&](EntryId id) {
         const Entry& e = index.entry(id);
         const int kind = (e.flags & EntryFlag::LowPriority) ? 3
             : (e.flags & EntryFlag::Hidden)                  ? 2
-            : (id == profile || inProfile(id))               ? 0
+            : (inProfile.contains(id) || inProfile(id))       ? 0
                                                              : 1;
         return std::tuple {kind, index.depth(id), id};
     };
@@ -756,7 +766,8 @@ qsizetype promoteHistory(SearchResults& results, const SearchEngine::Request& re
         case RecentPart::Typed:
             return in;
         case RecentPart::Inside:
-            return in && !pathtext::sameFolder(path, folder);
+            // This level only: a recent file of a subfolder stays out.
+            return request.currentFolderLevel ? pathtext::isDirectChild(folder, path) : in && !pathtext::sameFolder(path, folder);
         case RecentPart::Outside:
             return !in || pathtext::sameFolder(path, folder);
         case RecentPart::Anywhere:
@@ -889,7 +900,7 @@ void arrangePart(SearchResults& results, const SearchEngine::Request& request, c
 void arrange(SearchResults& results, const SearchEngine::Request& request, const NameMatcher& matcher, RankBy rankBy,
     RecentOnDisk& onDisk, const QString& typedFolder)
 {
-    if (request.currentFolder.isEmpty() || request.currentFolderOnly) {
+    if (request.currentFolder.isEmpty() || request.currentFolderOnly || request.currentFolderLevel) {
         const RecentPart part = !request.currentFolder.isEmpty() ? RecentPart::Inside
             : typedFolder.isEmpty()                              ? RecentPart::Anywhere
                                                                  : RecentPart::Typed;
@@ -1122,7 +1133,7 @@ SearchResults favoriteRows(const QList<const Favorite*>& favorites, const AppLis
 // hold (a folder left out of it) looked for on disk; with `types` (a type
 // chosen), only files of it. Adds to `total` what it adds.
 void promoteFavorites(SearchResults& results, qint64& total, const SearchEngine::Request& request,
-    const NameMatcher& matcher, bool promote, const AppList& apps, const PlaceList& places, RecentOnDisk& onDisk,
+    const NameMatcher& matcher, bool promote, bool learnedFirst, const AppList& apps, const PlaceList& places, RecentOnDisk& onDisk,
     const IndexService* index, const std::vector<std::string>& types)
 {
     const FavoriteList& favorites = request.favorites;
@@ -1199,6 +1210,31 @@ void promoteFavorites(SearchResults& results, qint64& total, const SearchEngine:
     const qsizetype at = !results.isEmpty() && results.first().isWeb() && results.first().score == kTypedKeywordScore ? 1 : 0;
     for (qsizetype i = 0; i < put.size(); ++i)
         results.insert(at + i, std::move(put[i]));
+    if (learnedFirst) {
+        // A favorite is a useful default, not a permanent pin above actual
+        // choices (GitHub #161). Reuse the same decaying affinity as search;
+        // explicit keywords and switch commands remain deliberate actions.
+        std::stable_sort(results.begin(), results.end(), [&](const SearchResult& a, const SearchResult& b) {
+            const bool aExplicit = a.score == kTypedKeywordScore;
+            const bool bExplicit = b.score == kTypedKeywordScore;
+            if (aExplicit || bExplicit)
+                return aExplicit && !bExplicit;
+            const auto aa = History::affinity(request.historyAffinity, a.path);
+            const auto ba = History::affinity(request.historyAffinity, b.path);
+            // Guessed switches must keep their conservative placement.
+            const bool aLearned = aa.learned() && (a.switchId.isEmpty() || a.recent);
+            const bool bLearned = ba.learned() && (b.switchId.isEmpty() || b.recent);
+            if (aLearned != bLearned)
+                return aLearned;
+            if (!aLearned)
+                return false;
+            if (aa.group != ba.group)
+                return aa.group < ba.group;
+            if (aa.preferenceWeight() != ba.preferenceWeight())
+                return aa.preferenceWeight() > ba.preferenceWeight();
+            return aa.last > ba.last;
+        });
+    }
     if (results.size() > request.limit)
         results.resize(request.limit);
 }
@@ -1452,7 +1488,8 @@ void SearchEngine::runNameSearch(const Job& job)
         // same for its words, then what is so named elsewhere (insideFirst),
         // unless only that folder is asked for.
         const bool typedIn = !request.currentFolder.isEmpty();
-        const bool insideFirst = typedIn && !request.currentFolderOnly;
+        const bool levelOnly = typedIn && request.currentFolderLevel;
+        const bool insideFirst = typedIn && !request.currentFolderOnly && !levelOnly;
         const pathtext::TypedPath typedPath = typedIn
             ? pathtext::TypedPath {pathtext::pathFromText(request.currentFolder), request.text}
             : request.regex ? pathtext::TypedPath() : pathtext::splitTyped(request.text);
@@ -1478,7 +1515,11 @@ void SearchEngine::runNameSearch(const Job& job)
             // A typed path, or typing set to search only this folder: constrain
             // before choosing the top hits, including a share indexed at this
             // subfolder. A similarly named folder is a different place (#49).
-            if (!typedPath.folder.isEmpty() && (!typedIn || request.currentFolderOnly))
+            // This level only: the entry's parent is the folder itself, which
+            // is also the whole of "under" for those names, so no ancestor walk.
+            if (levelOnly)
+                filter.directIn = folder == kNoEntry ? kNoEntry - 1 : folder;
+            else if (!typedPath.folder.isEmpty() && (!typedIn || request.currentFolderOnly))
                 filter.folders.push_back(folder == kNoEntry ? kNoEntry - 1 : folder);
             std::ranges::sort(filter.folders);
             const NameSearchOptions options {.limit = static_cast<std::size_t>(request.limit),
@@ -1810,7 +1851,8 @@ void SearchEngine::runNameSearch(const Job& job)
         // among rows ranked by time (marked there only).
         const bool promote = rankBy == RankBy::Match && typedPath.folder.isEmpty() && !listing
             && relative().names.isEmpty();
-        promoteFavorites(results, total, request, matcher, promote, *apps, *places, *m_onDisk, m_index, types);
+        const bool learnedFirst = promote && request.order.key == SortKey::Rank && !filtered && !insideFirst;
+        promoteFavorites(results, total, request, matcher, promote, learnedFirst, *apps, *places, *m_onDisk, m_index, types);
 
         // Nothing at all is named as typed (no file or folder, no app, place
         // or favorite either): the query read aloud, for the names that sound
@@ -1915,6 +1957,16 @@ void SearchEngine::runNameSearch(const Job& job)
         total += rows.size();
         rows.append(std::move(results));
         results = std::move(rows);
+    }
+
+    if (request.openWindows && request.scope == Scope::All && !query.isEmpty()
+        && !query.hasFilters() && query.extensions.empty() && !listing && request.currentFolder.isEmpty()
+        && request.extensions.isEmpty() && request.folders.isEmpty() && !request.filter.any()
+        && request.order.key == SortKey::Rank && request.rankBy == RankBy::Match && !isStale(job.id)) {
+        SearchResults windows = request.openWindows();
+        total += windows.size();
+        windows.append(std::move(results));
+        results = std::move(windows);
     }
 
     // The rows of the query before stay on screen (dimmed) until these come.
@@ -2211,11 +2263,12 @@ void SearchEngine::runContentSearch(const Job& job)
             return 2;
         return inProfile(id) ? 0 : 1;
     };
+    const auto personalFolders = win32::userFolders();
     if (set == ContentSet::Given) {
         // The files asked for, as they are now; none as the content index
         // knows it (as too large, or as it was when it fit the limit).
         const auto lock = index->readLock();
-        UnderFolder inProfile(*index, index->findPath(win32::expandEnvironment(L"%USERPROFILE%")));
+        UnderFolder inProfile(*index, personalFolders);
         for (const QString& file : request.contentOnly) {
             const EntryId id = index->findPath(file.toStdWString());
             if (id == kNoEntry || index->entry(id).isDeleted())
@@ -2231,7 +2284,6 @@ void SearchEngine::runContentSearch(const Job& job)
         // each kind of those on its own (the hint names the most numerous).
         const auto lock = index->readLock();
         constexpr std::uint32_t kMatch = ContentIndex::Lookup::kMatch;
-        const EntryId profile = index->findPath(win32::expandEnvironment(L"%USERPROFILE%"));
         std::vector<std::vector<Candidate>> found(index->chunkCount());
         std::vector<int> ruledOutOf(index->chunkCount(), 0);
         std::vector<std::vector<EntryId>> largeOf(index->chunkCount());
@@ -2243,7 +2295,7 @@ void SearchEngine::runContentSearch(const Job& job)
         m_pool.parallelFor(index->chunkCount(), [&](std::size_t c) {
             if (isStale(job.id))
                 return;
-            UnderFolder inProfile(*index, profile);
+            UnderFolder inProfile(*index, personalFolders);
             UnderFolders inScope(*index, scope);
             const auto first = static_cast<EntryId>(c << FileIndex::kChunkBits);
             auto k = static_cast<std::size_t>(std::lower_bound(lookup.known.begin(), lookup.known.end(), first,

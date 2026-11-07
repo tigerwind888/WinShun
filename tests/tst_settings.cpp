@@ -1,10 +1,13 @@
 #include "Settings.h"
+#include "DoubleTapAction.h"
 #include "WebSearchConfig.h"
 #include "PreviewShortcut.h"
 #include "Query.h"
 #include "SettingsCommand.h"
+#include "StartupAccess.h"
 
 #include "ServiceVolumeAccess.h"
+#include "platform/InputMode.h"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -14,6 +17,8 @@
 #include <QTemporaryDir>
 #include <QtTest>
 #include <algorithm>
+#include <windows.h>
+#include <shellapi.h>
 
 using namespace Qt::StringLiterals;
 
@@ -28,6 +33,211 @@ class SettingsTest : public QObject {
     Q_OBJECT
 
 private slots:
+    void pureSearchPreference()
+    {
+        QTemporaryDir profile;
+        QVERIFY(profile.isValid());
+        ws::Settings::useProfile(profile.path());
+        ws::Settings settings;
+        settings.load();
+        QVERIFY(!settings.pureSearch);
+        settings.pureSearch = true;
+        QVERIFY(settings.saveChecked());
+        ws::Settings restored;
+        restored.load();
+        QVERIFY(restored.pureSearch);
+        restored.pureSearch = false;
+        QVERIFY(restored.saveChecked());
+        settings.load();
+        QVERIFY(!settings.pureSearch);
+    }
+    void doubleTapActionPreference()
+    {
+        QTemporaryDir profile;
+        QVERIFY(profile.isValid());
+        ws::Settings::useProfile(profile.path());
+        ws::Settings settings;
+        settings.load();
+        QCOMPARE(settings.doubleTapAction, u"launcher"_s);
+        for (const QString& action : {u"clipboard"_s, ws::doubletap::encode(u"winshun.capture"_s, u"Win+Shift+S"_s)}) {
+            settings.doubleTapAction = action;
+            QVERIFY(settings.saveChecked());
+            ws::Settings restored;
+            restored.load();
+            QCOMPARE(restored.doubleTapAction, action);
+            QCOMPARE(restored.doubleTapKey, u"ctrl"_s);
+        }
+        const auto decoded = ws::doubletap::decode(settings.doubleTapAction);
+        QCOMPARE(decoded.plugin, u"winshun.capture"_s);
+        QCOMPARE(decoded.key, u"Win+Shift+S"_s);
+        for (const QString& invalid : {u"bad"_s, u"plugin:/Ctrl+A"_s, u"plugin:x/"_s, u"plugin:../Ctrl+A"_s}) {
+            settings.doubleTapAction = invalid;
+            QVERIFY(settings.saveChecked());
+            settings.load();
+            QCOMPARE(settings.doubleTapAction, u"launcher"_s);
+        }
+    }
+    void searchHistoryAndScopePreferences()
+    {
+        QTemporaryDir profile;
+        QVERIFY(profile.isValid());
+        ws::Settings::useProfile(profile.path());
+        ws::Settings settings;
+        settings.load();
+        QVERIFY(!settings.mergeFileScope);
+        QCOMPARE(settings.queryHistoryKeys, u"ctrl"_s);
+        settings.mergeFileScope = true;
+        settings.queryHistoryKeys = u"alt"_s;
+        QVERIFY(settings.saveChecked());
+        ws::Settings restored;
+        restored.load();
+        QVERIFY(restored.mergeFileScope);
+        QCOMPARE(restored.queryHistoryKeys, u"alt"_s);
+        restored.queryHistoryKeys = u"off"_s;
+        QVERIFY(restored.saveChecked());
+        settings.load();
+        QCOMPARE(settings.queryHistoryKeys, u"off"_s);
+        restored.queryHistoryKeys = u"unknown"_s;
+        QVERIFY(restored.saveChecked());
+        settings.load();
+        QCOMPARE(settings.queryHistoryKeys, u"ctrl"_s);
+    }
+
+    void startupArgumentsRoundTrip()
+    {
+        const QStringList original {u"--profile"_s, u"F:\\中文 profile\\"_s, u"--background"_s,
+            u"--query"_s, u"say \"hello\" \\"_s, u"--settings-at"_s, QString()};
+        for (const auto& arguments : {original, ws::startupaccess::fallbackArguments(original)}) {
+            const QString line = u"WinShun.exe "_s + ws::startupaccess::commandLine(arguments);
+            int count = 0;
+            wchar_t** parsed = ::CommandLineToArgvW(line.toStdWString().c_str(), &count);
+            QVERIFY(parsed);
+            QStringList actual;
+            for (int i = 1; i < count; ++i)
+                actual.append(QString::fromWCharArray(parsed[i]));
+            ::LocalFree(parsed);
+            QCOMPARE(actual, arguments);
+        }
+    }
+
+    void pluginBuiltinsPreference()
+    {
+        QTemporaryDir profile;
+        QVERIFY(profile.isValid());
+        ws::Settings::useProfile(profile.path());
+        ws::Settings settings;
+        settings.load();
+        QVERIFY(!settings.pluginBuiltinsExpanded);
+        settings.pluginBuiltinsExpanded = true;
+        QVERIFY(settings.saveChecked());
+        ws::Settings restored;
+        restored.load();
+        QVERIFY(restored.pluginBuiltinsExpanded);
+        restored.pluginBuiltinsExpanded = false;
+        QVERIFY(restored.saveChecked());
+        settings.load();
+        QVERIFY(!settings.pluginBuiltinsExpanded);
+    }
+
+    void startupIndexAccess()
+    {
+        QTemporaryDir profile;
+        QVERIFY(profile.isValid());
+        ws::Settings::useProfile(profile.path());
+        auto selected = ws::Settings::defaults();
+        selected.indexAccess = u"direct"_s;
+        QVERIFY(selected.saveChecked());
+        ws::Settings restarted;
+        restarted.load();
+        QCOMPARE(ws::startupaccess::storedMode(ws::Settings::filePath()), restarted.indexAccess);
+        using ws::startupaccess::needsElevation;
+        QVERIFY(needsElevation(restarted.indexAccess, true, false, false));
+        {
+            QSettings raw(ws::Settings::filePath(), QSettings::IniFormat);
+            raw.setValue(u"Index/Access"_s, u"  DiReCt  "_s);
+        }
+        QCOMPARE(ws::startupaccess::storedMode(ws::Settings::filePath()), u"direct"_s);
+        QVERIFY(!needsElevation(restarted.indexAccess, true, true, false));
+        QVERIFY(!needsElevation(restarted.indexAccess, false, false, false));
+        QVERIFY(!needsElevation(restarted.indexAccess, true, false, true));
+        for (const auto mode : {u"auto", u"service", u"walk"})
+            QVERIFY(!needsElevation(mode, true, false, false));
+        const QStringList arguments {u"--background"_s, u"--profile"_s, u"F:\\用户资料\\Win顺"_s,
+            u"--query"_s, u"report \"draft\""_s, u"--settings"_s, u"--settings-at"_s, u"indexAccess"_s};
+        const auto fallback = ws::startupaccess::fallbackArguments(arguments);
+        QCOMPARE(fallback.sliced(0, arguments.size()), arguments);
+        QCOMPARE(fallback.last(), ws::startupaccess::unelevatedOnce);
+        QCOMPARE(fallback.size(), arguments.size() + 1);
+        restarted.load();
+        QCOMPARE(restarted.indexAccess, u"direct"_s); // declining once does not change the next launch
+        QVERIFY(needsElevation(restarted.indexAccess, true, false, false));
+    }
+
+    void panelHotkeyPreference()
+    {
+        QTemporaryDir profile;
+        QVERIFY(profile.isValid());
+        ws::Settings::useProfile(profile.path());
+        ws::Settings settings;
+        settings.load();
+        QVERIFY(settings.panelHotkey.isEmpty());
+        settings.hotkey = u"Alt+Space"_s;
+        settings.panelHotkey = u"Ctrl+Alt+F"_s;
+        QVERIFY(settings.saveChecked());
+        ws::Settings restored;
+        restored.load();
+        QCOMPARE(restored.panelHotkey, u"Ctrl+Alt+F"_s);
+        QCOMPARE(restored.hotkey, u"Alt+Space"_s);
+        restored.panelHotkey.clear();
+        QVERIFY(restored.saveChecked());
+        settings.load();
+        QVERIFY(settings.panelHotkey.isEmpty());
+        QCOMPARE(settings.hotkey, u"Alt+Space"_s);
+    }
+
+    void folderMenuInlineCounts()
+    {
+        QTemporaryDir profile;
+        QVERIFY(profile.isValid());
+        ws::Settings::useProfile(profile.path());
+        ws::Settings settings;
+        settings.load();
+        QCOMPARE(settings.folderMenuRecentInline, 0);
+        QCOMPARE(settings.folderMenuWindowsInline, 0);
+        settings.folderMenuRecentInline = 3;
+        settings.folderMenuWindowsInline = 10;
+        QVERIFY(settings.saveChecked());
+        ws::Settings restored;
+        restored.load();
+        QCOMPARE(restored.folderMenuRecentInline, 3);
+        QCOMPARE(restored.folderMenuWindowsInline, 10);
+        {
+            QSettings ini(ws::Settings::filePath(), QSettings::IniFormat);
+            ini.setValue(u"Launcher/FolderMenuRecentInline"_s, -1);
+            ini.setValue(u"Launcher/FolderMenuWindowsInline"_s, 50);
+        }
+        restored.load();
+        QCOMPARE(restored.folderMenuRecentInline, 0);
+        QCOMPARE(restored.folderMenuWindowsInline, 10);
+    }
+
+    void uiFontPreference()
+    {
+        QTemporaryDir profile;
+        QVERIFY(profile.isValid());
+        ws::Settings::useProfile(profile.path());
+        ws::Settings settings;
+        settings.load();
+        QVERIFY(settings.uiFont.isEmpty());
+        for (const QString& family : {u"Microsoft YaHei UI"_s, u"未安装的字体"_s, QString()}) {
+            settings.uiFont = family;
+            QVERIFY(settings.saveChecked());
+            ws::Settings restored;
+            restored.load();
+            QCOMPARE(restored.uiFont, family); // portable profiles keep the user's choice on another PC
+        }
+    }
+
     void keyboardHints()
     {
         QTemporaryDir profile;
@@ -290,6 +500,57 @@ private slots:
         }
     }
 
+    void englishOnOpen()
+    {
+        // Off unless set: the input method as the user left it (GitHub #201).
+        QTemporaryDir profile;
+        QVERIFY(profile.isValid());
+        ws::Settings::useProfile(profile.path());
+        ws::Settings settings;
+        settings.load();
+        QVERIFY(!settings.englishOnOpen);
+        settings.englishOnOpen = true;
+        settings.save();
+        QSettings ini(ws::Settings::filePath(), QSettings::IniFormat);
+        QCOMPARE(ini.value(u"Launcher/EnglishOnOpen"_s).toBool(), true);
+        ws::Settings restored;
+        restored.load();
+        QVERIFY(restored.englishOnOpen);
+        ini.setValue(u"Launcher/EnglishOnOpen"_s, false);
+        ini.sync();
+        restored.load();
+        QVERIFY(!restored.englishOnOpen);
+
+        // What it sets, and when it is still the user's untouched state.
+        using ws::win::InputMode;
+        const InputMode chinese {.open = true, .conversion = IME_CMODE_NATIVE | IME_CMODE_SYMBOL, .sentence = 8};
+        const InputMode letters = ws::win::lettersMode(chinese);
+        QVERIFY(!letters.open);
+        QCOMPARE(letters.conversion, DWORD {IME_CMODE_SYMBOL});
+        QCOMPARE(letters.sentence, DWORD {8});
+        QVERIFY(ws::win::sameLetters(letters, {.open = false, .conversion = IME_CMODE_ROMAN, .sentence = 0}));
+        QVERIFY(!ws::win::sameLetters(letters, {.open = true, .conversion = IME_CMODE_SYMBOL, .sentence = 8}));
+        QVERIFY(!ws::win::sameLetters(letters, {.open = false, .conversion = IME_CMODE_NATIVE, .sentence = 8}));
+        QVERIFY(!ws::win::lettersMode({.open = true, .conversion = IME_CMODE_FULLSHAPE}).open);
+        QCOMPARE(ws::win::lettersMode({.open = true, .conversion = IME_CMODE_FULLSHAPE}).conversion, DWORD {0});
+
+        // WeChat's input method, as read in the box (the native bit does not
+        // follow Shift): every opening switches, whatever it reads.
+        const auto opening = [](const InputMode& before) {
+            const InputMode after = ws::win::lettersMode(before); // what switchToLetters sets
+            return std::pair {after, !ws::win::sameLetters(after, before)};
+        };
+        const auto [first, firstChanged] = opening({.open = true, .conversion = IME_CMODE_NATIVE});
+        QVERIFY(firstChanged);
+        QCOMPARE(first, (InputMode {.open = false, .conversion = 0}));
+        const InputMode shifted {.open = true, .conversion = 0}; // Chinese again by Shift in the box
+        QVERIFY(!ws::win::sameLetters(shifted, first)); // the user's: not put back on closing
+        const auto [second, secondChanged] = opening(shifted); // the next opening
+        QVERIFY(secondChanged);
+        QCOMPARE(second, (InputMode {.open = false, .conversion = 0}));
+        QVERIFY(!opening({.open = false, .conversion = 0}).second); // English already: nothing to put back
+    }
+
     void startListOptions()
     {
         QTemporaryDir profile;
@@ -504,6 +765,14 @@ private slots:
         ini.sync();
         read.load();
         QCOMPARE(read.folderTyping, u"only"_s);
+        settings.folderTyping = u"level"_s; // this level only (GitHub #182)
+        settings.save();
+        read.load();
+        QCOMPARE(read.folderTyping, u"level"_s);
+        ini.setValue(u"Launcher/FolderTyping"_s, u" LEVEL "_s);
+        ini.sync();
+        read.load();
+        QCOMPARE(read.folderTyping, u"level"_s);
         for (const QString& value : {u"everywhere"_s, QString()}) {
             ini.setValue(u"Launcher/FolderTyping"_s, value);
             ini.sync();
@@ -814,15 +1083,16 @@ private slots:
         ws::Settings::useProfile(profile.path());
         ws::Settings fresh;
         fresh.load();
-        QVERIFY(fresh.folderMenuItemSearch && fresh.folderMenuItemCmd && fresh.folderMenuItemPowerShell
+        QVERIFY(fresh.folderMenuItemSearch && fresh.folderMenuItemCopyPath && fresh.folderMenuItemCmd && fresh.folderMenuItemPowerShell
             && fresh.folderMenuItemFavorite && fresh.folderMenuItemSettings);
 
+        fresh.folderMenuItemCopyPath = false;
         fresh.folderMenuItemCmd = false;
         fresh.folderMenuItemSettings = false;
         fresh.save();
         ws::Settings again;
         again.load();
-        QVERIFY(again.folderMenuItemSearch && !again.folderMenuItemCmd && again.folderMenuItemPowerShell
+        QVERIFY(again.folderMenuItemSearch && !again.folderMenuItemCopyPath && !again.folderMenuItemCmd && again.folderMenuItemPowerShell
             && again.folderMenuItemFavorite && !again.folderMenuItemSettings);
     }
 
@@ -910,17 +1180,20 @@ private slots:
         fresh.load();
         QCOMPARE(fresh.sort, u"match"_s);
         QVERIFY(!fresh.doubleClickToOpen);
+        QVERIFY(fresh.previewFollowsPointer);
 
         for (const QStringView name : ws::kSortNames) {
             ws::Settings s;
             s.load();
             s.sort = name.toString();
             s.doubleClickToOpen = true;
+            s.previewFollowsPointer = false;
             s.save();
             ws::Settings back;
             back.load();
             QCOMPARE(back.sort, name.toString());
             QVERIFY(back.doubleClickToOpen);
+            QVERIFY(!back.previewFollowsPointer);
         }
         QCOMPARE(ws::sortIndex(u"newest"), 1);
         QCOMPARE(ws::sortIndex(u"smallest"), 7);

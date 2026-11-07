@@ -45,6 +45,7 @@
 #include <QStyleHints>
 #include <QTranslator>
 
+#include <dwmapi.h>
 #include <objbase.h>
 
 #include <algorithm>
@@ -57,7 +58,7 @@ namespace ws::captureplugin {
 namespace {
 
 constexpr wchar_t kWindowClass[] = L"WinShun.Capture.Messages";
-enum Hotkey : int { CaptureKey = 1, PrintScreenKey, PinsKey, PinsRestoreKey, LastPinKey, PresentKey, ProbeKey = 0x0BFF };
+enum Hotkey : int { CaptureKey = 1, PrintScreenKey, PinsKey, PinsRestoreKey, LastPinKey, PresentKey, OcrKey, ProbeKey = 0x0BFF };
 
 bool isDarkMode()
 {
@@ -184,6 +185,12 @@ CaptureApp::CaptureApp(Protocol& protocol, QString appDir, QString dataDir, QObj
     , m_settings(m_dataDir + u"/capture.ini"_s)
 {
     m_qml.addImportPath(m_appDir + u"/qml"_s); // QtQuick and the rest: Win顺's
+    // This process's own Theme works out the look the pins are drawn by (the
+    // same Look files as Win顺's, so an older Win顺 makes no difference).
+    SystemTheme::onNativeLookChanged(this, [this] {
+        if (m_pins)
+            m_pins->restyle();
+    });
     capture::CaptureOcr::setProgramFolder(m_appDir); // onnxruntime.dll and ocr\: Win顺's
     QString componentRoot = qEnvironmentVariable("WS_COMPONENTS_DIR");
     if (componentRoot.isEmpty())
@@ -242,7 +249,7 @@ CaptureApp::CaptureApp(Protocol& protocol, QString appDir, QString dataDir, QObj
     connect(QGuiApplication::styleHints(), &QStyleHints::colorSchemeChanged, this, [this] {
         const bool dark = isDarkMode();
         win::setMenuTheme(dark);
-        for (QQuickWindow* window : {m_editWindow.data(), m_ocrWindow.data(), m_settingsWindow.data()}) {
+        for (QQuickWindow* window : {m_editWindow.data(), m_ocrWindow.data(), m_bubbleWindow.data(), m_settingsWindow.data()}) {
             if (window)
                 win::setDarkFrame(window, dark);
         }
@@ -262,6 +269,8 @@ CaptureApp::~CaptureApp()
     m_editor.reset();
     m_editFrame.reset();
     closeCaptureOcr(true);
+    delete m_bubbleWindow.data();
+    m_bubbleFrame.reset();
     delete m_settingsWindow.data();
     if (m_window)
         ::DestroyWindow(m_window);
@@ -299,7 +308,7 @@ void CaptureApp::requested(const QJsonValue& id, const QString& method, const QJ
         const QString text = params.value(u"text"_s).toString().trimmed();
         QJsonArray items;
         if (text == u"__selftest") { // whether each window's QML loads on this Win顺's Qt (made hidden, then let go of)
-            for (const QString& type : {u"EditWindow"_s, u"OcrPanel"_s, u"CaptureSettingsWindow"_s, u"LongCapturePanel"_s, u"RecordingPanel"_s,
+            for (const QString& type : {u"EditWindow"_s, u"OcrPanel"_s, u"OcrBubble"_s, u"CaptureSettingsWindow"_s, u"LongCapturePanel"_s, u"RecordingPanel"_s,
                      u"PresenterOverlay"_s, u"PresenterToolbar"_s}) {
                 QQmlComponent component(&m_qml, u"WinShun"_s, type);
                 const QString problem = component.isError() ? component.errorString().trimmed() : QString();
@@ -321,6 +330,9 @@ void CaptureApp::requested(const QJsonValue& id, const QString& method, const QJ
                                                                        : QString();
         add(u"start"_s, tr("开始截图"), key.isEmpty() ? tr("框选窗口或区域") : tr("快捷键 %1").arg(key), u"E722"_s,
             u"截图 截屏 截取 screenshot capture shot snip"_s);
+        add(u"ocr"_s, tr("识别屏幕文字"),
+            m_settings.options().ocrHotkey.isEmpty() ? tr("框选一块屏幕，识别出的文字直接复制") : tr("快捷键 %1").arg(m_settings.options().ocrHotkey),
+            u"E8D2"_s, u"取字 识别 文字 提取文字 复制文字 ocr text recognize extract"_s);
         add(u"delay"_s, tr("%1 秒后截图").arg(m_settings.options().delay), tr("先打开要截的菜单或提示"), u"E916"_s, u"延时 延迟 定时 delay timer later"_s);
         add(u"last"_s, tr("贴图"), tr("优先剪贴板图片，否则贴回最近截图并保留标注"), u"E718"_s, u"贴 钉 贴图 pin paste sticker"_s);
         add(u"present"_s, presenterOpen() ? tr("结束演示") : tr("演示 / 白板"),
@@ -341,6 +353,8 @@ void CaptureApp::requested(const QJsonValue& id, const QString& method, const QJ
                 pinCurrentImage();
             else if (item == u"present")
                 togglePresenter();
+            else if (item == u"ocr")
+                startOcr();
             else if (m_capture)
                 m_capture->trigger();
         });
@@ -373,7 +387,7 @@ void CaptureApp::notified(const QString& method, const QJsonObject& params)
         const auto& o = m_settings.options();
         const std::pair<int, QString> shortcuts[] {{CaptureKey, o.hotkey}, {PinsKey, o.pinsHotkey},
             {PinsRestoreKey, o.pinsRestoreHotkey}, {LastPinKey, o.lastPinHotkey}, {PresentKey, o.presentHotkey},
-            {PrintScreenKey, o.printScreen ? u"PrintScreen"_s : QString()}};
+            {PrintScreenKey, o.printScreen ? u"PrintScreen"_s : QString()}, {OcrKey, o.ocrHotkey}};
         for (const auto& [id, shortcut] : shortcuts) {
             if (!key.isEmpty() && key == hotkeys::normalized(shortcut)) {
                 hotkey(id);
@@ -395,7 +409,7 @@ void CaptureApp::shutdown()
         m_protocol.tool(u"register_hotkeys"_s, {{u"keys"_s, QJsonArray()}});
     if (m_presenter)
         m_presenter->presenter().close();
-    for (int id = CaptureKey; id <= PresentKey; ++id)
+    for (int id = CaptureKey; id <= OcrKey; ++id)
         ::UnregisterHotKey(m_window, id);
     const QString before = m_settings.options().printScreenBefore;
     std::optional<DWORD> value;
@@ -432,6 +446,13 @@ void CaptureApp::apply()
             using Action = capture::CaptureSession::Action;
             captureOcrThen(image, dpr, where,
                 then == Action::OcrCopy ? OcrThen::Copy : then == Action::OcrSearch ? OcrThen::Search : OcrThen::Web);
+        };
+        callbacks.readText = [this](const QImage& image, double dpr, const QRect& where) { readScreenText(image, dpr, where); };
+        // Not in the frozen picture: hidden, and one composition waited for, so
+        // the grab right after does not still find it on the screen.
+        callbacks.starting = [this] {
+            if (closeOcrBubble())
+                ::DwmFlush();
         };
         callbacks.pins = [this] { return &pins(); };
         callbacks.smart = smartHooks();
@@ -492,7 +513,14 @@ void CaptureApp::apply()
                 keys.push_back({0, VK_SNAPSHOT});
             return keys;
         };
-        callbacks.accent = [] { return SystemTheme::accentColor(); };
+        callbacks.accent = [this] {
+            ensureTheme();
+            return SystemTheme::nativeColor("accentFill", SystemTheme::accentColor());
+        };
+        callbacks.panelRadius = [this] {
+            ensureTheme();
+            return SystemTheme::nativeReal("menuRadius", win::roundedCorners() ? 8 : 0);
+        };
         m_capture = std::make_unique<capture::Capture>(&m_qml, std::move(callbacks));
     }
     m_capture->setCopyOnSelect(o.copyOnSelect);
@@ -554,7 +582,7 @@ void CaptureApp::apply()
 void CaptureApp::applyHotkeys()
 {
     const quint64 revision = ++m_hotkeyRevision;
-    for (int id = CaptureKey; id <= PresentKey; ++id)
+    for (int id = CaptureKey; id <= OcrKey; ++id)
         ::UnregisterHotKey(m_window, id);
     if (m_settings.recordingHotkey()) {
         if (m_hostHotkeys)
@@ -587,6 +615,10 @@ void CaptureApp::applyHotkeys()
         problems.pinsRestoreHotkey = take(PinsRestoreKey, o.pinsRestoreHotkey);
         problems.lastPinHotkey = take(LastPinKey, o.lastPinHotkey);
         problems.presentHotkey = take(PresentKey, o.presentHotkey);
+        // The same key as one of the others: that one keeps it, this says so.
+        problems.ocrHotkey = m_settings.ocrHotkeyClash();
+        if (problems.ocrHotkey.isEmpty())
+            problems.ocrHotkey = take(OcrKey, o.ocrHotkey);
         if (m_presenter)
             m_presenter->setHotkeyText(o.presentHotkey);
         m_settings.setProblems(problems); // shown next to each shortcut
@@ -630,6 +662,10 @@ void CaptureApp::applyHotkeys()
                 problems.pinsRestoreHotkey = problem(o.pinsRestoreHotkey);
                 problems.lastPinHotkey = problem(o.lastPinHotkey);
                 problems.presentHotkey = problem(o.presentHotkey);
+                if (const QString clash = m_settings.ocrHotkeyClash(); !clash.isEmpty())
+                    problems.ocrHotkey = clash;
+                else
+                    problems.ocrHotkey = problem(o.ocrHotkey);
                 if (o.printScreen && (!error.isEmpty() || errors.contains(u"PrintScreen"_s)))
                     problems.note = hotkeyProblem(u"PrintScreen"_s);
                 m_settings.setProblems(problems);
@@ -645,13 +681,22 @@ void CaptureApp::reportHotkeyProblems(const CaptureSettings::Problems& problems)
     if (!m_capture)
         return;
     if (!(m_settingsWindow && m_settingsWindow->isVisible())) {
-        for (const QString& error : {problems.hotkey, problems.pinsHotkey, problems.pinsRestoreHotkey, problems.lastPinHotkey, problems.presentHotkey}) {
+        for (const QString& error : {problems.hotkey, problems.pinsHotkey, problems.pinsRestoreHotkey, problems.lastPinHotkey,
+                 problems.presentHotkey, problems.ocrHotkey}) {
             if (!error.isEmpty()) {
                 notify(tr("快捷键不可用"), error);
                 break;
             }
         }
     }
+}
+
+void CaptureApp::ensureTheme()
+{
+    if (m_themeMade)
+        return;
+    m_themeMade = true;
+    m_qml.singletonInstance<QObject*>(u"WinShun"_s, u"Theme"_s);
 }
 
 // Win顺's look, as it says it (initialize, then appearance as it changes).
@@ -661,6 +706,7 @@ void CaptureApp::applyAppearance(const QJsonObject& a)
         return;
     SystemTheme::setRoundedCorners(a.value(u"corners"_s).toString(u"round"_s) == u"round");
     SystemTheme::setUiSize(a.value(u"uiSize"_s).toString(u"standard"_s));
+    SystemTheme::setUiStyle(a.value(u"uiStyle"_s).toString());
     SystemTheme::setBackdropOn(a.value(u"transparency"_s).toString(u"on"_s) == u"on");
     const QString theme = a.value(u"themeSetting"_s).toString();
     QGuiApplication::styleHints()->setColorScheme(theme == u"dark" ? Qt::ColorScheme::Dark
@@ -684,7 +730,7 @@ void CaptureApp::applyAppearance(const QJsonObject& a)
         QGuiApplication::setApplicationDisplayName(locale == u"en" ? u"WinShun"_s : u"Win顺"_s);
         m_qml.retranslate();
     }
-    for (QQuickWindow* window : {m_ocrWindow.data(), m_settingsWindow.data()}) {
+    for (QQuickWindow* window : {m_ocrWindow.data(), m_bubbleWindow.data(), m_settingsWindow.data()}) {
         if (window)
             win::styleFramelessWindow(window, SystemTheme::backdropAvailable());
     }
@@ -708,8 +754,9 @@ capture::CaptureOcr& CaptureApp::captureOcr()
         connect(m_captureOcr.get(), &capture::CaptureOcr::webSearchRequested, this, [this](const QString& query) { searchText(query, true); });
         connect(m_captureOcr.get(), &capture::CaptureOcr::closeRequested, this, [this] { closeCaptureOcr(); });
         connect(m_captureOcr.get(), &capture::CaptureOcr::openLinkRequested, this, [this](const QString& url) {
-            // Only ever from a click on 打开链接; opened by Win顺 (no programs started here).
-            m_protocol.tool(u"open_item"_s, {{u"path"_s, url}});
+            // Only ever from a click on 打开链接; opened by Win顺 (no programs started
+            // here). open_item takes files and folders only (GitHub #225).
+            m_protocol.tool(u"open_url"_s, {{u"url"_s, url}});
         });
     }
     return *m_captureOcr;
@@ -779,7 +826,20 @@ void CaptureApp::showCaptureOcr(const QImage& image, double dpr, const QRect& wh
         window->installEventFilter(this);
         m_ocrWindow = window;
     }
-    // Beside the picture, on its monitor (physical pixels there, logical for Qt).
+    placeNear(m_ocrWindow, where);
+    if (texts)
+        captureOcr().showTexts(*texts, tr("二维码"), tr("选区里没有找到二维码。"));
+    else
+        captureOcr().read(image, dpr);
+    m_ocrWindow->show();
+    m_ocrWindow->raise();
+    win::bringToFront(m_ocrWindow);
+    m_ocrWindow->requestActivate();
+}
+
+// Beside the picture, on its monitor (physical pixels there, logical for Qt).
+void CaptureApp::placeNear(QQuickWindow* window, const QRect& where)
+{
     const RECT anchor {where.left(), where.top(), where.left() + where.width(), where.top() + where.height()};
     const HMONITOR monitor = ::MonitorFromRect(&anchor, MONITOR_DEFAULTTONEAREST);
     MONITORINFO info {sizeof info};
@@ -792,20 +852,12 @@ void CaptureApp::showCaptureOcr(const QImage& image, double dpr, const QRect& wh
     if (screen && ::GetMonitorInfoW(monitor, &info)) {
         const qreal ratio = screen->devicePixelRatio();
         const QRect work(info.rcWork.left, info.rcWork.top, info.rcWork.right - info.rcWork.left, info.rcWork.bottom - info.rcWork.top);
-        const QSize box(qRound(m_ocrWindow->width() * ratio), qRound(m_ocrWindow->height() * ratio));
+        const QSize box(qRound(window->width() * ratio), qRound(window->height() * ratio));
         const QPoint at = capture::placeBeside(where, box, work, qRound(8 * ratio));
         const QPoint monitorOrigin(info.rcMonitor.left, info.rcMonitor.top);
-        m_ocrWindow->setScreen(screen);
-        m_ocrWindow->setPosition(screen->geometry().topLeft() + (at - monitorOrigin) / ratio);
+        window->setScreen(screen);
+        window->setPosition(screen->geometry().topLeft() + (at - monitorOrigin) / ratio);
     }
-    if (texts)
-        captureOcr().showTexts(*texts, tr("二维码"), tr("选区里没有找到二维码。"));
-    else
-        captureOcr().read(image, dpr);
-    m_ocrWindow->show();
-    m_ocrWindow->raise();
-    win::bringToFront(m_ocrWindow);
-    m_ocrWindow->requestActivate();
 }
 
 void CaptureApp::closeCaptureOcr(bool destroy)
@@ -852,6 +904,16 @@ void CaptureApp::quickOcrDone()
     const OcrThen then = m_quickOcrThen;
     m_quickOcr.release()->deleteLater(); // its thread and reader go with it
     m_idleTrim->poke();
+    if (then == OcrThen::Bubble) {
+        // Said in the card, not a toast: a toast stays in the Action Center, the words too.
+        if (text.trimmed().isEmpty()) {
+            showOcrBubble(u"none"_s, {}, message);
+        } else {
+            copyText(text);
+            showOcrBubble(u"copied"_s, text, {});
+        }
+        return;
+    }
     if (text.trimmed().isEmpty()) {
         notify(tr("识别文字"), message.isEmpty() ? tr("图片里没有找到文字。") : message);
         return;
@@ -867,7 +929,89 @@ void CaptureApp::quickOcrDone()
     case OcrThen::Web:
         searchText(capture::CaptureOcr::oneLine(text), true);
         break;
+    case OcrThen::Bubble:
+        break;
     }
+}
+
+// 识别屏幕文字 (#198): the capture with only the shade, the region's words
+// copied at once (readScreenText); held back in full screen as the
+// screenshot's hotkey is, when the user asked for that (the hotkey only).
+void CaptureApp::startOcr()
+{
+    if (m_capture)
+        m_capture->triggerOcr();
+}
+
+// Without the reader the OCR window opens instead and says how to get it (as
+// Shift+C does), going on with this region once it is there.
+void CaptureApp::readScreenText(const QImage& image, double dpr, const QRect& where)
+{
+    if (!capture::CaptureOcr::available()) {
+        showCaptureOcr(image, dpr, where);
+        return;
+    }
+    m_quickOcrWhere = where;
+    showOcrBubble(u"reading"_s, {}, {});
+    captureOcrThen(image, dpr, where, OcrThen::Bubble);
+}
+
+// OcrBubble.qml: made the first time and kept; shown without taking the
+// focus (as Win顺's SettingsNotice), so Ctrl+V still goes to the window in front.
+void CaptureApp::showOcrBubble(const QString& phase, const QString& words, const QString& detail)
+{
+    if (!m_bubbleWindow) {
+        m_bubbleFrame = std::make_unique<WindowFrame>(false);
+        QQmlComponent component(&m_qml, u"WinShun"_s, u"OcrBubble"_s);
+        QObject* object = component.createWithInitialProperties({
+            {u"frame"_s, QVariant::fromValue(m_bubbleFrame.get())},
+            {u"host"_s, QVariant::fromValue<QObject*>(this)},
+        });
+        auto* window = qobject_cast<QQuickWindow*>(object);
+        if (!window) {
+            qWarning().noquote() << "Screen capture: no OCR card:" << component.errorString();
+            delete object;
+            m_bubbleFrame.reset();
+            if (phase != u"reading") // said the old way
+                notify(tr("识别文字"), phase == u"copied" ? tr("已复制识别的文字") : tr("图片里没有找到文字。"));
+            return;
+        }
+        prepareWindow(window, true);
+        m_bubbleFrame->setWindow(window);
+        m_bubbleFrame->setNoActivate(true);
+        m_bubbleWindow = window;
+        // Its size follows the words a frame later (the Column lays out on
+        // polish): placed again then, so it stays on the work area and off the region.
+        const auto place = [this, window] {
+            if (window->isVisible())
+                placeNear(window, m_quickOcrWhere);
+        };
+        connect(window, &QWindow::heightChanged, window, place);
+        connect(window, &QWindow::widthChanged, window, place);
+    }
+    QQuickWindow* window = m_bubbleWindow;
+    QMetaObject::invokeMethod(window, "present", Q_ARG(QVariant, phase), Q_ARG(QVariant, words), Q_ARG(QVariant, detail));
+    placeNear(window, m_quickOcrWhere);
+    window->setProperty("_q_showWithoutActivating", true);
+    window->show();
+    window->setProperty("_q_showWithoutActivating", QVariant());
+    ::SetWindowPos(reinterpret_cast<HWND>(window->winId()), HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+}
+
+bool CaptureApp::closeOcrBubble()
+{
+    if (!m_bubbleWindow || !m_bubbleWindow->isVisible())
+        return false;
+    QMetaObject::invokeMethod(m_bubbleWindow.data(), "dismiss");
+    return true;
+}
+
+void CaptureApp::editOcrText(const QString& text)
+{
+    if (text.isEmpty())
+        return;
+    showCaptureOcr(QImage(), 1.0, m_quickOcrWhere);
+    captureOcr().showText(text);
 }
 
 void CaptureApp::notifySaved(const QString& path, const QString& error)
@@ -897,7 +1041,19 @@ capture::PinManager& CaptureApp::pins()
         callbacks.edit = [this](capture::PinWindow* pin) { editPin(pin); };
         callbacks.closed = [this] { m_idleTrim->poke(); }; // its pixels can go back to Windows
         callbacks.dark = [] { return isDarkMode(); };
-        callbacks.accent = [] { return SystemTheme::accentColor(); };
+        // The 界面风格's (Theme's nativeLook), as the launcher's.
+        callbacks.accent = [this] {
+            ensureTheme();
+            return SystemTheme::nativeColor("accentFill", SystemTheme::accentColor());
+        };
+        callbacks.edge = [this] {
+            ensureTheme();
+            return SystemTheme::nativeColor("windowEdge", QColor());
+        };
+        callbacks.pillRadius = [this] {
+            ensureTheme();
+            return SystemTheme::nativeReal("controlRadius", win::roundedCorners() ? 4 : 0);
+        };
         callbacks.popupMenu = [this](HWND owner, const std::vector<shell::MenuItem>& items, POINT at) {
             QObject* theme = m_qml.singletonInstance<QObject*>(u"WinShun"_s, u"Theme"_s);
             return traymenu::popup(owner, items, at, theme);
@@ -1172,6 +1328,7 @@ QJsonArray CaptureApp::trayMenu() const
     QJsonArray items;
     if (m_capture) {
         items.append(menuItem(u"capture"_s, withKey(tr("开始截图"), key)));
+        items.append(menuItem(u"ocr"_s, withKey(tr("识别屏幕文字"), o.ocrHotkey)));
         QJsonObject delay {{u"title"_s, tr("延时截图")},
             {u"children"_s, QJsonArray {menuItem(u"delay3"_s, tr("3 秒"), o.delay == 3), menuItem(u"delay5"_s, tr("5 秒"), o.delay == 5),
                                  menuItem(u"delay10"_s, tr("10 秒"), o.delay == 10)}}};
@@ -1200,6 +1357,8 @@ void CaptureApp::menuChosen(const QString& id)
             if (m_capture)
                 m_capture->trigger();
         });
+    } else if (id == u"ocr") {
+        QTimer::singleShot(200ms, this, &CaptureApp::startOcr); // once the menu is gone from the screen
     } else if (id == u"pinLast") {
         pinCurrentImage();
     } else if (id == u"present") {
@@ -1329,6 +1488,12 @@ void CaptureApp::hotkey(int id)
             break;
         if (m_capture)
             m_capture->trigger();
+        break;
+    case OcrKey: // held back in full screen as the screenshot's
+        if (m_capture && !m_capture->busy() && m_settings.options().pauseInFullScreen
+            && fullScreenShortcutBlocked(foreground::facts(), true))
+            break;
+        startOcr();
         break;
     case LastPinKey:
         pinCurrentImage();

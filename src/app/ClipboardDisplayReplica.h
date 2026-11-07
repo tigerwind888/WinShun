@@ -25,6 +25,7 @@ class DisplayRows : public QAbstractListModel {
     Q_PROPERTY(int count READ count NOTIFY countChanged)
     Q_PROPERTY(int selectedCount READ selectedCount NOTIFY selectionChanged)
     Q_PROPERTY(QColor highlightColor MEMBER m_highlight NOTIFY highlightColorChanged)
+    Q_PROPERTY(int highlightWeight MEMBER m_highlightWeight NOTIFY highlightColorChanged)
 public:
     explicit DisplayRows(QObject* parent = nullptr);
     int rowCount(const QModelIndex& parent = {}) const override;
@@ -45,6 +46,7 @@ private:
     QHash<int, QByteArray> m_roles;
     std::vector<QJsonObject> m_rows, m_pending;
     QColor m_highlight;
+    int m_highlightWeight = 700;
     int m_selected = 0, m_pendingSelected = 0, m_expected = -1;
 };
 
@@ -76,6 +78,7 @@ signals:
     void stepped(int row);
     void browseStepRequested();
     void queryChanged();
+    void groupSearchRequested();
     void keysRoutedChanged();
     void contextMenuKeyPressed();
     void pinyinHintRequested();
@@ -124,6 +127,7 @@ private:
     qint64 m_serial = 0;
     bool m_applying = false;
     bool m_failed = false;
+    bool m_fontReady = false;
 };
 
 } // namespace ws

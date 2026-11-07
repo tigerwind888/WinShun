@@ -1,4 +1,5 @@
 #include "PluginSettings.h"
+#include "PluginReadme.h"
 #include "WebSearchConfig.h"
 
 #include "AiBridge.h"
@@ -136,6 +137,7 @@ QVariant PluginListModel::data(const QModelIndex& index, int role) const
     case AiNoteRole: return c.aiNote;
     case ElevationRole: return c.elevation;
     case ElevationNoteRole: return c.elevationNote;
+    case ElevationProblemRole: return c.elevationProblem;
     }
     return {};
 }
@@ -147,7 +149,7 @@ QHash<int, QByteArray> PluginListModel::roleNames() const
         {StatusRole, "status"}, {ToneRole, "tone"}, {ErrorRole, "error"}, {ResidentRole, "resident"}, {KeywordsRole, "keywords"},
         {PermissionsRole, "permissions"}, {SettingsRole, "settings"}, {HasReadmeRole, "hasReadme"}, {SettingsWindowRole, "settingsWindow"}, {HasDataRole, "hasData"},
         {AiExposeRole, "aiExpose"}, {AiEnabledRole, "aiEnabled"}, {AiNoteRole, "aiNote"}, {WebSearchRole, "webSearch"},
-        {ElevationRole, "elevation"}, {ElevationNoteRole, "elevationNote"}};
+        {ElevationRole, "elevation"}, {ElevationNoteRole, "elevationNote"}, {ElevationProblemRole, "elevationProblem"}};
 }
 
 bool PluginListModel::setCards(std::vector<Card> cards)
@@ -556,7 +558,7 @@ PluginListModel::Card PluginSettings::cardFor(const QString& id) const
     const plugin::Host::State state = m_host->state(id);
     const bool dark = darkMode();
     c.bundled = e->source == plugin::Entry::Source::Bundled;
-    c.hasReadme = QFileInfo::exists(e->dir + u"\\README.md"_s) || QFileInfo::exists(e->dir + u"\\README.txt"_s);
+    c.hasReadme = readme::exists(e->dir);
     c.hasData = QFileInfo::exists(QDir(m_dataRoot).filePath(id + u".data"_s));
     c.enabled = config && config->enabled;
     if (!e->manifest) {
@@ -734,6 +736,8 @@ PluginListModel::Card PluginSettings::cardFor(const QString& id) const
         if (m_confirming.contains(id)) {
             c.elevation = u"confirming"_s;
             c.elevationNote = tr("正在确认，复制插件的文件……");
+        } else if (elevation.verdict != V::Elevated) {
+            c.elevationProblem = confirmProblem(id, m.version);
         }
     }
 
@@ -767,7 +771,11 @@ PluginListModel::Card PluginSettings::cardFor(const QString& id) const
 void PluginSettings::rebuild()
 {
     if (m_preview) {
-        if (m_list.setCards(m_preview->cards))
+        std::vector<PluginListModel::Card> cards = m_preview->cards;
+        for (PluginListModel::Card& c : cards)
+            if (c.elevation != u"elevated")
+                c.elevationProblem = m_confirmProblems.value(c.id).text;
+        if (m_list.setCards(std::move(cards)))
             emit listChanged();
         return;
     }
@@ -904,6 +912,10 @@ void PluginSettings::confirmEnable(const QString& id)
 
 void PluginSettings::confirmElevation(const QString& id)
 {
+    if (m_preview) { // the sample's 确认 is refused, as a folder that is a link is (GitHub #230)
+        finishConfirm(id, false, u"插件文件夹是一个链接（%1），不能以管理员身份运行"_s.arg(m_userDir + u'\\' + id));
+        return;
+    }
     if (!m_host || m_confirming.contains(id))
         return;
     const plugin::Entry* e = m_host->catalog().find(id);
@@ -915,9 +927,11 @@ void PluginSettings::confirmElevation(const QString& id)
     // development): their folder as it is now.
     const std::optional<plugin::gallery::Item> item = m_updates ? m_updates->signedItem(id) : std::nullopt;
     if (item && item->version != e->manifest->version) {
-        setMessage(tr("插件库里现在是 %1 版，先把它更新到这一版，再确认").arg(item->version));
+        setConfirmProblem(id, tr("插件库里现在是 %1 版，先把它更新到这一版，再确认").arg(item->version));
+        rebuild();
         return;
     }
+    m_confirmProblems.remove(id);
     m_confirming.insert(id);
     rebuild();
     const plugin::elevation::Store store = m_host->elevationStore();
@@ -945,12 +959,25 @@ void PluginSettings::confirmElevation(const QString& id)
 void PluginSettings::finishConfirm(const QString& id, bool ok, const QString& error)
 {
     m_confirming.remove(id);
-    if (ok && m_host) {
+    // Said on the card that was clicked (its shield, or why not and the
+    // button again), not over the cards, out of sight and pushing them down.
+    if (ok && m_host)
         m_host->elevationConfirmed(id);
-        setMessage(tr("已确认，%1 以后以管理员身份运行").arg(pluginName(id)));
-    } else
-        setMessage(tr("没能确认以管理员身份运行：%1").arg(error));
+    else
+        setConfirmProblem(id, error.isEmpty() ? tr("没能确认，再试一次") : tr("没能确认：%1").arg(error));
     rebuild();
+}
+
+void PluginSettings::setConfirmProblem(const QString& id, const QString& text)
+{
+    const plugin::Entry* e = m_host ? m_host->catalog().find(id) : nullptr;
+    m_confirmProblems.insert(id, {e && e->manifest ? e->manifest->version : QString(), text});
+}
+
+QString PluginSettings::confirmProblem(const QString& id, const QString& version) const
+{
+    const auto it = m_confirmProblems.constFind(id);
+    return it != m_confirmProblems.cend() && it->version == version ? it->text : QString();
 }
 
 void PluginSettings::setAiEnabled(const QString& id, bool on)
@@ -1060,7 +1087,7 @@ void PluginSettings::install(const QString& given)
     installFrom(given, {}, {});
 }
 
-void PluginSettings::installFrom(const QString& given, const QString& expectedId, const QString& name, bool enableAfterInstall)
+void PluginSettings::installFrom(const QString& given, const QString& expectedId, const QString& name, bool enableAfterInstall, bool unreviewed)
 {
     if (!m_host)
         return;
@@ -1095,6 +1122,9 @@ void PluginSettings::installFrom(const QString& given, const QString& expectedId
         const int compared = plugin::compareVersions(candidate->manifest->version, e->manifest->version);
         QVariantMap info {{u"id"_s, id}, {u"name"_s, candidate->manifest->name.pick(m_locale)}, {u"installedVersion"_s, e->manifest->version},
             {u"newVersion"_s, candidate->manifest->version}, {u"downgrade"_s, compared < 0}, {u"same"_s, compared == 0}};
+        info.insert(u"unreviewed"_s, unreviewed);
+        info.insert(u"homepage"_s, candidate->manifest->homepage);
+        info.insert(u"sourceAvailable"_s, readme::webLink(candidate->manifest->homepage));
         // On, and the new version wants a yes to more: one question, 更新并允许 (the old version runs on if it is declined).
         const PluginConfig* config = m_editor->m_settings.plugin(id);
         const QStringList more = compared > 0
@@ -1107,6 +1137,17 @@ void PluginSettings::installFrom(const QString& given, const QString& expectedId
             info.insert(u"permissions"_s, permissionRows(*candidate->manifest));
         }
         m_pendingAllow = !more.isEmpty();
+        m_pendingFromLibrary = !expectedId.isEmpty();
+        m_pendingInstall = std::move(candidate);
+        m_pendingEnable = enableAfterInstall;
+        emit installQuestion(info);
+        return;
+    }
+    if (unreviewed) {
+        const auto& manifest = *candidate->manifest;
+        const QVariantMap info {{u"id"_s, id}, {u"name"_s, manifest.name.pick(m_locale)}, {u"newVersion"_s, manifest.version},
+            {u"newInstall"_s, true}, {u"unreviewed"_s, true}, {u"homepage"_s, manifest.homepage},
+            {u"sourceAvailable"_s, readme::webLink(manifest.homepage)}};
         m_pendingFromLibrary = !expectedId.isEmpty();
         m_pendingInstall = std::move(candidate);
         m_pendingEnable = enableAfterInstall;
@@ -1318,13 +1359,20 @@ void PluginSettings::openReadme(const QString& id)
     const plugin::Entry* e = m_host->catalog().find(id);
     if (!e)
         return;
-    for (const QString& name : {u"README.md"_s, u"README.txt"_s}) {
-        if (QFileInfo::exists(e->dir + u'\\' + name)) {
-            shell::open(e->dir + u'\\' + name);
-            return;
-        }
-    }
-    shell::open(e->dir);
+    const auto document = readme::load(e->dir);
+    if (!document.error.isEmpty()) { setMessage(document.error); return; }
+    emit readmeRequested(pluginName(id), document.html);
+}
+
+void PluginSettings::openReadmeLink(const QString& link)
+{
+    if (readme::webLink(link)) shell::openUrl(link);
+}
+
+void PluginSettings::openInstallSource()
+{
+    if (m_pendingInstall && m_pendingInstall->manifest && readme::webLink(m_pendingInstall->manifest->homepage))
+        shell::openUrl(m_pendingInstall->manifest->homepage);
 }
 
 void PluginSettings::openHomepage(const QString& id)

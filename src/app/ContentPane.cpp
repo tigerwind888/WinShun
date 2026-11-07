@@ -6,7 +6,6 @@
 #include "Query.h"
 #include "platform/ComWorker.h"
 #include "platform/ContentReportPrint.h"
-#include "platform/PreviewHost.h"
 #include "platform/Shell.h"
 
 #include <QCache>
@@ -37,6 +36,20 @@ QString versionOf(const QString& path)
     return u"%1:%2:%3:%4:%5:%6:%7"_s.arg(info.dwVolumeSerialNumber).arg(info.nFileIndexHigh)
         .arg(info.nFileIndexLow).arg(info.nFileSizeHigh).arg(info.nFileSizeLow)
         .arg(info.ftLastWriteTime.dwHighDateTime).arg(info.ftLastWriteTime.dwLowDateTime);
+}
+// A plugin's details text (GitHub #202) as the documents' text is: UTF-8,
+// every line ending with '\n'.
+doctext::DocText plainText(const QString& text, bool cut)
+{
+    doctext::DocText plain;
+    QString lines = text;
+    lines.replace(u"\r\n"_s, u"\n"_s);
+    lines.replace(u'\r', u'\n');
+    if (!lines.isEmpty() && !lines.endsWith(u'\n'))
+        lines += u'\n';
+    plain.text = lines.toUtf8().toStdString();
+    plain.truncated = cut;
+    return plain;
 }
 QString readError(filetext::Status status)
 {
@@ -121,7 +134,8 @@ QVariant ContentLines::data(const QModelIndex& index, int role) const
         from = std::max(from, start); to = std::min(to, end);
         if (from >= to || from < at) continue;
         html += value.mid(at, from - at).toString().toHtmlEscaped();
-        html += u"<font color=\"%1\"><b>%2</b></font>"_s.arg(m_color.name(), value.mid(from, to - from).toString().toHtmlEscaped());
+        html += u"<font color=\"%1\">%2%3%4</font>"_s.arg(m_color.name(), m_bold ? u"<b>"_s : QString(),
+            value.mid(from, to - from).toString().toHtmlEscaped(), m_bold ? u"</b>"_s : QString());
         at = to;
     }
     html += value.mid(at, end - at).toString().toHtmlEscaped();
@@ -131,7 +145,7 @@ QVariant ContentLines::data(const QModelIndex& index, int role) const
     return html;
 }
 void ContentLines::assign(std::shared_ptr<const contentdetails::Matches> matches, std::vector<int> rows,
-    std::vector<int> visibleMatches, QColor color, std::shared_ptr<const std::vector<contentdetails::Match>> refinements)
+    std::vector<int> visibleMatches, QColor color, bool bold, std::shared_ptr<const std::vector<contentdetails::Match>> refinements)
 {
     beginResetModel();
     m_matches = std::move(matches);
@@ -139,6 +153,7 @@ void ContentLines::assign(std::shared_ptr<const contentdetails::Matches> matches
     m_visibleMatches = std::move(visibleMatches);
     m_refinements = std::move(refinements);
     m_color = color;
+    m_bold = bold;
     endResetModel();
 }
 void ContentLines::setCurrent(int sourceLine)
@@ -206,17 +221,11 @@ struct ContentPane::Worker {
 
 ContentPane::ContentPane(IndexService* index, QObject* parent)
     : QObject(parent), m_index(index), m_detailState(std::make_shared<Worker>()), m_reportState(std::make_shared<Worker>()),
-      m_preview(std::make_unique<PreviewHost>())
+      m_filePreview(std::make_unique<FilePreview>(u"panepreview"_s, true))
 {
     m_debounce.setSingleShot(true);
     m_debounce.setInterval(80);
     connect(&m_debounce, &QTimer::timeout, this, &ContentPane::load);
-    connect(m_preview.get(), &PreviewHost::failed, this, [this](quint64 ticket) {
-        if (ticket != m_previewTicket) return;
-        m_preview->hide();
-        m_previewMessage = tr("此文件的预览处理程序不可用，可查看文本或打开文件");
-        emit previewChanged();
-    });
 }
 ContentPane::~ContentPane()
 {
@@ -281,18 +290,19 @@ void ContentPane::setActive(bool value)
     startPreview();
 }
 void ContentPane::update(SearchEngine::Request request, const QString& words, const QString& key,
-    SearchResults files, SearchResults selected, const QString& current,
-    int scanned, int total, bool complete, bool searching, const ContentLeftOut& leftOut)
+    SearchResults files, SearchResults selected, const Subject& current,
+    int scanned, int total, bool complete, bool searching, const ContentLeftOut& leftOut, int pluginRows)
 {
     const QStringList terms = contentTerms(words);
     const bool queryChanged = key != m_key || terms != m_terms;
-    const bool fileChanged = current != m_path;
+    const bool fileChanged = current != m_subject;
     m_request = std::move(request);
     m_files = std::move(files);
     m_selected = std::move(selected);
     if (queryChanged || fileChanged) {
         m_key = key;
-        m_path = current;
+        m_path = current.file;
+        m_subject = current;
         m_terms = terms;
         if (queryChanged) {
             m_countGroups.clear();
@@ -308,11 +318,10 @@ void ContentPane::update(SearchEngine::Request request, const QString& words, co
         m_matches.reset();
         m_rows = {};
         m_current = -1;
-        m_message.clear();
+        m_message = current.message;
         showRows();
-        closePreview();
         schedule();
-        startPreview();
+        startPreview(); // the tab follows to the new row (no flash of nothing between)
     }
     m_snapshotComplete = complete && !searching;
     m_summary = tr("当前命中文件：%1\n已处理候选：%2 / %3（含索引排除）\n状态：%4\n内容索引：%5")
@@ -325,6 +334,8 @@ void ContentPane::update(SearchEngine::Request request, const QString& words, co
     if (leftOut.unreadable) m_summary += u'\n' + tr("读取失败：%1").arg(leftOut.unreadable);
     if (leftOut.truncated) m_summary += u'\n' + tr("仅有部分提取文本：%1").arg(leftOut.truncated);
     if (leftOut.indexExcluded) m_summary += u'\n' + tr("由内容索引排除：%1").arg(leftOut.indexExcluded);
+    // Plugins' rows that are no file (GitHub #202): shown in the list, not counted above nor in a report.
+    if (pluginRows) m_summary += u'\n' + tr("插件结果（不是文件，不计入报告）：%1").arg(pluginRows);
     if (leftOut.elapsedMs) m_summary += u'\n' + tr("搜索耗时：%1 ms").arg(leftOut.elapsedMs);
     m_summary += u'\n' + tr("全部匹配次数按需统计；结果受上限或读取限制时会标明。");
     QMap<QString, int> types;
@@ -350,8 +361,9 @@ void ContentPane::schedule()
 {
     ++m_detailState->generation;
     m_debounce.stop();
-    m_busy = m_active && m_opened && (m_tab == 1 || m_tab == 2) && !m_path.isEmpty() && !m_terms.isEmpty();
-    if (m_busy) m_debounce.start();
+    const bool readable = !m_path.isEmpty() || m_subject.text;
+    m_busy = m_active && m_opened && (m_tab == 1 || m_tab == 2) && (readable || m_subject.waiting) && !m_terms.isEmpty();
+    if (m_busy && readable) m_debounce.start(); // waiting: update() comes again with the answer
     emit changed();
 }
 void ContentPane::load()
@@ -360,6 +372,8 @@ void ContentPane::load()
     const quint64 ticket = state->generation.load();
     const filetext::Sources sources {m_index ? m_index->index() : nullptr, m_index ? m_index->contentIndex() : nullptr};
     const QString path = m_path;
+    const auto text = m_subject.text;
+    const bool cut = m_subject.cut;
     const auto terms = m_terms;
     const auto enabled = m_enabled;
     const auto filter = m_filter;
@@ -367,10 +381,12 @@ void ContentPane::load()
     const auto sheet = m_sheet;
     const auto limit = m_request.contentSizeLimits.of(path.toStdWString());
     if (!m_detailWorker) m_detailWorker = std::make_unique<ComWorker>();
-    m_detailWorker->post([this, state, ticket, sources, path, terms, enabled, filter, context, sheet, limit] {
+    m_detailWorker->post([this, state, ticket, sources, path, text, cut, terms, enabled, filter, context, sheet, limit] {
         const auto cancel = [&] { return state->generation.load() != ticket; };
         if (cancel()) return;
-        const auto read = state->read(path, sources, limit, ticket);
+        // A plugin's text (GitHub #202): lines as a text file's.
+        const auto read = text ? Worker::Read {contentdetails::document(plainText(*text, cut), cancel), {}, false}
+                               : state->read(path, sources, limit, ticket);
         auto matches = std::make_shared<contentdetails::Matches>(contentdetails::find(read.document, terms, cancel));
         auto rows = contentdetails::filter(*matches, enabled, filter, context, sheet, cancel);
         if (cancel()) return;
@@ -392,14 +408,14 @@ void ContentPane::load()
 void ContentPane::showRows()
 {
     const auto refinements = m_filter.enabled ? m_rows.refinements : nullptr;
-    m_hits.assign(m_matches, m_rows.lines, m_rows.matches, m_color, refinements);
+    m_hits.assign(m_matches, m_rows.lines, m_rows.matches, m_color, m_weight >= 600, refinements);
     std::vector<int> text;
     if (m_matches && m_matches->document) {
         const auto& doc = *m_matches->document;
         for (int i = 0; i < std::ssize(doc.lines); ++i)
             if (m_sheet < 0 || doc.lines[i].sheet == m_sheet) text.push_back(i);
     }
-    m_text.assign(m_matches, std::move(text), m_rows.matches, m_color, refinements);
+    m_text.assign(m_matches, std::move(text), m_rows.matches, m_color, m_weight >= 600, refinements);
     if (m_current >= 0 && m_current < std::ssize(m_rows.matches)) {
         const int line = m_matches->items[m_rows.matches[m_current]].line;
         m_hits.setCurrent(line);
@@ -407,8 +423,15 @@ void ContentPane::showRows()
         emit positionRequested(m_hits.indexOf(line), m_text.indexOf(line));
     }
 }
+QString ContentPane::title() const
+{
+    if (!m_subject.title.isEmpty())
+        return m_subject.title;
+    return m_path.mid(std::max(m_path.lastIndexOf(u'\\'), m_path.lastIndexOf(u'/')) + 1);
+}
 QString ContentPane::matchStatus() const
 {
+    if (m_busy && m_subject.waiting) return tr("正在向插件获取详情…");
     if (m_busy) return tr("正在读取与匹配…");
     if (!m_matches || !m_matches->document) return tr("选择文件查看匹配和文本");
     return tr("显示 %1 / %2 处匹配 · 当前 %3").arg(m_rows.matches.size()).arg(m_matches->items.size())
@@ -444,6 +467,13 @@ void ContentPane::setHighlightColor(const QColor& value)
     showRows();
     emit changed();
 }
+void ContentPane::setHighlightWeight(int value)
+{
+    if (m_weight == value) return;
+    m_weight = value;
+    showRows();
+    emit changed();
+}
 void ContentPane::setFilter(const QString& text, bool matchCase, bool wholeWord, bool regex)
 {
     if (m_filter.text == text && m_filter.matchCase == matchCase && m_filter.wholeWord == wholeWord && m_filter.regex == regex) return;
@@ -472,7 +502,7 @@ void ContentPane::activateLine(int row, bool textView)
     const int line = (textView ? m_text : m_hits).sourceLineAt(row);
     if (line < 0 || !m_matches || !m_matches->document) return;
     const auto& at = m_matches->document->lines[line];
-    emit openRequested(m_path, at.kind == doctext::PlaceKind::None ? static_cast<int>(at.number) : 0);
+    emit openRequested(m_subject.key, m_path, at.kind == doctext::PlaceKind::None ? static_cast<int>(at.number) : 0);
 }
 void ContentPane::selectLine(int row, bool textView)
 {
@@ -490,11 +520,11 @@ void ContentPane::selectLine(int row, bool textView)
 }
 void ContentPane::openCurrent()
 {
-    if (m_busy || m_path.isEmpty()) return;
+    if (m_busy || m_subject.key.isEmpty()) return;
     if (m_current >= 0 && m_matches && m_current < std::ssize(m_rows.matches)) {
         const auto& at = m_matches->document->lines[m_matches->items[m_rows.matches[m_current]].line];
-        emit openRequested(m_path, at.kind == doctext::PlaceKind::None ? static_cast<int>(at.number) : 0);
-    } else emit openRequested(m_path, 0);
+        emit openRequested(m_subject.key, m_path, at.kind == doctext::PlaceKind::None ? static_cast<int>(at.number) : 0);
+    } else emit openRequested(m_subject.key, m_path, 0);
 }
 void ContentPane::refresh()
 {
@@ -794,54 +824,52 @@ void ContentPane::printReport()
 
 void ContentPane::setPreviewArea(QQuickItem* area, bool dark)
 {
-    if (m_previewArea != area || m_dark != dark) closePreview();
+    if (m_previewArea != area || m_dark != dark) closePreview(); // a document's handler draws in the colours it was made with
     m_previewArea = area;
     m_dark = dark;
+    m_filePreview->setDark(dark);
     startPreview();
 }
+void ContentPane::setTextExtensions(const QStringList& extensions)
+{
+    m_filePreview->setTextExtensions(extensions);
+}
+bool ContentPane::previewShown() const
+{
+    return m_active && m_opened && m_tab == PreviewTab && m_previewArea && m_previewArea->isVisible() && m_previewArea->window()
+        && m_previewArea->window()->isVisible();
+}
+// The 预览 tab shows what the launcher's own preview would (FilePreview):
+// a file's picture, text or document; a plugin's text, or why there is none.
 void ContentPane::startPreview()
 {
-    if (!m_active || !m_opened || m_tab != 3 || !m_previewArea || !m_previewArea->isVisible()
-        || !m_previewArea->window() || !m_previewArea->window()->isVisible() || m_path.isEmpty()) return;
-    if (m_previewPath == m_path) { movePreview(); return; }
-    const auto handler = PreviewHost::handlerFor(m_path);
-    m_previewMessage = handler ? tr("正在加载文件预览…") : tr("此文件没有可用的预览处理程序，可查看文本或打开文件");
-    emit previewChanged();
-    if (!handler) return;
-    m_previewPath = m_path;
-    const auto rect = m_previewArea->mapRectToScene(m_previewArea->boundingRect());
-    const auto* window = m_previewArea->window();
-    POINT origin {};
-    ::ClientToScreen(reinterpret_cast<HWND>(window->winId()), &origin);
-    const qreal dpr = window->devicePixelRatio();
-    m_preview->show(++m_previewTicket, m_path, *handler, origin.x + qRound(rect.left() * dpr), origin.y + qRound(rect.top() * dpr),
-        origin.x + qRound(rect.right() * dpr), origin.y + qRound(rect.bottom() * dpr),
-        reinterpret_cast<HWND>(window->winId()), m_dark);
+    if (!previewShown()) return;
+    std::optional<FilePreview::Item> item;
+    if (!m_path.isEmpty())
+        item = FilePreview::Item {m_path, QFileInfo(m_path).fileName()};
+    else if (m_subject.text || !m_subject.message.isEmpty())
+        item = FilePreview::Item {m_subject.key, m_subject.title, false, m_subject.text, m_subject.message};
+    if (!m_filePreview->isOpen()) {
+        if (item) m_filePreview->show(*item);
+        return;
+    }
+    m_filePreview->follow(item);
 }
 void ContentPane::movePreview()
 {
-    if (!m_previewArea || !m_previewArea->isVisible() || !m_previewArea->window()
-        || !m_previewArea->window()->isVisible() || !m_active || !m_opened || m_tab != 3) { closePreview(); return; }
-    if (m_previewPath.isEmpty()) { startPreview(); return; }
-    const auto rect = m_previewArea->mapRectToScene(m_previewArea->boundingRect());
-    const auto* window = m_previewArea->window();
-    POINT origin {};
-    ::ClientToScreen(reinterpret_cast<HWND>(window->winId()), &origin);
-    const qreal dpr = window->devicePixelRatio();
-    m_preview->move(origin.x + qRound(rect.left() * dpr), origin.y + qRound(rect.top() * dpr),
-        origin.x + qRound(rect.right() * dpr), origin.y + qRound(rect.bottom() * dpr));
+    if (!previewShown()) { closePreview(); return; }
+    if (!m_filePreview->isOpen()) { startPreview(); return; }
+    m_filePreview->placeHandler();
 }
 void ContentPane::closePreview()
 {
-    ++m_previewTicket;
-    m_preview->hide();
-    m_previewPath.clear();
+    m_filePreview->close();
 }
-std::optional<QRect> ContentPane::previewRect() const { return m_preview->visibleRect(); }
+std::optional<QRect> ContentPane::previewRect() const { return m_filePreview->handlerRect(); }
 
 bool ContentPane::ownsForeground() const
 {
-    return m_active && m_opened && m_tab == 3 && m_preview->owns(::GetForegroundWindow());
+    return m_active && m_opened && m_tab == PreviewTab && m_filePreview->ownsForeground();
 }
 
 } // namespace ws

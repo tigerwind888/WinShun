@@ -5,14 +5,18 @@
 #include "Favorites.h"
 #include "LauncherNavigation.h"
 #include "ResultModel.h"
+#include "QueryHistory.h"
 #include "PanelColumns.h"
 #include "ContentPane.h"
+#include "FilePreview.h"
 #include "SearchEngine.h"
 #include "SearchTypes.h"
 #include "WebShortcut.h"
 #include "WebSuggester.h"
 
+#include <QCache>
 #include <QElapsedTimer>
+#include <QJsonObject>
 #include <QObject>
 #include <QKeySequence>
 #include <QPointer>
@@ -40,6 +44,7 @@ class SystemCatalog;
 namespace plugin {
 class Host;
 class Merge;
+struct DetailsAnswer;
 struct Effect;
 struct Item;
 struct Open;
@@ -56,6 +61,10 @@ class Launcher : public QObject {
     QML_UNCREATABLE("Provided by the application")
     Q_PROPERTY(QString query READ query WRITE setQuery NOTIFY queryChanged FINAL)
     Q_PROPERTY(Scope scope READ scope WRITE setScope NOTIFY scopeChanged FINAL)
+    Q_PROPERTY(bool mergeFileScope READ mergeFileScope NOTIFY scopeChanged FINAL)
+    Q_PROPERTY(QStringList queryHistory READ queryHistory NOTIFY queryHistoryChanged FINAL)
+    Q_PROPERTY(bool queryHistoryEnabled READ queryHistoryEnabled NOTIFY historyChanged FINAL)
+    Q_PROPERTY(QString historyKeys READ historyKeys NOTIFY historyChanged FINAL)
     Q_PROPERTY(ws::ResultModel* results READ results CONSTANT FINAL)
     Q_PROPERTY(ws::PanelColumns* panelColumns READ panelColumns CONSTANT FINAL)
     Q_PROPERTY(ws::ContentPane* contentPane READ contentPane CONSTANT FINAL)
@@ -116,6 +125,7 @@ class Launcher : public QObject {
     Q_PROPERTY(QString numberHints READ numberHints NOTIFY resultOptionsChanged FINAL)
     Q_PROPERTY(bool shortcutHelp READ shortcutHelp NOTIFY resultOptionsChanged FINAL)
     Q_PROPERTY(bool footerHints READ footerHints NOTIFY resultOptionsChanged FINAL)
+    Q_PROPERTY(bool pureSearch READ pureSearch NOTIFY resultOptionsChanged FINAL)
     Q_PROPERTY(QString previewHotkey READ previewHotkey NOTIFY resultOptionsChanged FINAL)
     // Bits 1 << n of the digits n left to one of Win顺's own shortcuts
     // (App::ownNumberDigits): their rows show the chord struck through.
@@ -124,6 +134,10 @@ class Launcher : public QObject {
     // what is typed shows there, its own field is out of sight (SearchBar.qml
     // reports the field, the app draws it in the box).
     Q_PROPERTY(bool inTaskbarBox READ inTaskbarBox NOTIFY inTaskbarBoxChanged FINAL)
+    // Windows refused it the front, its keys come through a hook while the
+    // window in front keeps the focus (App's launcher routing, GitHub #203):
+    // typed into without the focus, its field shows the caret all the same.
+    Q_PROPERTY(bool keysRouted READ keysRouted NOTIFY keysRoutedChanged FINAL)
     // The row the keyboard is on (Main.qml's), -1 for none: content matches
     // coming in are placed by how well they match, but only below it.
     Q_PROPERTY(int currentRow READ currentRow WRITE setCurrentRow NOTIFY currentRowChanged FINAL)
@@ -184,6 +198,7 @@ class Launcher : public QObject {
     // same way. The app sizes the window (App::setPanel) and then says so
     // here; togglePanel() asks it to.
     Q_PROPERTY(bool panel READ panel NOTIFY panelChanged FINAL)
+    Q_PROPERTY(bool panelSidebarVisible READ panelSidebarVisible WRITE setPanelSidebarVisible NOTIFY panelSidebarVisibleChanged FINAL)
     // Pinned (Ctrl+T, the pin at the box's corner; linux.do #157): it stays
     // up when it loses the focus or a result is opened, until Esc (or double
     // Ctrl while it is in front) hides it. Kept while hidden, until turned
@@ -224,7 +239,11 @@ class Launcher : public QObject {
     // (FolderTyping, or switchTypingFolder); else what is in it comes first,
     // then the rest, under a caption (ResultModel::elsewhereRow).
     Q_PROPERTY(QString typingFolder READ typingFolder NOTIFY typingFolderChanged FINAL)
+    Q_PROPERTY(QString typingPrefix READ typingPrefix NOTIFY typingFolderChanged FINAL)
+    Q_PROPERTY(bool folderSearch READ folderSearch NOTIFY folderSearchChanged FINAL)
     Q_PROPERTY(bool typingFolderOnly READ typingFolderOnly NOTIFY typingFolderChanged FINAL)
+    // With typingFolderOnly: not its subfolders either (GitHub #182).
+    Q_PROPERTY(bool typingFolderLevel READ typingFolderLevel NOTIFY typingFolderChanged FINAL)
 
 public:
     // As ws::Scope. 文件夹 is shown within 文件, as a chip of its strip
@@ -369,14 +388,23 @@ public:
     // Edited, it is a path typed: only that folder, as ever. Empty: none
     // (the window opened for anything else).
     void setTypingFolder(const QString& prefix);
-    // FolderTyping: "only" set (only the folder), else its rows first.
-    void setFolderTypingOnly(bool only);
+    // FolderTyping: "only" (only the folder and below), "level" (only what
+    // lies directly in it), else its rows first and then the rest.
+    void setFolderTyping(const QString& how);
     QString typingFolder() const;
+    QString typingPrefix() const { return m_typingPrefix; }
+    bool folderSearch() const { return m_folderSearch; }
+    void setFolderSearch(bool enabled);
     bool typingFolderOnly() const { return !m_typingPrefix.isEmpty() && m_typingOnly; }
-    // Ctrl+Shift+D, or the caption's or hint's link: this time only the folder
-    // typed in, or its rows first and then the rest (not the setting).
-    // False when the box is not for a folder typed in (nothing to switch).
+    bool typingFolderLevel() const { return typingFolderOnly() && m_typingLevel; }
+    // Ctrl+Shift+D: this time the next of: its rows first and then the rest,
+    // only the folder typed in (and below), only its own level (not the
+    // setting). False when the box is not for a folder typed in (nothing to
+    // switch).
     Q_INVOKABLE bool switchTypingFolder();
+    // The caption's and the hints' links: straight to one of them.
+    enum class TypingScope : std::uint8_t { Everywhere, Folder, Level };
+    bool setTypingScope(TypingScope scope);
     // How long the name search behind the rows shown took (--dump, for tests).
     qint64 elapsedUs() const noexcept { return m_elapsedUs; }
     // More results for the query are on the way. Not while quietly
@@ -446,15 +474,20 @@ public:
     QString numberHints() const { return m_numberHints; }
     QString previewHotkey() const { return m_previewHotkey; }
     void setPreviewHotkey(const QString& shortcut);
+    void setPreviewFollowsPointer(bool on) { m_previewFollowsPointer = on; } // Settings::previewFollowsPointer
     Q_INVOKABLE bool isPreviewKey(int key, int modifiers) const;
     void setNumberHints(const QString& hints);
     bool shortcutHelp() const { return m_shortcutHelp; }
     bool footerHints() const { return m_footerHints; }
     void setKeyboardHints(bool help, bool footer);
+    bool pureSearch() const { return m_pureSearch; }
+    void setPureSearch(bool on);
     int numberKeysLeft() const { return static_cast<int>(m_numberKeysLeft); }
     void setNumberKeysLeft(unsigned digits);
     bool inTaskbarBox() const { return m_inTaskbarBox; }
     void setInTaskbarBox(bool on);
+    bool keysRouted() const { return m_keysRouted; }
+    void setKeysRouted(bool routed);
     // The search field changed (text, caret, selection, composition): fieldReported.
     Q_INVOKABLE void reportField(
         const QString& text, int cursor, int selectionStart, int selectionEnd, const QString& composition);
@@ -468,6 +501,17 @@ public:
     // Off: nothing opened is remembered, and what was is not shown (it stays
     // until cleared in the settings).
     void setRecordHistory(bool on);
+    bool mergeFileScope() const { return m_mergeFileScope; }
+    void setMergeFileScope(bool merged);
+    QStringList queryHistory() const { return m_recordHistory ? m_queryHistory.items() : QStringList(); }
+    bool queryHistoryEnabled() const { return m_recordHistory; }
+    int queryHistoryCount() const { return int(m_queryHistory.items().size()); }
+    QString historyKeys() const { return m_historyKeys; }
+    void setHistoryKeys(const QString& keys);
+    Q_INVOKABLE bool navigateQueryHistory(int direction);
+    Q_INVOKABLE void recallQuery(int index);
+    Q_INVOKABLE void removeQuery(int index);
+    void rememberQuery();
     bool canClearHistory() const;
     Q_INVOKABLE void clearHistory();
     QVariantList frequentApps() const;
@@ -614,6 +658,9 @@ public:
     // The mouse rests on a row: an open preview shows its file, the current
     // row keeps the selection (the next move of it shows its file again).
     Q_INVOKABLE void previewHover(int row);
+    // The mouse went on to another row: the file followed last, if its
+    // handler has not started yet, did not stay (FilePreview::postponeHandler).
+    Q_INVOKABLE void previewPointerMoved();
     // Ctrl+C with text picked in the preview: true when it was copied.
     Q_INVOKABLE bool copyPreviewSelection();
     Q_INVOKABLE bool closePreview();
@@ -634,6 +681,8 @@ public:
 
     // The search panel (see the properties above).
     bool panel() const { return m_panel; }
+    bool panelSidebarVisible() const { return m_panelSidebarVisible; }
+    void setPanelSidebarVisible(bool visible);
     PanelColumns* panelColumns() { return &m_columns; }
     void setPanel(bool on); // by the app, the window sized for it (App::setPanel)
     Q_INVOKABLE void togglePanel(); // panelToggleRequested: the app does it
@@ -686,6 +735,7 @@ signals:
     // `system`: Shift+Menu or Ctrl+Shift+F10, the shell's menu (showSystemMenu).
     void contextMenuKeyPressed(bool system);
     void historyChanged();
+    void queryHistoryChanged();
     void contentIndexChanged();
     void contentIndexRequested(bool on);
     void frequentAppsChanged();
@@ -708,6 +758,7 @@ signals:
     void regexModeChanged();
     void resultOptionsChanged();
     void inTaskbarBoxChanged();
+    void keysRoutedChanged();
     void fieldReported(const QString& text, int cursor, int selectionStart, int selectionEnd, const QString& composition);
     // Pressed in the box on the taskbar: the field's caret goes there, or
     // its word is selected; dragged there, the text from `anchor` is selected.
@@ -725,7 +776,9 @@ signals:
     void pinRequested(const QString& path, bool screenshot);
     void folderChipsChanged();
     void typingFolderChanged();
+    void folderSearchChanged();
     void panelChanged();
+    void panelSidebarVisibleChanged();
     void panelToggleRequested();
     void pinnedChanged();
     void settingsRequested();
@@ -910,6 +963,41 @@ private:
     void refreshStatus();
     void refreshFrequentApps();
     void followPreview(); // the current row's file into the open preview
+    // The search panel's details on show (内容, the panel, the pane open):
+    // their 预览 tab is the preview there, never a window beside them (GitHub #224).
+    bool detailsShown() const;
+    void handOverPreview(); // the preview window into the details' 预览 tab, and back out of them
+    // What a row shows in the preview (none: nothing to); `ask`: a plugin's
+    // details are asked for if not known (GitHub #202).
+    std::optional<FilePreview::Item> previewItem(const SearchResult* r, bool ask = true);
+
+    // GitHub #202: a plugin's details of a row of its that is no file
+    // ("details": true): asked as the content pane or the preview shows the
+    // row, one request at a time (the newest row wanted goes next), answers
+    // kept by plugin, item and words; one that failed is not asked again
+    // until another row is, or new rows come.
+    struct RowDetails {
+        QString file; // a file of the plugin's data folder (plugin::fileInFolder)
+        std::shared_ptr<const QString> text;
+        bool cut = false;
+        QString message; // none to show: why (still asked for: `waiting`)
+        bool waiting = false;
+    };
+    std::optional<RowDetails> pluginDetails(const SearchResult& row, bool ask); // none: not such a row
+    QString detailsKey(const SearchResult& row) const;
+    void askDetails();
+    void detailsAnswered(const QString& key, bool ok, const plugin::DetailsAnswer& answer);
+    struct DetailsWant {
+        QString key;
+        QString pluginId;
+        QJsonObject item;
+        QString text;
+    };
+    QCache<QString, RowDetails> m_details {16384}; // KiB of answers
+    DetailsWant m_detailsWant; // the newest row to ask about
+    QString m_detailsAsking; // the key of the request on its way
+    QString m_detailsFailed, m_detailsFailedWhy;
+    QTimer m_detailsTimer; // a pause in the keys before asking
 
     struct FrequentApp {
         QString name;
@@ -923,6 +1011,11 @@ private:
     SystemCatalog* m_places;
     SearchEngine* m_engine;
     History* m_history;
+    QueryHistory m_queryHistory;
+    bool m_recallingQuery = false;
+    bool m_queryRecorded = false;
+    bool m_mergeFileScope = false;
+    QString m_historyKeys = QStringLiteral("ctrl");
     ResultModel m_results;
     std::unique_ptr<ContentPane> m_contentPane;
     QPointer<QWindow> m_window;
@@ -1010,8 +1103,11 @@ private:
     // setting, m_typingOnlyDefault, each time; switchTypingFolder).
     QString m_typingPrefix;
     QString m_typingFolder;
+    bool m_folderSearch = false; // temporary compact presentation, independent of query scope
     bool m_typingOnly = false;
+    bool m_typingLevel = false; // with m_typingOnly: not the subfolders either
     bool m_typingOnlyDefault = false;
+    bool m_typingLevelDefault = false;
     QString m_shownTyping; // typingKey() of the rows on screen, as m_shownText
     // The box is for the folder typed in: it still starts with it, and the
     // list is the names' (not 内容, which takes the folder as a path typed;
@@ -1071,6 +1167,7 @@ private:
 
     // The search panel (see the properties).
     bool m_panel = false;
+    bool m_panelSidebarVisible = true;
     PanelColumns m_columns;
     bool m_pinned = false;
     int m_dateChoice = 0;
@@ -1099,10 +1196,12 @@ private:
     QString m_numberHints = QStringLiteral("always");
     bool m_shortcutHelp = true;
     bool m_footerHints = true;
+    bool m_pureSearch = false;
     QString m_previewHotkey = QStringLiteral("Alt+P");
     QKeySequence m_previewSequence {QStringLiteral("Alt+P")};
     unsigned m_numberKeysLeft = 0;
     bool m_inTaskbarBox = false;
+    bool m_keysRouted = false;
     bool m_systemMenuOpen = false; // the shell's menu is up (its loop runs inside runSystemMenu)
     bool m_systemCommand = false; // see systemCommandRunning
     QElapsedTimer m_systemMenuAsked; // since showSystemMenu was last called
@@ -1121,7 +1220,10 @@ private:
     QPointer<Switches> m_switches;
     QString m_stateFile; // state.ini
     bool m_previewWanted = false; // the preview was left open by the user: it comes back with the launcher
+    bool m_previewFollowsPointer = true; // previewHover: the row the mouse rests on; off: the current row only
     bool m_previewResume = false; // shown now, and the preview not yet back
+    bool m_previewHandedOver = false; // the window gave way to the details' 预览 tab: back when they go
+    int m_tabBeforePreview = 1; // the details' tab Alt+P left for 预览 (匹配 at first): Alt+P again goes back
     void setPreviewWanted(bool on);
     bool m_switchPageTold = false; // "要打开设置页：Ctrl+Enter", said once for good (state.ini)
     // Toggles waiting for their state (Switches::Outcome::Waiting), by switch id.

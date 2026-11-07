@@ -18,6 +18,8 @@ Rectangle {
     required property string pluginId
     required property string name
     required property string description
+    required property string reviewLabel
+    required property bool unreviewed
     required property string author
     required property string version
     required property string icon
@@ -45,8 +47,14 @@ Rectangle {
     implicitHeight: Theme.snapUp(body.implicitHeight + 2 * body.y, dpr)
     radius: Theme.controlRadius
     color: "transparent"
-    border.width: 1
-    border.color: Theme.cardBorder
+
+    Hook { // the style's card (Theme.cardPart), a plate inside the section's
+        anchors.fill: parent
+        part: Theme.cardPart
+        corner: Theme.controlRadius
+        extra: ({ inset: true })
+        dpr: entry.dpr
+    }
 
     // Offsets, gaps and the heights of the lines of text on whole device
     // pixels, so that the keycaps, the button and the progress line below
@@ -116,6 +124,15 @@ Rectangle {
                         font.pixelSize: Theme.fontCaption
                     }
                 }
+                Text {
+                    objectName: "pluginReviewLabel"
+                    width: parent.width
+                    text: entry.reviewLabel
+                    textFormat: Text.PlainText
+                    color: entry.unreviewed ? Theme.caution : Theme.subtext
+                    font.pixelSize: Theme.fontCaption
+                    wrapMode: Text.Wrap
+                }
                 Text { // what it does
                     width: parent.width
                     height: Theme.snapUp(implicitHeight, entry.dpr)
@@ -143,22 +160,27 @@ Rectangle {
                     Repeater {
                         model: entry.keywords
 
-                        delegate: Rectangle { // as keys to press (PluginCard's)
+                        delegate: Item { // as keys to press (PluginCard's)
                             id: keycap
 
                             required property string modelData
 
                             width: Theme.snapUp(Math.max(28, keycapText.implicitWidth + 14), entry.dpr)
                             height: 24
-                            radius: Theme.controlRadius
-                            color: Theme.keycap
 
+                            Hook { // the style's key cap (Theme.keyHint): it only tells
+                                id: keycapPart
+                                anchors.fill: parent
+                                part: Theme.keyHint
+                                dpr: entry.dpr
+                            }
                             Text {
                                 id: keycapText
                                 anchors.centerIn: parent
+                                anchors.verticalCenterOffset: keycapPart.out("contentOffsetY", 0)
                                 text: keycap.modelData
                                 textFormat: Text.PlainText
-                                color: Theme.text
+                                color: keycapPart.out("foreground", Theme.text)
                                 font.pixelSize: Theme.fontCaption
                             }
                         }
@@ -194,6 +216,7 @@ Rectangle {
                     font.pixelSize: Theme.fontCaption
                 }
                 FlatButton {
+                    dpr: entry.dpr
                     objectName: "installPlugin-" + entry.pluginId
                     visible: entry.busy || entry.stage !== "bundled" // nothing to do with one that comes with Win顺
                     implicitHeight: 32

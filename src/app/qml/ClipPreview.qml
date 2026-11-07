@@ -10,6 +10,7 @@ Item {
     id: preview
 
     property UiScale metrics: Theme.metrics
+    readonly property real dpr: Screen.devicePixelRatio
     property var info: ({}) // Clipboard.preview(row)
     readonly property string entryId: info.id ?? ""
     property bool completed: false
@@ -24,6 +25,8 @@ Item {
     }
     property real parentTop // where the parent's top is in the window: to draw on whole device pixels
     property real resizeMargin: 0
+    property bool compact: false
+    readonly property real naturalHeight: content.implicitHeight + meta.implicitHeight + 34
     signal copyRequested(string text, bool remember) // one of a colour's notations, a picture's words
 
     // A picture's words: those selected with the mouse, or all of them, copied
@@ -42,6 +45,7 @@ Item {
 
     Flickable {
         id: flick
+        objectName: "clipboardPreviewContent"
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.top: parent.top
@@ -95,15 +99,21 @@ Item {
                 Repeater {
                     model: preview.info.colors ?? []
 
-                    delegate: Rectangle {
+                    delegate: Item {
                         id: notation
 
                         required property var modelData
 
                         width: parent.width
                         height: 32
-                        radius: Theme.largeControlRadius
-                        color: notationArea.containsMouse ? Theme.hover : "transparent"
+
+                        Hook { // the style's hover under an entry a click copies
+                            anchors.fill: parent
+                            part: Theme.rowHighlight
+                            hovered: notationArea.containsMouse
+                            role: "list"
+                            dpr: preview.dpr
+                        }
 
                         Text {
                             id: notationLabel
@@ -169,7 +179,7 @@ Item {
                 id: picture
 
                 readonly property real fit: Math.min(1, parent.width / Math.max(1, preview.info.width ?? 1),
-                                                     (flick.height - 4) / Math.max(1, preview.info.height ?? 1))
+                                                     (preview.compact ? 280 : flick.height - 4) / Math.max(1, preview.info.height ?? 1))
                 readonly property bool animated: preview.info.animated ?? false
                 readonly property string imageSource: preview.info.image ?? ""
                 readonly property Image loadedImage: viewer.status === Loader.Ready ? viewer.item as Image : null
@@ -243,6 +253,7 @@ Item {
             }
 
             FlatButton {
+                dpr: preview.dpr
                 objectName: "clipboardAnimationToggle"
                 visible: preview.kind === 4 && picture.animated
                 enabled: picture.ready
@@ -272,13 +283,22 @@ Item {
                         color: Theme.faint
                         font.pixelSize: preview.metrics.uiCaption
                     }
-                    Rectangle { // copies the words selected, or all of them
+                    Item { // copies the words selected, or all of them
                         id: copyWordsButton
                         anchors.right: parent.right
                         width: copyWordsRow.implicitWidth + 16
                         height: 26
-                        radius: Theme.largeControlRadius
-                        color: copyWordsArea.containsMouse ? Theme.hover : "transparent"
+
+                        Hook { // the style's key, flat until hovered
+                            id: copyWordsKey
+                            anchors.fill: parent
+                            part: Theme.keySurface
+                            hovered: copyWordsArea.containsMouse
+                            pressed: copyWordsArea.pressed
+                            flat: true
+                            role: "toolbar"
+                            dpr: preview.dpr
+                        }
 
                         Row {
                             id: copyWordsRow
@@ -429,6 +449,7 @@ Item {
     }
 
     ListScrollBar {
+        dpr: preview.dpr
         objectName: "clipboardPreviewScrollBar"
         flickable: flick
         anchors.right: parent.right
@@ -449,10 +470,11 @@ Item {
         spacing: 6
         visible: preview.kind >= 0
 
-        Rectangle {
+        Hook { // the style's seam
             width: parent.width
-            height: Theme.edge(Screen.devicePixelRatio)
-            color: Theme.divider
+            height: Theme.edge(preview.dpr)
+            part: Theme.separator
+            dpr: preview.dpr
         }
 
         Row {
@@ -484,7 +506,8 @@ Item {
             width: parent.width
             text: [preview.info.time ?? "", preview.info.size ?? ""].filter(s => s.length > 0).join(" · ")
             textFormat: Text.PlainText
-            elide: Text.ElideRight
+            wrapMode: preview.compact ? Text.Wrap : Text.NoWrap
+            elide: preview.compact ? Text.ElideNone : Text.ElideRight
             color: Theme.faint
             font.pixelSize: preview.metrics.uiCaption
         }

@@ -277,10 +277,11 @@ std::vector<Entry> buildCatalog()
         e.rowTitle = QT_TRANSLATE_NOOP("AiSettings", "在 Directory Opus 里搜索的范围");
     }
     add(choice({"Launcher/FolderTyping", QT_TRANSLATE_NOOP("AiSettings", "在文件夹里打字时"), "files_and_dialogs", 2,
-                   "What typing in a File Explorer or Directory Opus folder window lists. The folder and its subfolders come first and the rest of the PC under them (like Listary), or only that folder. Ctrl+Shift+D switches between the two for one search."},
+                   "What typing in a File Explorer or Directory Opus folder window lists. The folder and its subfolders come first and the rest of the PC under them (like Listary), only that folder with its subfolders, or only what lies directly in that folder (no subfolders). Ctrl+Shift+D goes through the three for one search."},
         &Settings::folderTyping,
         {{u"first"_s, u"that folder's results first, then everywhere else"_s, QT_TRANSLATE_NOOP("AiSettings", "当前文件夹优先")},
-            {u"only"_s, u"only that folder and its subfolders"_s, QT_TRANSLATE_NOOP("AiSettings", "只搜当前文件夹")}}));
+            {u"only"_s, u"only that folder and its subfolders"_s, QT_TRANSLATE_NOOP("AiSettings", "只搜当前文件夹")},
+            {u"level"_s, u"only what lies directly in that folder, not its subfolders"_s, QT_TRANSLATE_NOOP("AiSettings", "只搜这一层")}}));
     add(choice({"Launcher/FolderMenu", QT_TRANSLATE_NOOP("AiSettings", "双击空白处弹出文件夹菜单"), "files_and_dialogs", 2,
                    "A double click on blank space in a File Explorer folder or on the desktop brings up a menu of favorite and recent folders (like Listary's). 'auto' leaves it to Listary while Listary runs."},
         &Settings::folderMenu,
@@ -311,6 +312,9 @@ std::vector<Entry> buildCatalog()
     add(boolean({"Launcher/FolderMenuItemSearch", QT_TRANSLATE_NOOP("AiSettings", "文件夹菜单里有“在此搜索”"), "files_and_dialogs", 2,
                     "The folder menu offers this action under its lists. On by default."},
         &Settings::folderMenuItemSearch));
+    add(boolean({"Launcher/FolderMenuItemCopyPath", QT_TRANSLATE_NOOP("AiSettings", "文件夹菜单里有“复制路径”"), "files_and_dialogs", 2,
+                    "The folder menu offers Copy path under its lists: puts the folder's full path on the clipboard as plain text. Not shown where there is no folder path (This PC). On by default."},
+        &Settings::folderMenuItemCopyPath));
     add(boolean({"Launcher/FolderMenuItemCmd", QT_TRANSLATE_NOOP("AiSettings", "文件夹菜单里有“在此打开命令提示符”"), "files_and_dialogs", 2,
                     "The folder menu offers this action under its lists. On by default."},
         &Settings::folderMenuItemCmd));
@@ -388,6 +392,13 @@ std::vector<Entry> buildCatalog()
         &Settings::corners,
         {{u"round"_s, u"round corners"_s, QT_TRANSLATE_NOOP("AiSettings", "圆角")},
             {u"square"_s, u"square corners"_s, QT_TRANSLATE_NOOP("AiSettings", "直角")}}));
+    add(choice({"Appearance/UiStyle", QT_TRANSLATE_NOOP("AiSettings", "界面风格"), "appearance", -1,
+                   "The look of every window: Windows 11's own, Win顺's brand colours, raised keys, or liquid glass with an Acrylic backdrop."},
+        &Settings::uiStyle,
+        {{u"fluent"_s, u"Windows 11's own look"_s, QT_TRANSLATE_NOOP("AiSettings", "精修原生")},
+            {u"brand"_s, u"Win顺's brand colours"_s, QT_TRANSLATE_NOOP("AiSettings", "品牌色彩")},
+            {u"tactile"_s, u"raised keys, light depth"_s, QT_TRANSLATE_NOOP("AiSettings", "轻拟物质感")},
+            {u"liquid"_s, u"liquid glass, Acrylic backdrop, clear highlights"_s, QT_TRANSLATE_NOOP("AiSettings", "液态玻璃")}}));
     add(choice({"Appearance/UiSize", QT_TRANSLATE_NOOP("AiSettings", "界面大小"), "appearance", -1,
                    "Type and row heights of the search box, the clipboard and the dialog bar (not the settings window)."},
         &Settings::uiSize,
@@ -558,6 +569,9 @@ std::vector<Entry> buildCatalog()
     add(boolean({"Launcher/ClearOnOpen", QT_TRANSLATE_NOOP("AiSettings", "每次打开时清空搜索"), "results", 2,
                     "Each time the search box opens nothing is typed and the scope is 全部, instead of keeping the last words selected."},
         &Settings::clearOnOpen));
+    add(boolean({"Launcher/EnglishOnOpen", QT_TRANSLATE_NOOP("AiSettings", "打开时切换为英文输入"), "results", 2,
+                    "Each time the search box opens, a Chinese input method there goes into its English mode, so letters and pinyin initials go straight into the search. Switching back in the box is kept for that opening; on closing it is put back as it was."},
+        &Settings::englishOnOpen));
     add(choice({"Results/NumberKeys", QT_TRANSLATE_NOOP("AiSettings", "用数字键直接打开"), "results", 2,
                    "Which modifier with 1…9 opens the nth result."},
         &Settings::numberKeys,
@@ -771,7 +785,7 @@ std::vector<Entry> buildCatalog()
 
     // ---- never seen: paths and shares (what leaves the PC), AI's own switches, plugins, bookkeeping ----
     for (const char* key : {"Backup/Folder", "Index/Folder", "Capture/PrintScreenBefore", "Launcher/DialogAutoJumpAsked", "Index/FolderHintDismissed",
-             "Launcher/AdminTapHinted",
+             "Launcher/AdminTapHinted", "Launcher/AdminDialogHinted", "Favorites/DropPieKeyTakenTold",
              "Launcher/FolderMenuOpusBefore", "Mcp/Enabled", "Mcp/AllowOpen", "Mcp/Clipboard", "Mcp/Screenshot",
              "Mcp/ExcludedPaths", "Mcp/Plugins", "Mcp/PluginActions", "Mcp/Settings", "Plugins/DeveloperMode",
              "Proxy/Mode", "Proxy/Address"}) // where every request goes: not for AI to turn

@@ -72,6 +72,9 @@ public:
         // 确认), "unavailable" (the note); empty otherwise.
         QString elevation;
         QString elevationNote;
+        // Why the last 确认 did not work, on the card that was clicked
+        // (GitHub #230: said only over the cards, it went unseen).
+        QString elevationProblem;
         friend bool operator==(const Card&, const Card&) = default;
     };
     enum Role {
@@ -101,6 +104,7 @@ public:
         WebSearchRole,
         ElevationRole,
         ElevationNoteRole,
+        ElevationProblemRole,
     };
 
     using QAbstractListModel::QAbstractListModel;
@@ -221,7 +225,7 @@ public:
     static QString permissionText(plugin::Permission p);
     // install(), for a package downloaded from the 插件库: it must be
     // `expectedId`, and is called `name` in what is said of it.
-    void installFrom(const QString& path, const QString& expectedId, const QString& name, bool enableAfterInstall = false);
+    void installFrom(const QString& path, const QString& expectedId, const QString& name, bool enableAfterInstall = false, bool unreviewed = false);
     // 全部更新's: the package at `path` put over the installed `id` without a question, when the list's `version` is not
     // wider than what the user allowed (plugin::updates::review). Empty on success, else why not.
     QString installUpdate(const QString& path, const QString& id, const QString& version);
@@ -256,8 +260,10 @@ public:
     Q_INVOKABLE void reload(const QString& id);
     Q_INVOKABLE void openFolder(const QString& id);
     Q_INVOKABLE void openReadme(const QString& id);
+    Q_INVOKABLE void openReadmeLink(const QString& link);
     Q_INVOKABLE void showSettings(const QString& id); // the plugin's own settings window (settingsWindow)
     Q_INVOKABLE void openHomepage(const QString& id);
+    Q_INVOKABLE void openInstallSource();
     Q_INVOKABLE void openLog();
     Q_INVOKABLE void openUserDir();
     Q_INVOKABLE void clearLog();
@@ -276,6 +282,7 @@ public:
     Q_INVOKABLE QString permissionsNote() const;
 
 signals:
+    void readmeRequested(const QString& title, const QString& html);
     void webSettingsRequested();
     void listChanged();
     void logPluginsChanged();
@@ -312,6 +319,15 @@ private:
     QPointer<plugin::Host> m_host;
     QPointer<PluginUpdates> m_updates;
     QSet<QString> m_confirming; // confirmElevation's copies being made
+    // By plugin: why its last 确认 failed (Card::elevationProblem), said
+    // while it is still the version that was clicked (an update since: gone).
+    struct ConfirmProblem {
+        QString version;
+        QString text;
+    };
+    QHash<QString, ConfirmProblem> m_confirmProblems;
+    void setConfirmProblem(const QString& id, const QString& text);
+    QString confirmProblem(const QString& id, const QString& version) const;
     void finishConfirm(const QString& id, bool ok, const QString& error);
     QString m_installClaim; // the plugin of m_pendingInstall, or being installed
     QString m_locale = QStringLiteral("zh");

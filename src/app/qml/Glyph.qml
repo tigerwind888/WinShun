@@ -44,7 +44,12 @@ Item {
     // native text puts the baseline on a whole pixel, 15/16 em below the
     // em's top, so an x or a chevron sat a fraction of a pixel lower than
     // across, its axis between pixels.
+    // Where a Phosphor icon's ink starts, left of the box when the icon fills the em (0 for the others):
+    // what to shift a row of icon and words by to put the ink on the edge the words below start at.
+    readonly property real inkLeft: phosphorItem.used ? phosphorItem.inkLeft : 0
+
     PhosphorGlyph {
+        id: phosphorItem
         readonly property bool used: !icon.drawn && !!icon.phosphor
         visible: used
         text: used ? icon.phosphor.text : ""
@@ -73,10 +78,16 @@ Item {
     // Made only where wanted (a settings window has over a thousand icons,
     // nearly all one Phosphor glyph): the overlay, or the drawn icon.
     readonly property bool overlaid: !drawn && !phosphor && overlay.length > 0 && SystemTheme.hasGlyph(overlay)
+    // A shared button's (RowAction.shared) drawn icon stays once made, hidden
+    // while it shows another glyph: the next row it is lent to may want it.
+    property bool keep: false
+    property bool drawnKept: false
     Loader {
         anchors.centerIn: parent
-        active: icon.drawn || icon.overlaid
-        sourceComponent: icon.drawn ? drawnIcon : overlayGlyph
+        active: icon.drawn || icon.overlaid || icon.drawnKept
+        visible: icon.drawn || icon.overlaid
+        sourceComponent: icon.drawn || (icon.drawnKept && !icon.overlaid) ? drawnIcon : overlayGlyph
+        onLoaded: if (icon.keep && icon.drawn) icon.drawnKept = true
     }
 
     Component {

@@ -17,13 +17,26 @@ Item {
 
     required property Launcher launcher
     required property WindowFrame frame
+    property bool compact: false
 
     signal galleryRequested(bool gallery) // the panel's view switch
+
+    // The 更多 sort menu is open: Esc closes just it, and it never outlives the launcher (Main.qml).
+    property alias sortMenuOpen: sortMenu.open
+
+    // The window's, read once by the host (GitHub #111).
+    property real dpr: Screen.devicePixelRatio
 
     readonly property real hintsRight: info.visible ? info.x - 8
         : clearHistory.visible ? clearHistory.x - 8 : viewSwitch.visible ? viewSwitch.x - 10 : width - 18
 
-    implicitHeight: Theme.footerHeight // 界面大小
+    implicitHeight: compact ? 32 : Theme.footerHeight
+
+    // The chrome's layer (as the search row's), on the window's base.
+    Rectangle {
+        anchors.fill: parent
+        color: Theme.layer
+    }
 
     // The divider shows work only once it has lasted a moment, so brief
     // work does not make it blink.
@@ -72,12 +85,12 @@ Item {
         onFractionChanged: update()
 
         width: parent.width
-        height: Theme.edge(Screen.devicePixelRatio) // the divider line and the progress on it, whole device pixels
+        height: Theme.edge(footer.dpr) // the divider line and the progress on it, whole device pixels
         clip: true
 
-        Rectangle {
+        Rectangle { // where the chrome's layer meets the rows
             anchors.fill: parent
-            color: Theme.divider
+            color: Theme.layerEdge
         }
 
         Item {
@@ -132,11 +145,11 @@ Item {
         text: footer.launcher.statusText
         textFormat: Text.PlainText // may name a file
         color: Theme.subtext
-        font.pixelSize: Theme.uiBody
+        font.pixelSize: footer.compact ? 12 : Theme.uiBody
         elide: Text.ElideRight
     }
 
-    // A few choices side by side, the current one raised (as ScopeTabs, smaller).
+    // A few choices side by side, on the style's segmented part (role "sort").
     component Choices: Row {
         id: choices
 
@@ -145,10 +158,25 @@ Item {
         property string glyph
         property string tip
         readonly property bool tipWanted: hover.hovered
+        property int hoveredIndex: -1
+        property int pressedIndex: -1
+        // Each choice's place in the part, [{x, width}]: laid out here.
+        property var segments: []
+        function placeSegments() {
+            const list = []
+            for (let i = 0; i < options.count; ++i) {
+                const chip = options.itemAt(i)
+                if (chip)
+                    list.push({ x: chips.x + chip.x, width: chip.width })
+            }
+            segments = list
+        }
 
         signal activated(int index)
 
         spacing: 6
+
+        function onPixel(v) { return Math.round(v * footer.dpr) / footer.dpr }
 
         HoverHandler { id: hover }
 
@@ -159,23 +187,35 @@ Item {
             color: Theme.faint
         }
 
-        Rectangle {
-            anchors.verticalCenter: parent.verticalCenter
+        Item {
+            y: choices.onPixel((choices.height - height) / 2) // whole device pixels: centred, at 150 % it sat on half ones
             width: chips.implicitWidth + 4
             height: Theme.chipHeight
-            radius: Theme.cardRadius
-            color: Theme.track
+
+            Hook {
+                id: track
+                anchors.fill: parent
+                part: Theme.segmented
+                count: options.count
+                currentIndex: choices.current
+                hoveredIndex: choices.hoveredIndex
+                pressedIndex: choices.pressedIndex
+                segments: choices.segments
+                role: "sort"
+                dpr: footer.dpr
+            }
 
             Row {
                 id: chips
                 x: 2
                 y: 2
                 spacing: 2
+                onPositioningComplete: choices.placeSegments()
 
                 Repeater {
                     id: options
 
-                    delegate: Rectangle {
+                    delegate: Item {
                         id: chip
 
                         required property int index
@@ -184,24 +224,18 @@ Item {
 
                         width: Math.ceil(label.implicitWidth) + 16 // whole pixels: the labels after it stay sharp
                         height: Theme.chipHeight - 4
-                        radius: Theme.controlRadius
-                        color: active ? Theme.chipActive : area.containsMouse ? Theme.chipHover : "transparent"
-                        border.width: active ? 1 : 0
-                        border.color: Theme.chipBorder
                         Accessible.role: Accessible.RadioButton
                         Accessible.name: modelData
                         Accessible.checked: active
 
-                        function onPixel(v) { return Math.round(v * Screen.devicePixelRatio) / Screen.devicePixelRatio }
-
                         Text {
                             id: label
-                            x: chip.onPixel((chip.width - width) / 2)
-                            y: chip.onPixel((chip.height - height) / 2)
+                            x: choices.onPixel((chip.width - width) / 2)
+                            y: choices.onPixel((chip.height - height) / 2 + track.call("labelOffsetY", [chip.index], 0))
                             text: chip.modelData
-                            color: chip.active || area.containsMouse ? Theme.text : Theme.subtext
+                            color: track.call("labelColor", [chip.index], chip.active || area.containsMouse ? Theme.text : Theme.subtext)
                             font.pixelSize: Theme.uiCaption
-                            font.weight: chip.active ? Theme.fontStrong : Font.Normal
+                            font.weight: track.call("labelWeight", [chip.index], chip.active ? Theme.fontStrong : Font.Normal)
                         }
 
                         MouseArea {
@@ -209,6 +243,18 @@ Item {
                             anchors.fill: parent
                             hoverEnabled: true
                             cursorShape: Qt.PointingHandCursor
+                            onContainsMouseChanged: {
+                                if (containsMouse)
+                                    choices.hoveredIndex = chip.index
+                                else if (choices.hoveredIndex === chip.index)
+                                    choices.hoveredIndex = -1
+                            }
+                            onPressedChanged: {
+                                if (pressed)
+                                    choices.pressedIndex = chip.index
+                                else if (choices.pressedIndex === chip.index)
+                                    choices.pressedIndex = -1
+                            }
                             onClicked: choices.activated(chip.index)
                         }
                     }
@@ -223,6 +269,7 @@ Item {
 
     Choices {
         id: order
+        objectName: "footerOrder" // the previews click its last chip
         // Not at the start with no start list (set so in the settings, GitHub #24).
         visible: footer.launcher.pluginKeyword.length === 0 && !footer.launcher.panel // the panel's columns order it
                  && !(footer.atStart && footer.launcher.startList === Launcher.NoStartList)
@@ -231,14 +278,17 @@ Item {
         anchors.verticalCenter: parent.verticalCenter
         glyph: footer.atStart ? "\uE81C" : "\uE8CB" // History, Sort
         // Last chip: "更多", or the name of the sort chosen from its menu (#44).
-        labels: footer.atStart ? [qsTr("最近打开"), qsTr("最近修改")]
+        labels: footer.compact ? [footer.compactSortLabels[footer.atStart ? footer.launcher.startList : footer.launcher.sort] ?? qsTr("更多")]
+                              : footer.atStart ? [qsTr("最近打开"), qsTr("最近修改")]
                                  : [qsTr("最匹配"), qsTr("最新"), qsTr("最早"),
                                     footer.moreSorts ? footer.sortChipLabels[footer.launcher.sort - 3] : qsTr("更多")]
-        current: footer.atStart ? footer.launcher.startList : footer.moreSorts ? 3 : footer.launcher.sort
+        current: footer.compact ? 0 : footer.atStart ? footer.launcher.startList : footer.moreSorts ? 3 : footer.launcher.sort
         tip: footer.atStart ? qsTr("不输入时列出最近打开的，或最近修改的文件")
                               : qsTr("最匹配的在前，或按修改时间：最新的在前、最早的在前；“更多”里还能按名称、所在文件夹、类型、大小排")
         onActivated: (index) => {
-            if (footer.atStart)
+            if (footer.compact)
+                sortMenu.open = !sortMenu.open
+            else if (footer.atStart)
                 footer.launcher.startList = index
             else if (index === 3)
                 sortMenu.open = !sortMenu.open // opened by it, closed by it again
@@ -250,6 +300,8 @@ Item {
 
     // The sorts the chips have no room for (Launcher.Sort from ByName on).
     readonly property var sortLabels: [qsTr("名称"), qsTr("所在文件夹"), qsTr("类型"), qsTr("大的在前"), qsTr("小的在前")]
+    readonly property var compactSortLabels: atStart ? [qsTr("最近打开"), qsTr("最近修改")]
+        : [qsTr("最匹配"), qsTr("最新"), qsTr("最早")].concat(sortLabels)
     // On the chip the short word, so a long name does not push the key hints
     // out of the bar (#44); the menu has the full ones.
     readonly property var sortChipLabels: [qsTr("名称"), qsTr("文件夹"), qsTr("类型"), qsTr("大在前"), qsTr("小在前")]
@@ -259,11 +311,17 @@ Item {
         id: sortMenu
         anchor: order
         menuWidth: 150
-        entries: footer.sortLabels.map((label, i) => ({
+        entries: (footer.compact ? footer.compactSortLabels : footer.sortLabels).map((label, i) => ({
             text: label,
-            glyph: footer.launcher.sort === i + Launcher.ByName ? "" : "" // CheckMark: the one in force
+            glyph: (footer.compact ? (footer.atStart ? footer.launcher.startList : footer.launcher.sort) === i
+                                  : footer.launcher.sort === i + Launcher.ByName) ? "" : ""
         }))
-        onActivated: (index) => footer.launcher.sort = Launcher.ByName + index
+        onActivated: (index) => {
+            if (footer.compact && footer.atStart)
+                footer.launcher.startList = index
+            else
+                footer.launcher.sort = (footer.compact ? 0 : Launcher.ByName) + index
+        }
     }
 
     Connections {
@@ -303,13 +361,13 @@ Item {
 
         TextMetrics {
             id: statusMetrics
-            font.pixelSize: Theme.uiBody
+            font.pixelSize: footer.compact ? 12 : Theme.uiBody
             text: footer.launcher.statusText
         }
 
-        KeyHint { id: enterHint; visible: hints.given < 1 && label.length > 0; keys: "Enter"; label: hints.keyHints.enter ?? "" }
-        KeyHint { id: secondHint; visible: hints.given < 2 && label.length > 0; keys: hints.keyHints.secondKeys ?? ""; label: hints.keyHints.second ?? "" }
-        KeyHint { id: tabHint; objectName: "footerTabHint"; visible: label.length > 0; keys: hints.keyHints.tabKeys || "Tab"; label: hints.keyHints.tab ?? "" }
+        KeyHint { dpr: footer.dpr; id: enterHint; visible: hints.given < 1 && label.length > 0; keys: "Enter"; label: hints.keyHints.enter ?? "" }
+        KeyHint { dpr: footer.dpr; id: secondHint; visible: hints.given < 2 && label.length > 0; keys: hints.keyHints.secondKeys ?? ""; label: hints.keyHints.second ?? "" }
+        KeyHint { dpr: footer.dpr; id: tabHint; objectName: "footerTabHint"; visible: label.length > 0; keys: hints.keyHints.tabKeys || "Tab"; label: hints.keyHints.tab ?? "" }
     }
 
     // The launcher's other shortcuts, when it is clicked.
@@ -322,6 +380,7 @@ Item {
         where: "launcher"
         context: ({
             previewKey: footer.launcher.previewHotkey,
+            historyModifier: !footer.launcher.queryHistoryEnabled || footer.launcher.historyKeys === "off" ? "" : footer.launcher.historyKeys === "alt" ? "Alt" : "Ctrl",
             numberModifier: footer.launcher.numberKeys === "off" ? "" : modifier,
             // typed in a folder's window (GitHub #110): where switchTypingFolder takes it
             folderTyping: footer.launcher.typingFolder.length > 0
@@ -337,11 +396,13 @@ Item {
 
     // Two clicks, as a row's delete button: the first arms it.
     RowAction {
+        dpr: footer.dpr
         id: clearHistory
 
         property bool armed: false
 
         visible: footer.launcher.canClearHistory
+        role: "footer"
         anchors.right: viewSwitch.visible ? viewSwitch.left : parent.right
         anchors.rightMargin: viewSwitch.visible ? 8 : 6
         anchors.verticalCenter: parent.verticalCenter
@@ -375,6 +436,7 @@ Item {
         anchors.rightMargin: 10
         anchors.verticalCenter: parent.verticalCenter
         launcher: footer.launcher
+        dpr: footer.dpr
         onModeRequested: gallery => footer.galleryRequested(gallery)
         Component.onCompleted: footer.frame.addControl(viewSwitch) // buttons, not part of the drag area
     }

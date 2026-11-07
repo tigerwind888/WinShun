@@ -84,16 +84,20 @@ struct Settings {
     bool onboardingComplete = true;
     bool onboardingCapturePending = false;
     // [Launcher]
-    bool doubleCtrl = true; // a double tap opens the launcher: of Ctrl, Alt or Shift (doubleTapKey)
+    bool doubleCtrl = true; // enable the Ctrl/Alt/Shift gesture (doubleTapKey), routed by doubleTapAction
     QString doubleTapKey = QStringLiteral("ctrl"); // ctrl | alt | shift
+    QString doubleTapAction = QStringLiteral("launcher"); // launcher | clipboard | plugin:<id>/<registered key>
     QString doubleCtrlKey = QStringLiteral("both"); // both | left | right: which of the two is tapped (twice the same one)
     bool doubleCtrlPauseInGames = true; // not while a game has the mouse or exclusive full screen (GameGuard)
     bool doubleCtrlPauseInFullScreen = false; // not over any full-screen window
     QStringList doubleCtrlExcludedApps; // program files ("TheFinals.exe") in front of which double Ctrl does nothing
     QString hotkey; // e.g. "Alt+Space"; empty = none
+    QString panelHotkey; // opens the full search panel directly; empty = none
     // The programs run as administrator that were told of, once each, that
     // a double tap cannot be heard over them (AdminTapHint), lower case.
     QStringList adminTapHinted;
+    // ... and that their file dialogs cannot be taken anywhere (AdminDialogHint, GitHub #216).
+    QStringList adminDialogHinted;
     QString shortcutAgain = QStringLiteral("close"); // close | panel: what the shortcut does when the box is up and in front
     QString renderer; // software | d3d11; defaults() picks by memory (defaultRenderer)
     // 网络代理 (GitHub #84), for every request over WinHTTP: system (what Windows
@@ -135,10 +139,12 @@ struct Settings {
     // folder | all: typed in Opus, the launcher opens on that tab's folder, or
     // with nothing before the words, to search the whole PC.
     QString opusTypingScope = QStringLiteral("folder");
-    // first | only: typed in such a window, what is found in its folder
-    // first, then the rest of the index under a caption, as Listary lists it
-    // (GitHub #110); or that folder alone, as it searched before. Ctrl+Shift+D
-    // switches it for the time. An ini without the key (from before): first.
+    // first | only | level: typed in such a window, what is found in its
+    // folder first, then the rest of the index under a caption, as Listary
+    // lists it (GitHub #110); or that folder alone (with its subfolders), as
+    // it searched before; or only what lies directly in it (#182).
+    // Ctrl+Shift+D goes through the three for the time. An ini without the
+    // key (from before): first.
     QString folderTyping = QStringLiteral("first");
     // auto | on | off: a double click on the blank space of a File Explorer
     // folder or of the desktop brings up a menu of favorite and recent
@@ -156,9 +162,12 @@ struct Settings {
     bool folderMenuFavorites = true;
     bool folderMenuRecent = true;
     bool folderMenuWindows = true; // folders open in other windows
+    int folderMenuRecentInline = 0; // 0: submenu; 1..10: direct rows, then More
+    int folderMenuWindowsInline = 0;
     // Which actions the menu offers under the lists (GitHub #200): all on is
     // what it always did. Favorite covers both adding and removing.
     bool folderMenuItemSearch = true;
+    bool folderMenuItemCopyPath = true; // the folder's full path as text (#137)
     bool folderMenuItemCmd = true;
     bool folderMenuItemPowerShell = true;
     bool folderMenuItemFavorite = true;
@@ -175,6 +184,8 @@ struct Settings {
     // them in. Does nothing while Win顺 runs as administrator (drops cannot
     // reach it then).
     bool dropPie = true;
+    // Told that another program's hotkey has its key (GitHub #150): once, not every run.
+    bool dropPieKeyTakenTold = false;
 
     // [Results]
     bool foldersFirst = false; // 全部 and 文件 list the folders found before the files (else after)
@@ -210,10 +221,16 @@ struct Settings {
     // but the favorites (GitHub #24: nothing of what was done shows).
     QString startList = QStringLiteral("opened");
     int recentItems = 5; // how many recently opened items to list, 1..200 (GitHub #119)
+    bool mergeFileScope = false;
+    QString queryHistoryKeys = QStringLiteral("ctrl"); // ctrl | alt | off, local Up/Down navigation
     bool favoritesOnStart = true; // show favorites before typing; keywords always work (#135)
     // Each time the launcher opens, nothing is typed and the scope is 全部, as
     // at its first opening (GitHub #24); else it keeps the words, selected.
     bool clearOnOpen = false;
+    // Each time the launcher opens, its input method goes into English mode:
+    // letters and pinyin initials find most names (GitHub #201). Switched
+    // back in the box, it stays so for that opening; put back on closing.
+    bool englishOnOpen = false;
     // ctrl | alt | off: Ctrl+1…9 opens the nth row shown, in the launcher and
     // the bar by file dialogs (other programs' hotkeys stay theirs, see numberkeys).
     QString numberKeys = QStringLiteral("ctrl");
@@ -221,11 +238,16 @@ struct Settings {
     QString numberHints = QStringLiteral("always");
     bool shortcutHelp = true;
     bool footerHints = true;
+    bool pureSearch = false; // empty floating launcher: just the input, without start results or chrome
     // auto | builtin: what Alt+P on a row shows the file with. auto: QuickLook
     // or Seer when one is running in the background (FilePreview), else
     // Win顺's own preview window; builtin: always that.
     QString previewWith = QStringLiteral("auto");
     QString previewHotkey = QStringLiteral("Alt+P"); // local; empty disables keyboard preview
+    // An open preview shows the row the mouse rests on; off: only the current
+    // row (big files are not opened one after another by a passing pointer,
+    // GitHub #224).
+    bool previewFollowsPointer = true;
 
     // [FileTypes]: what 文件 can be narrowed to, in the strip under the
     // search box (图片: jpg, png…), in its user's order. Written as an
@@ -265,7 +287,9 @@ struct Settings {
     QString transparency; // off | on: Mica behind the windows, where Windows 11 has it; defaults() picks by memory
     QString taskbarIcon = QStringLiteral("color"); // color | mono: the tray's and the taskbar box's icon (monologo)
     QString uiSize = QStringLiteral("standard"); // compact | standard | roomy: type and row heights (uisize::)
+    QString uiFont; // empty: bundled default; otherwise an installed font family
     QString corners; // round | square: defaults() picks by Windows version
+    QString uiStyle = QStringLiteral("fluent"); // fluent | brand | tactile | liquid: 界面风格 (Theme.style, themes/)
 
     // [Update]
     bool autoUpdate = true; // look for new versions on GitHub (see Updater)
@@ -460,6 +484,7 @@ struct Settings {
 
     // [Plugins]: the plugin system's own (the plugin design, §5.5).
     bool pluginDeveloperMode = false; // DeveloperMode=: the log pane, scripts reloaded as they change
+    bool pluginBuiltinsExpanded = false; // BuiltinsExpanded=: keep installed plugins within reach
 
     // [Plugin.<id>]: one section per plugin the user set anything for.
     QList<PluginConfig> plugins;

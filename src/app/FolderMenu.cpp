@@ -18,6 +18,7 @@
 #include <QDebug>
 #include <QDir>
 #include <QElapsedTimer>
+#include <QClipboard>
 #include <QGuiApplication>
 #include <QJsonObject>
 #include <QScreen>
@@ -44,8 +45,7 @@ namespace ws {
 
 namespace {
 
-constexpr int kMaxRecent = 5;
-constexpr int kMaxWindows = 5;
+constexpr int kMaxRecent = 20; // bounded shell history, with room beyond the ten direct rows
 constexpr int kMaxJournal = 24; // different stories of the double click a run (journal())
 
 // The DPI awareness a window was made with, for the journal.
@@ -224,9 +224,36 @@ void FolderMenu::setGroups(bool favorites, bool recent, bool windows)
     m_listWindows = windows;
 }
 
-void FolderMenu::setItems(bool search, bool cmd, bool powerShell, bool favorite, bool settings)
+void FolderMenu::setInlineCounts(int recent, int windows)
+{
+    m_recentInline = std::clamp(recent, 0, 10);
+    m_windowsInline = std::clamp(windows, 0, 10);
+}
+
+QVariantList FolderMenu::groupEntries(const QString& title, const QString& glyph, const QVariantList& children, int inlineCount)
+{
+    inlineCount = std::clamp(inlineCount, 0, 10);
+    QVariantMap group {{u"text"_s, title}, {u"glyph"_s, glyph}, {u"children"_s, children},
+        {u"detail"_s, QString::number(children.size())}, {u"disabled"_s, children.isEmpty()}};
+    if (inlineCount == 0 || children.isEmpty())
+        return {group};
+    QVariantList rows {QVariantMap {{u"text"_s, title}, {u"heading"_s, true}, {u"disabled"_s, true}}};
+    const qsizetype count = std::min<qsizetype>(inlineCount, children.size());
+    rows.append(children.first(count));
+    if (count < children.size()) {
+        group[u"text"_s] = tr("更多…");
+        group[u"pageTitle"_s] = title;
+        group[u"children"_s] = children.sliced(count);
+        group[u"detail"_s] = QString::number(children.size() - count);
+        rows.append(group);
+    }
+    return rows;
+}
+
+void FolderMenu::setItems(bool search, bool copyPath, bool cmd, bool powerShell, bool favorite, bool settings)
 {
     m_itemSearch = search;
+    m_itemCopyPath = copyPath;
     m_itemCmd = cmd;
     m_itemPowerShell = powerShell;
     m_itemFavorite = favorite;
@@ -549,8 +576,7 @@ void FolderMenu::show(const folderview::Hit& hit, const Found& found)
             {u"icon"_s, icon}, {u"tooltip"_s, tooltip}, {u"action"_s, index}};
     };
     const auto group = [this](const QString& text, const QString& glyph, const QVariantList& children) {
-        m_entries.append(QVariantMap {{u"text"_s, text}, {u"glyph"_s, glyph}, {u"children"_s, children},
-            {u"detail"_s, QString::number(children.size())}, {u"disabled"_s, children.isEmpty()}});
+        m_entries.append(groupEntries(text, glyph, children));
     };
     const auto separator = [this] {
         if (!m_entries.isEmpty() && !m_entries.last().toMap().value(u"separator"_s).toBool()) {
@@ -597,7 +623,7 @@ void FolderMenu::show(const folderview::Hit& hit, const Found& found)
         }
         group(tr("收藏夹"), u"\uE734"_s, favorites);
     }
-    const auto addList = [&](const QString& text, const QStringList& folders, int max, const QString& glyph) {
+    const auto addList = [&](const QString& text, const QStringList& folders, qsizetype max, const QString& glyph, int inlineCount) {
         QVariantList children;
         QStringList listed;
         if (!m_folder.isEmpty())
@@ -609,16 +635,18 @@ void FolderMenu::show(const folderview::Hit& hit, const Found& found)
                 FileIconProvider::iconUrl(folder, true), folder));
             listed.append(folder);
         }
-        group(text, glyph, children);
+        m_entries.append(groupEntries(text, glyph, children, inlineCount));
     };
     if (m_listRecent && m_recordHistory)
-        addList(tr("最近的文件夹"), found.recent, kMaxRecent, u"\uE81C"_s);
+        addList(tr("最近的文件夹"), found.recent, kMaxRecent, u"\uE81C"_s, m_recentInline);
     if (m_listWindows)
-        addList(tr("已打开的文件夹"), found.windows, kMaxWindows, u"\uE8A7"_s);
+        addList(tr("已打开的文件夹"), found.windows, found.windows.size(), u"\uE8A7"_s, m_windowsInline);
     if (!m_folder.isEmpty()) {
         separator();
         if (m_itemSearch)
             m_entries.append(action(Kind::Search, m_folder, tr("在“%1”里搜索").arg(nameOf(m_folder)), {}, u"\uE721"_s));
+        if (m_itemCopyPath) // plain text, no quotes (#137); not offered where there is no folder path
+            m_entries.append(action(Kind::CopyPath, m_folder, tr("复制路径"), {}, u"\uE8C8"_s));
         if (m_itemCmd)
             m_entries.append(action(Kind::Terminal, m_folder, tr("在此打开命令提示符"), {}, u"\uE756"_s));
         if (m_itemPowerShell)
@@ -788,6 +816,12 @@ void FolderMenu::trigger(int index)
         }
         break;
     }
+    case Kind::CopyPath:
+        if (const QString text = QDir::toNativeSeparators(entry.path); m_clipboardWriter)
+            m_clipboardWriter(text);
+        else
+            QGuiApplication::clipboard()->setText(text);
+        break;
     case Kind::Settings:
         emit settingsRequested();
         break;

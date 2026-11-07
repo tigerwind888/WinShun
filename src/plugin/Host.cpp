@@ -248,6 +248,9 @@ struct Host::Plugin {
     std::uint64_t instance = 0; // the resident process
     quint32 pid = 0;
     std::unique_ptr<Session> session;
+    // The look its initialize carried, until it is answered (setAppearance).
+    QJsonObject initAppearance;
+    QString initTheme;
     bool restartAfterStop = false; // a shutdown we asked for, to start again (hung)
     QString error;
     // The resident query in flight, and the one waiting for the process.
@@ -300,6 +303,7 @@ struct Host::Plugin {
     QElapsedTimer lastToast; // monotonic: a clock set back must not hold toasts back
     bool toastRefusedLogged = false;
     bool elevated = false; // the resident process is the elevated runner's
+    bool inProcess = false; // it runs inside the runner (pid: the runner's)
 };
 
 Host::Host(Options options, QObject* parent)
@@ -687,6 +691,11 @@ void Host::setPluginSettings(const QString& id, const QJsonObject& settings)
     const auto it = m_plugins.find(id);
     if (it != m_plugins.end() && it->second->phase == Plugin::Phase::Ready && it->second->session)
         it->second->session->notify(u"settingsChanged"_s, {{u"settings"_s, pluginSettings(id)}});
+}
+
+QString Host::dataDir(const QString& id) const
+{
+    return QDir::toNativeSeparators(QDir(m_options.dataRoot).filePath(id + u".data"_s));
 }
 
 QString Host::dataDirFor(const Entry& e)
@@ -1171,6 +1180,23 @@ void Host::cancelAll()
 
 // ---- resident plugins -------------------------------------------------------
 
+// The two small plugins that come with Win顺 and stay running run inside
+// the runner, on threads of its own (runner/InProcess.h): two processes
+// fewer. Only the bundled copies, resident, with the user's normal rights;
+// WINSHUN_PLUGINS_APART=1 starts them as programs again (to tell a fault
+// of theirs from the runner's).
+static QString inProcessKind(const Entry& e, bool elevated)
+{
+    if (elevated || e.source != Entry::Source::Bundled || !e.manifest || !e.manifest->runtime
+        || e.manifest->runtime->mode != RunMode::Resident || qEnvironmentVariableIntValue("WINSHUN_PLUGINS_APART") == 1)
+        return {};
+    if (e.id == u"winshun.tools")
+        return u"tools"_s;
+    if (e.id == u"winshun.switches")
+        return u"switches"_s;
+    return {};
+}
+
 Runner::Spec Host::specFor(Plugin& p, const Entry& e, RunKind kind, const Pending* q, QString* error)
 {
     Runner::Spec spec;
@@ -1193,6 +1219,16 @@ Runner::Spec Host::specFor(Plugin& p, const Entry& e, RunKind kind, const Pendin
     } else if (elevation.state.verdict != elevation::Verdict::NotAsked && elevation.state.verdict != elevation::Verdict::HostNotElevated)
         log(u"%1: 以普通权限运行（%2）%3"_s.arg(e.id, elevation::verdictName(elevation.state.verdict), elevation.state.detail));
     const Runtime& runtime = *manifest->runtime;
+    const QString appDir = QDir::toNativeSeparators(m_options.appDir.isEmpty() ? QFileInfo(m_options.runnerExe).absolutePath() : m_options.appDir);
+    if (!runtime.hostQtVersion.isEmpty()) {
+        const QString problem = programs::hostQtProblem(runtime, appDir);
+        if (!problem.isEmpty() || spec.elevated) {
+            if (error)
+                *error = problem.isEmpty() ? u"共享宿主 Qt 只支持普通权限插件"_s : problem;
+            return {};
+        }
+        spec.qtDir = appDir;
+    }
     const std::optional<programs::Launch> launch = programs::launchFor(runtime, dir, error);
     if (!launch)
         return spec;
@@ -1214,16 +1250,27 @@ Runner::Spec Host::specFor(Plugin& p, const Entry& e, RunKind kind, const Pendin
     spec.env = launch->env;
     spec.env += runtime.env;
     spec.env.push_back({u"WS_PLUGIN_DIR"_s, dir});
-    spec.env.push_back({u"WS_DATA_DIR"_s, dataDirFor(e)});
+    const QString dataDir = dataDirFor(e);
+    spec.env.push_back({u"WS_DATA_DIR"_s, dataDir});
     if (spec.elevated) {
         // Its own TEMP in the store (the runner leaves out the user's).
         if (const QString temp = elevation::tempDir(m_store, e.id, e.dir); !temp.isEmpty()) {
             spec.env.push_back({u"TEMP"_s, temp});
             spec.env.push_back({u"TMP"_s, temp});
         }
-    } else // shared components the user may change: not for a process running as administrator
+    } else {
+        // Low integrity cannot write the user's TEMP (nor C:\Windows\TEMP
+        // when Win顺 is elevated): a folder inside the low labelled data folder.
+        if (runtime.sandbox == SandboxLevel::Strict) {
+            if (const QString temp = QDir::toNativeSeparators(QDir(dataDir).filePath(u"tmp"_s)); QDir().mkpath(temp)) {
+                spec.env.push_back({u"TEMP"_s, temp});
+                spec.env.push_back({u"TMP"_s, temp});
+            }
+        }
+        // shared components the user may change: not for a process running as administrator
         spec.env.push_back({u"WS_COMPONENTS_DIR"_s, QDir::toNativeSeparators(QDir(m_options.dataRoot).absoluteFilePath(u"../components"_s))});
-    spec.env.push_back({u"WS_APP_DIR"_s, QDir::toNativeSeparators(m_options.appDir.isEmpty() ? QFileInfo(m_options.runnerExe).absolutePath() : m_options.appDir)});
+    }
+    spec.env.push_back({u"WS_APP_DIR"_s, appDir});
     spec.env.push_back({u"WS_LOCALE"_s, m_options.locale});
     spec.env.push_back({u"WS_THEME"_s, m_options.theme});
     spec.env.push_back({u"WS_VERSION"_s, m_options.version});
@@ -1253,6 +1300,7 @@ Runner::Spec Host::specFor(Plugin& p, const Entry& e, RunKind kind, const Pendin
     spec.strict = runtime.sandbox == SandboxLevel::Strict;
     spec.oem = runtime.encoding == Encoding::Oem;
     spec.stdinOpen = runtime.mode == RunMode::Resident;
+    spec.inProcess = inProcessKind(e, spec.elevated);
     (void)p;
     return spec;
 }
@@ -1305,11 +1353,12 @@ void Host::startResident(Plugin& p)
     evictIfCrowded(p.id);
     p.instance = launchSpec(spec);
     p.elevated = p.instance >= kElevatedInstances;
+    p.inProcess = !spec.inProcess.isEmpty();
     p.phase = Plugin::Phase::Starting;
     p.restartAfterStop = false;
     p.timeouts = 0;
     m_owners[p.instance] = p.id;
-    log(u"%1: 启动 %2"_s.arg(p.id, spec.exe));
+    log(spec.inProcess.isEmpty() ? u"%1: 启动 %2"_s.arg(p.id, spec.exe) : u"%1: 在插件进程里启动"_s.arg(p.id));
     emit stateChanged(p.id);
 }
 
@@ -1380,9 +1429,11 @@ void Host::onStarted(std::uint64_t instance, quint32 pid)
         return tool.name == u"register_hotkeys" && bool(tool.run);
     });
     const QJsonObject params {{u"protocolVersion"_s, QString::fromLatin1(kProtocolVersion)}, {u"winshun"_s, m_options.version},
-        {u"capabilities"_s, QJsonObject {{u"hostHotkeys"_s, hostHotkeys}}},
+        {u"capabilities"_s, QJsonObject {{u"hostHotkeys"_s, hostHotkeys}, {u"details"_s, true}}},
         {u"pluginDir"_s, e->dir}, {u"dataDir"_s, dataDirFor(*e)}, {u"locale"_s, m_options.locale}, {u"theme"_s, m_options.theme},
         {u"appearance"_s, m_options.appearance}, {u"settings"_s, pluginSettings(p.id)}};
+    p.initAppearance = m_options.appearance;
+    p.initTheme = m_options.theme;
     p.session->request(u"initialize"_s, params, [this, id, instance](const jsonrpc::Message& response) {
         Plugin& q = plugin(id);
         if (q.instance != instance || q.phase != Plugin::Phase::Starting)
@@ -1399,6 +1450,18 @@ void Host::onStarted(std::uint64_t instance, quint32 pid)
         q.phase = Plugin::Phase::Ready;
         q.error.clear();
         touch(q);
+        // The look changed while it started (setAppearance tells only the
+        // ready ones): the one in effect now.
+        if ((q.initAppearance != m_options.appearance || q.initTheme != m_options.theme) && q.session) {
+            const Entry* started = entry(id);
+            if (started && started->manifest->permissions.has(Permission::Ui)) {
+                QJsonObject sent = m_options.appearance;
+                sent.insert(u"theme"_s, m_options.theme);
+                q.session->notify(u"appearance"_s, sent);
+            }
+        }
+        q.initAppearance = {};
+        q.initTheme.clear();
         emit stateChanged(id);
         if (q.pending) {
             const Pending pending = *q.pending;
@@ -2342,7 +2405,7 @@ Host::State Host::state(const QString& id) const
     if (it == m_plugins.end())
         return s;
     const Plugin& p = *it->second;
-    s.pid = p.pid;
+    s.pid = p.inProcess ? 0 : p.pid; // the runner's own memory is not this plugin's
     s.error = p.error;
     s.timeouts = p.timeouts;
     s.elevated = p.elevated && (p.phase == Plugin::Phase::Starting || p.phase == Plugin::Phase::Ready);

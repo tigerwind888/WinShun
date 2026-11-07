@@ -83,10 +83,15 @@ public:
     void setOptions(bool yieldToListary, bool explorer, bool desktop);
     // Which groups it lists (GitHub #51); one left out is not even gathered.
     void setGroups(bool favorites, bool recent, bool windows);
+    void setInlineCounts(int recent, int windows);
+    // Pure menu presentation: keeps action IDs intact across the direct rows and More page.
+    static QVariantList groupEntries(const QString& title, const QString& glyph, const QVariantList& children, int inlineCount = 0);
     // Which actions it offers under the lists (GitHub #200).
-    void setItems(bool search, bool cmd, bool powerShell, bool favorite, bool settings);
+    void setItems(bool search, bool copyPath, bool cmd, bool powerShell, bool favorite, bool settings);
     // Whether something else has the keys now (the clipboard over File
     // Explorer): the menu does not come, the double click only closes that.
+    // Where Copy path writes the text: the system clipboard unless a test says otherwise.
+    void setClipboardWriter(std::function<void(const QString&)> writer) { m_clipboardWriter = std::move(writer); }
     void setBlocked(std::function<bool()> blocked) { m_blocked = std::move(blocked); }
     // Takes an Open or Save dialog to a folder, in order with the app's
     // other moves of it (DialogJump::go); false: not able to, the menu
@@ -110,6 +115,13 @@ public:
     bool isOpen() const noexcept { return m_open.load(); }
 
     QVariantList entries() const { return m_entries; }
+    // The off-screen preview (Preview.cpp, --style-windows): these entries,
+    // as a popup lists them; nothing to act on, nothing shown.
+    void previewEntries(QVariantList entries)
+    {
+        m_entries = std::move(entries);
+        emit entriesChanged();
+    }
 
     Q_INVOKABLE QRectF screenArea(QPointF globalPos) const;
     Q_INVOKABLE void prepareMenuWindow(QWindow* menu) const;
@@ -127,7 +139,7 @@ signals:
     void openChanged(bool open);
 
 private:
-    enum class Kind { Folder, Search, AddFavorite, RemoveFavorite, Terminal, PowerShell, Favorite, Settings };
+    enum class Kind { Folder, Search, AddFavorite, RemoveFavorite, Terminal, PowerShell, Favorite, Settings, CopyPath };
     struct Entry {
         Kind kind = Kind::Folder;
         QString path;
@@ -153,6 +165,7 @@ private:
     SystemCatalog* m_places = nullptr;
     QPointer<QWindow> m_window;
     std::function<bool()> m_blocked;
+    std::function<void(const QString&)> m_clipboardWriter;
     std::function<bool(HWND, const QString&)> m_dialogGo;
     std::function<HWND(HWND)> m_dialogOf;
     menuhotkey::Toggle m_toggle; // GUI thread: what a hotkey press means now
@@ -163,7 +176,10 @@ private:
     std::atomic<bool> m_listFavorites {true};
     std::atomic<bool> m_listRecent {true};
     std::atomic<bool> m_listWindows {true};
+    int m_recentInline = 0;
+    int m_windowsInline = 0;
     std::atomic<bool> m_itemSearch {true};
+    std::atomic<bool> m_itemCopyPath {true};
     std::atomic<bool> m_itemCmd {true};
     std::atomic<bool> m_itemPowerShell {true};
     std::atomic<bool> m_itemFavorite {true};

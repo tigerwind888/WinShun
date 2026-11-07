@@ -44,6 +44,8 @@ A plugin is a folder under `%LOCALAPPDATA%\WinShun\plugins\<id>\` with a `plugin
 
 `npm lodash` and Enter opens the search; `npm ` alone (with the space) opens the home page. `run` may also be `{"program": "C:\\…\\code.exe", "args": "%s"}`, `{"folder": "%USERPROFILE%\\Downloads"}`, `{"search": {"query": "ext:pdf %s", "scope": "files"}}` (as if typed into the box) or `{"items": [{"id": …, "title": …, "open": {"path": …}}]}` (a fixed list the words filter).
 
+Zero-code paths beginning with `%USERPROFILE%\Desktop`, `Documents`, `Downloads`, `Pictures`, `Music` or `Videos` resolve through Windows known folders to their current locations, including other drives, OneDrive and network shares. Subpaths are supported. `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup` also resolves to the current Windows Startup folder. This applies to `run.folder`, `run.program`, working directories, and fixed items' `open.path` and subtitles containing variables. Use an explicit absolute path to target a specific location.
+
 ### 2. Python, once: a few lines
 
 `me.hello\plugin.json`:
@@ -106,9 +108,9 @@ Three files in `src/plugins-sdk/`; "New plugin…" copies the right one into the
 
 | File | Once | Resident |
 |---|---|---|
-| `winshun.py` | `query()`, `settings()`, `item(...)`, `reply(items)`, `is_action()` / `action_request()` / `effects(...)` | `serve(on_query, on_action=None, on_settings=None)`; handlers get `(q, plugin)` with `plugin.partial()`, `plugin.log()`, `plugin.notify_user()`, `plugin.toast()`, `plugin.progress()`, `plugin.refresh()`, `plugin.tool(name, **args)`, `plugin.settings` |
-| `WinShun.psm1` | `Get-WinShunQuery`, `Get-WinShunSettings`, `New-WinShunItem`, `Send-WinShunReply`, `Send-WinShunEffects` | `Start-WinShunPlugin -OnQuery {…} -OnAction {…}`, `Send-WinShunPartial`, `Write-WinShunLog`, `Send-WinShunNotify`, `Send-WinShunToast`, `Send-WinShunProgress`, `Invoke-WinShunTool` |
-| `winshun.h` | `winshun::onceQuery()`, `onceSettings()`, `once(items)`, `onceAction()` / `onceEffects()` | derive from `winshun::Plugin`, override `query()` (and `queryResult()`, `action()`, `settingsChanged()`, `initialized()`, `shuttingDown()`, `appearanceChanged()`), call `serve()`; members `partial()`, `log()`, `notifyUser()`, `toast()`, `progress()`, `refresh()`, `tool()`, `settings()`, which other threads may call too (sending is locked) |
+| `winshun.py` | `query()`, `settings()`, `item(...)`, `reply(items)`, `is_action()` / `action_request()` / `effects(...)` | `serve(on_query, on_action=None, on_settings=None, on_details=None)`; handlers get `(q, plugin)` with `plugin.partial()`, `plugin.log()`, `plugin.notify_user()`, `plugin.toast()`, `plugin.progress()`, `plugin.refresh()`, `plugin.tool(name, **args)`, `plugin.settings` |
+| `WinShun.psm1` | `Get-WinShunQuery`, `Get-WinShunSettings`, `New-WinShunItem`, `Send-WinShunReply`, `Send-WinShunEffects` | `Start-WinShunPlugin -OnQuery {…} -OnAction {…} -OnDetails {…}`, `Send-WinShunPartial`, `Write-WinShunLog`, `Send-WinShunNotify`, `Send-WinShunToast`, `Send-WinShunProgress`, `Invoke-WinShunTool` |
+| `winshun.h` | `winshun::onceQuery()`, `onceSettings()`, `once(items)`, `onceAction()` / `onceEffects()` | derive from `winshun::Plugin`, override `query()` (and `queryResult()`, `action()`, `settingsChanged()`, `initialized()`, `shuttingDown()`, `appearanceChanged()`, `details()`), call `serve()`; members `partial()`, `log()`, `notifyUser()`, `toast()`, `progress()`, `refresh()`, `tool()`, `settings()`, which other threads may call too (sending is locked) |
 
 Effect helpers: Python `winshun.hide() / keep() / notify(text) / copy(text) / set_query(text) / open_path(path) / open_url(url) / replace(items)`; PowerShell `New-WinShunEffect -Hide / -Keep / -Notify / -Copy / -SetQuery / -OpenPath / -OpenUrl / -Replace`; C++ `winshun::effect::hide()` and the rest.
 
@@ -171,6 +173,30 @@ Top level:
 
 Unknown fields are ignored. A validation error is a sentence, shown as is on the settings page.
 
+## Community native review
+
+Community packages containing executables or DLLs can be submitted with the registry's `--unreviewed-native` flow and `review: "unreviewed-native"`. They require WinShun 0.22.0 or newer. The library shows their review state, and installation and every update require individual user consent. Users can view the publisher's source page and retain the installed version when declining an update. These packages use individual update actions. Publishers retain the unreviewed marker when posting later versions.
+
+## Shared host Qt runtime
+
+Since WinShun 0.22.0, ordinary-privilege MSVC x64 Release executables can request the host Qt runtime in their manifest.
+
+```json
+{
+  "minWinShun": "0.22.0",
+  "runtime": {
+    "mode": "resident",
+    "program": "my-tool.exe",
+    "qt": "host",
+    "qtVersion": "6.12.0"
+  }
+}
+```
+
+The host and plugin require the same Qt major and minor version. A third component is the minimum patch version, and `6.12` accepts that major/minor line. The contract provides Core, Gui, Qml, Quick, QtQuick, Basic Controls and Layouts. Each plugin has its own process and QML engine. Plugins requesting administrator privileges supply their own runtime.
+
+Before creating the child process, the runner prepares its DLL, platform-plugin and QML paths and supplies `WS_QT_DIR` and `WS_QT_QML_DIR`. Ordinary static Qt imports work. Keep the package's own non-Qt dependencies beside its executable. The runner checks version and deployment requirements before starting it. Revalidate the plugin when the host changes Qt major/minor versions.
+
 ### Queries, caching and stopping
 
 A plugin process receives one launcher query per search: a keyword takes precedence, followed by the first matching regex in manifest order, then push. Zero-code commands do not occupy that process query slot. Overlapping triggers therefore cannot cancel the keyword list the user entered.
@@ -211,6 +237,8 @@ Win顺 → plugin:
 {"jsonrpc":"2.0","id":3,"method":"action","params":{"command":"kill","action":"kill","item":{…as given…},"text":"note"}}
 ← {"jsonrpc":"2.0","id":3,"result":{"effects":[{"type":"notify","text":"Ended notepad"},{"type":"hide"}]}}
 {"jsonrpc":"2.0","id":4,"method":"action","params":{"command":"send","action":"files","trigger":"files","files":["C:\\…\\a.jpg","D:\\Photos"],"item":{},"text":""}}   (a files trigger from the menu)
+{"jsonrpc":"2.0","id":6,"method":"details","params":{"item":{…as given…},"text":"invoice"}}   (content details or the preview showing a row that is no file; see "Content details and preview" below)
+← {"jsonrpc":"2.0","id":6,"result":{"text":"From: …\nSubject: …\n\n…"}}  or  {"result":{"file":"C:\\…\\<id>.data\\details\\mail.msg"}}
 {"jsonrpc":"2.0","method":"settingsChanged","params":{"settings":{…}}}
 {"jsonrpc":"2.0","id":5,"method":"shutdown"}  ← {"jsonrpc":"2.0","id":5,"result":{}} then exit
 ```
@@ -241,7 +269,7 @@ Timeouts: one timer per query (`timeoutMs`); a late answer is dropped. A residen
 The screenshot plugin, `winshun.capture`, is one: it opens its own windows and registers its own shortcuts, and Win顺 hands it a few things. All of these need a resident plugin (`runtime.mode` `resident`) with the `ui` permission, or the manifest does not pass.
 
 ```
-{"jsonrpc":"2.0","method":"appearance","params":{"locale":"en","theme":"dark","themeSetting":"system","corners":"round","uiSize":"standard","transparency":"on","renderer":"d3d11"}}
+{"jsonrpc":"2.0","method":"appearance","params":{"locale":"en","theme":"dark","themeSetting":"system","corners":"round","uiStyle":"brand","uiSize":"standard","transparency":"on","renderer":"d3d11","nativeLook":{"style":"brand","dark":true,"rounded":true,"menuRadius":10,"background":"#ff1d1d20","text":"#fff2f2f5","accentFill":"#ffa8402c","…":"…"}}}
 {"jsonrpc":"2.0","id":6,"method":"trayMenu","params":{}}
 ← {"jsonrpc":"2.0","id":6,"result":{"items":[{"id":"capture","title":"Take a screenshot\tCtrl+Alt+A"},{"title":"Delayed","children":[{"id":"delay3","title":"3 seconds","checked":true}]},{},{"id":"closePins","title":"Close all pins","enabled":false}]}}
 {"jsonrpc":"2.0","method":"menu","params":{"id":"capture"}}
@@ -251,6 +279,7 @@ plugin → {"jsonrpc":"2.0","method":"winshun/hotkeys","params":{"keys":["Win+Sh
 ```
 
 - **Look**: `appearance` in `initialize`, and the `appearance` notification after it, are Win顺's interface language and Appearance settings (theme setting, corners, interface size, transparency, renderer), for the plugin's windows to look like Win顺's. Sent when they change, to plugins with the `ui` permission only. The notification also has `theme`, the theme in use (`light` / `dark`): with the theme set to follow the system it comes when Windows turns dark or light, though the settings stay the same. `winshun.h` then has the new ones in `locale()`, `theme()` and `appearance()` and calls `appearanceChanged()`.
+  - `uiStyle` is the interface style (`fluent` / `brand` / `tactile`). `nativeLook` is that style's colours and corners, worked out, for plugins that draw their windows without Win顺's QML (as the break reminder does). An older Win顺 sends none, nor may Win顺 in the moment it starts, before its windows are made: draw as before then. Colours are `#AARRGGBB` strings; radii are logical pixels, with the corners setting applied (all 0 when square); `rounded` is that setting itself, for pill shapes a plugin works out (half the height), which go square too; `dark` is the theme the colours are for. Fields: `style` `dark` `rounded`; radii `cardRadius` `controlRadius` `largeControlRadius` `smallControlRadius` `menuRadius` `menuItemRadius` `menuPadding`; colours `background` `layer` `page` `windowEdge` `divider` `text` `subtext` `faint` `hover` `pressed` `tagFill` `control` `controlHover` `controlBorder` `inputFocused` `menuBackground` `menuHover` `menuEdge` `accent` (text, icons, lines) `accentFill` (under white words) `accentLine` `accentText` (words on a coloured fill) `textSelection` `caret` (the style's caret colour, transparent where it has none) `danger` `dangerFill`. With transparency on, `layer`, `hover` and others may be translucent: lay them on `background` before drawing on an opaque surface. Fields may be added; ignore the ones you do not know.
 - **Tray submenu** (`trayMenu`): as the right button goes down on the tray icon, Win顺 sends `trayMenu`, and the menu opens as it comes up, so answer at once (a few milliseconds); a late answer is used the next time. The submenu is under the clipboard's entries, titled by the manifest's `trayMenu`. Each of `items` is `{id, title, checked, enabled, children}`, `{}` a line, two levels at most; what follows a `\t` in `title` is shown on the right (a shortcut); no items, no submenu. The entry chosen comes as the `menu` notification with its `id`.
 - **Pictures** (`pictures`): Pin to screen (`pin`) or Edit (`edit`) chosen on a picture of the clipboard history or a picture file among the results is sent as `picture`. `file` is the picture; from the clipboard history there is also `clipId`, `project` when it has an annotation project, and `screenshot` when it is a screenshot. These files are Win顺's: read them, never change or delete them. When several plugins claim the same verb, the first one turned on gets it.
 - **Settings window** (`settingsWindow`): the card's Settings button sends `showSettings`; when the plugin is not running, the button says to try again in a moment.
@@ -269,6 +298,7 @@ When `initialize.capabilities.hostHotkeys` is true, a resident plugin with `ui` 
 | `clipboard_copy_entry` | `clipboard:write` | `id` | an entry of the clipboard history onto the clipboard again, moved to the top |
 | `show_launcher` | `ui` | `text` | opens the search box with this text |
 | `web_search` | `winshun:open` | `text` | searches the web for this text with Win顺's default web search |
+| `open_url` | `winshun:open` | `url` | opens an `http`, `https` or `mailto` link in the default browser (or mail program) with the user's normal rights; `open_item` opens files and folders only. Since 0.21.0 |
 
 ### Item fields
 
@@ -287,6 +317,7 @@ When `initialize.capabilities.hostHotkeys` is true, a resident plugin with `ui` 
   "preview": {"text": "…"},          // the hover tip
   "actions": [{"id": "kill", "title": "Kill", "key": "Enter"}],   // overrides the command's
   "valid": true,                     // false: Enter does nothing (a message row)
+  "details": true,                   // a row that is no file: content details and the preview ask the plugin with `details` (resident plugins only; see "Content details and preview")
   "data": {"pid": 1234}              // opaque; comes back with the action; never shown to the AI
 }
 ```
@@ -317,6 +348,32 @@ The date interval includes its lower bound and excludes its upper bound. Both si
 Declare `"contentSearch": true` on a command; a `keyword` may coexist. A host built with this capability sends `query` with `trigger: "content"` only in Content or content-enabled All. File/folder searches and exclusive keyword lists do not dispatch providers. `text` contains the content query. Keyword queries keep their existing protocol and remain available in older hosts. Hosts up to 0.17.0 have no content providers; the official image text search plugin sets `minWinShun` to the host version it is built with.
 
 In addition to panel filters, `filters` includes `contentEnabled`, `contentWords`, `contentPick` (selected folder), `excludedExtensions` and `excludedFileNames` (wildcards). Verify terms across the entire file and return stable IDs, the original `open.path`, date/size metadata and a matching snippet. In Content the rows follow native results; in All, the first three provider rows (across providers) sit after the first five name rows (past recent and favorite rows and the app named exactly as typed) and the rest stay last, with existing rows keeping their place when an answer repeats or the name list grows. Up to 200 provider rows per provider, without consuming the ordinary 3/6 push quota; existing native file paths are deduplicated. Return an empty array for no matches, keeping setup hints out of content results. See the [image text search plugin](../src/ocr-search-plugin/package/README.md).
+
+### Content details and preview (#202)
+
+The content details pane of the Content panel (Summary, Hits, Text, Preview, Report) and the preview window (Alt+P, Space) show plugin rows too.
+
+**A row that opens a file**: when `open.path` is a plain file (a full path starting with a drive letter or `\\server\share`, with no `args` or `cwd`), the pane and the preview treat the row as that file, just like the file's own row: highlighted hits, text and preview, and the summary and report count it (a file already listed is not counted twice). Content-search providers' rows already qualify; nothing to change. Open in the pane or the preview does what Enter on the row does, held to the `processes` permission as usual.
+
+**A row that is no file** (a mail, a record): a resident plugin sets `"details": true` on the item. When content details (Hits, Text or Preview tab) or the preview window is open on that row, Win顺 sends one request:
+
+```
+{"jsonrpc":"2.0","id":7,"method":"details","params":{"item":{…as given…},"text":"invoice"}}
+← {"jsonrpc":"2.0","id":7,"result":{"text":"From: …\nSubject: …\n\n…"}}
+← {"jsonrpc":"2.0","id":7,"result":{"file":"C:\\Users\\…\\<id>.data\\details\\mail.msg"}}
+```
+
+`item` is the row's item (as in `action`), `text` the words typed (as in `action`; the content words in a content search). Once answered, hits, text and preview show as usual, titled with the row's title.
+
+- `text`: the first 1,000,000 characters are used; the pane says when the rest was cut. The Preview tab points to the Text tab; the preview window shows the start of the text.
+- `file`: must be a plain file in the plugin's own data folder (`dataDir` in `initialize`: `<id>.data`). Win顺 opens it to see where it really is; relative paths, `..`, shares, device paths, folders, symbolic links or junctions leading out of the folder, and files with other hard links are refused. Reading is held to the content size limits as usual; the preview uses the system preview handler (Outlook's for .msg, say). Don't delete the file at once: Win顺 reuses the answer when the row is selected again.
+- Both given: `file` first, `text` if the file does not qualify. Neither, an error (including an SDK's "method not found") or no answer within `timeoutMs`: the pane says it could not get the details, and nothing waits for it; asked again when the row is selected again or new results come.
+- Pace: asked after a 120 ms pause in the keys; one request at a time, the newest selected row asked next when it is answered; a late answer never replaces the current row (it is kept for later). Answers are kept in memory by plugin, item and text (about 16 MB in all). A plugin not running is not started for this: the pane says the details could not be had.
+- Resident plugins only; `details` is ignored on once and zero-code plugins. A row with both `open.path` and `"details": true` goes by `details`. Open in the pane, or a double click on a hit, is Enter on the row. The summary adds "plugin results (not files, not in the report): N".
+- A content-search provider's rows used to be kept only with an `open.path`; a row with `"details": true` now stays in Content too (ordered and deduplicated as before), while other rows with no file (setup hints and the like) still do not show.
+- No new permission: Win顺 only reads files from the plugin's own data folder, to show them to the user.
+- Compatibility: `initialize.capabilities.details` is true when the host sends `details`. Older hosts ignore the `details` field and show the row as before, never asking; no `minWinShun` needed for it.
+- SDKs: Python `item(..., details=True)`, `serve(on_query, on_details=…)` with `on_details(item, text, plugin)` returning `{"text": …}`, `{"file": …}` or a string (the text); PowerShell `New-WinShunItem -Details` and `Start-WinShunPlugin -OnDetails { param($d, $plugin) … }` (`$d.item`, `$d.text`), returning the same; C++ `Item(...).withDetails()` and an override of `std::optional<Json> details(const Json& item, const std::string& text)`.
 
 ### System switch providers
 

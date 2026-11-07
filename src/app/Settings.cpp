@@ -1,4 +1,5 @@
 #include "Settings.h"
+#include "DoubleTapAction.h"
 #include "WebSearchConfig.h"
 #include "PreviewShortcut.h"
 #include "platform/HotkeyText.h"
@@ -796,6 +797,9 @@ void Settings::load()
     onboardingCapturePending = readOrDefault(s, u"Setup/CapturePending"_s, false);
 
     doubleCtrl = readOrDefault(s, u"Launcher/DoubleCtrl"_s, d.doubleCtrl);
+    doubleTapAction = readOrDefault(s, u"Launcher/DoubleTapAction"_s, d.doubleTapAction);
+    if (!doubletap::valid(doubleTapAction))
+        doubleTapAction = d.doubleTapAction;
     doubleTapKey = readOrDefault(s, u"Launcher/DoubleTapKey"_s, d.doubleTapKey).trimmed().toLower();
     if (doubleTapKey != u"alt" && doubleTapKey != u"shift")
         doubleTapKey = d.doubleTapKey;
@@ -807,7 +811,9 @@ void Settings::load()
         = readOrDefault(s, u"Launcher/DoubleCtrlPauseInFullScreen"_s, d.doubleCtrlPauseInFullScreen);
     doubleCtrlExcludedApps = readOrDefault(s, u"Launcher/DoubleCtrlExcludedApps"_s, d.doubleCtrlExcludedApps);
     hotkey = readOrDefault(s, u"Launcher/Hotkey"_s, d.hotkey);
+    panelHotkey = readOrDefault(s, u"Launcher/PanelHotkey"_s, d.panelHotkey).trimmed();
     adminTapHinted = readOrDefault(s, u"Launcher/AdminTapHinted"_s, d.adminTapHinted);
+    adminDialogHinted = readOrDefault(s, u"Launcher/AdminDialogHinted"_s, d.adminDialogHinted);
     shortcutAgain = readOrDefault(s, u"Launcher/ShortcutAgain"_s, d.shortcutAgain).trimmed().toLower();
     if (shortcutAgain != u"panel")
         shortcutAgain = d.shortcutAgain;
@@ -817,6 +823,10 @@ void Settings::load()
         proxyMode = d.proxyMode;
     proxyAddress = readOrDefault(s, u"Proxy/Address"_s, d.proxyAddress).trimmed();
     recordHistory = readOrDefault(s, u"Launcher/History"_s, d.recordHistory);
+    mergeFileScope = readOrDefault(s, u"Results/MergeFileScope"_s, d.mergeFileScope);
+    queryHistoryKeys = readOrDefault(s, u"Launcher/QueryHistoryKeys"_s, d.queryHistoryKeys);
+    if (queryHistoryKeys != u"ctrl" && queryHistoryKeys != u"alt" && queryHistoryKeys != u"off")
+        queryHistoryKeys = d.queryHistoryKeys;
     dialogJump = readOrDefault(s, u"Launcher/DialogJump"_s, d.dialogJump);
     // Off for new installs; an ini from before without the key had it on.
     dialogBar = readOrDefault(s, u"Launcher/DialogBar"_s, firstRun ? d.dialogBar : true);
@@ -843,7 +853,7 @@ void Settings::load()
     if (opusTypingScope != u"all")
         opusTypingScope = d.opusTypingScope;
     folderTyping = readOrDefault(s, u"Launcher/FolderTyping"_s, d.folderTyping).trimmed().toLower();
-    if (folderTyping != u"only")
+    if (folderTyping != u"only" && folderTyping != u"level")
         folderTyping = d.folderTyping; // the folder first (GitHub #110), for those who had nothing to set before too
     // Off for new installs, auto before (as dialogBar).
     const QString folderMenuBefore = firstRun ? d.folderMenu : u"auto"_s;
@@ -861,9 +871,12 @@ void Settings::load()
     folderMenuFavorites = readOrDefault(s, u"Launcher/FolderMenuFavorites"_s, d.folderMenuFavorites);
     folderMenuRecent = readOrDefault(s, u"Launcher/FolderMenuRecent"_s, d.folderMenuRecent);
     folderMenuWindows = readOrDefault(s, u"Launcher/FolderMenuWindows"_s, d.folderMenuWindows);
+    folderMenuRecentInline = std::clamp(readOrDefault(s, u"Launcher/FolderMenuRecentInline"_s, d.folderMenuRecentInline), 0, 10);
+    folderMenuWindowsInline = std::clamp(readOrDefault(s, u"Launcher/FolderMenuWindowsInline"_s, d.folderMenuWindowsInline), 0, 10);
     if (!folderMenuFavorites && !folderMenuRecent && !folderMenuWindows) // a menu of nothing: back to all (#51)
         folderMenuFavorites = folderMenuRecent = folderMenuWindows = true;
     folderMenuItemSearch = readOrDefault(s, u"Launcher/FolderMenuItemSearch"_s, d.folderMenuItemSearch);
+    folderMenuItemCopyPath = readOrDefault(s, u"Launcher/FolderMenuItemCopyPath"_s, d.folderMenuItemCopyPath);
     folderMenuItemCmd = readOrDefault(s, u"Launcher/FolderMenuItemCmd"_s, d.folderMenuItemCmd);
     folderMenuItemPowerShell = readOrDefault(s, u"Launcher/FolderMenuItemPowerShell"_s, d.folderMenuItemPowerShell);
     folderMenuItemFavorite = readOrDefault(s, u"Launcher/FolderMenuItemFavorite"_s, d.folderMenuItemFavorite);
@@ -871,6 +884,7 @@ void Settings::load()
     folderMenuHotkey = readOrDefault(s, u"Launcher/FolderMenuHotkey"_s, d.folderMenuHotkey).trimmed();
     folderMenuOpusBefore = readOrDefault(s, u"Launcher/FolderMenuOpusBefore"_s, d.folderMenuOpusBefore);
     dropPie = readOrDefault(s, u"Favorites/DropPie"_s, d.dropPie);
+    dropPieKeyTakenTold = readOrDefault(s, u"Favorites/DropPieKeyTakenTold"_s, d.dropPieKeyTakenTold);
 
     foldersFirst = readOrDefault(s, u"Results/FoldersFirst"_s, d.foldersFirst);
     // In the file only when changed (save): one never changed follows the
@@ -903,6 +917,7 @@ void Settings::load()
     if (startList != u"modified" && startList != u"none")
         startList = d.startList;
     clearOnOpen = readOrDefault(s, u"Launcher/ClearOnOpen"_s, d.clearOnOpen);
+    englishOnOpen = readOrDefault(s, u"Launcher/EnglishOnOpen"_s, d.englishOnOpen);
     numberKeys = readOrDefault(s, u"Results/NumberKeys"_s, d.numberKeys).trimmed().toLower();
     if (numberKeys != u"alt" && numberKeys != u"off")
         numberKeys = d.numberKeys;
@@ -911,9 +926,11 @@ void Settings::load()
         numberHints = d.numberHints;
     shortcutHelp = readOrDefault(s, u"Results/ShortcutHelp"_s, d.shortcutHelp);
     footerHints = readOrDefault(s, u"Results/FooterHints"_s, d.footerHints);
+    pureSearch = readOrDefault(s, u"Results/PureSearch"_s, d.pureSearch);
     previewWith = readOrDefault(s, u"Results/PreviewWith"_s, d.previewWith).trimmed().toLower();
     if (previewWith != u"builtin")
         previewWith = d.previewWith;
+    previewFollowsPointer = readOrDefault(s, u"Results/PreviewFollowsPointer"_s, d.previewFollowsPointer);
     previewHotkey = readOrDefault(s, u"Results/PreviewHotkey"_s, d.previewHotkey).trimmed();
     if (!previewHotkey.isEmpty()) {
         previewHotkey = previewkeys::normalized(previewHotkey);
@@ -934,11 +951,15 @@ void Settings::load()
     if (taskbarIcon != u"mono")
         taskbarIcon = d.taskbarIcon;
     uiSize = readOrDefault(s, u"Appearance/UiSize"_s, d.uiSize).trimmed().toLower();
+    uiFont = readOrDefault(s, u"Appearance/UiFont"_s, d.uiFont).trimmed();
     if (uiSize != u"compact" && uiSize != u"roomy")
         uiSize = d.uiSize;
     corners = readOrDefault(s, u"Appearance/Corners"_s, d.corners).trimmed().toLower();
     if (corners != u"round" && corners != u"square")
         corners = d.corners;
+    uiStyle = readOrDefault(s, u"Appearance/UiStyle"_s, d.uiStyle).trimmed().toLower();
+    if (uiStyle != u"brand" && uiStyle != u"tactile" && uiStyle != u"liquid")
+        uiStyle = d.uiStyle;
     if (transparency == u"false" || transparency == u"true") {
         transparency = transparency == u"false" ? u"off"_s : d.transparency;
         s.setValue(u"Appearance/Transparency"_s, transparency);
@@ -1117,6 +1138,7 @@ void Settings::load()
         mcpSettings = d.mcpSettings;
 
     pluginDeveloperMode = readOrDefault(s, u"Plugins/DeveloperMode"_s, d.pluginDeveloperMode);
+    pluginBuiltinsExpanded = readOrDefault(s, u"Plugins/BuiltinsExpanded"_s, d.pluginBuiltinsExpanded);
     plugins = readPlugins(s);
     // The former built-in and the old URL sample become one optional plugin.
     // Keep the old section for rollback, but read it only during this migration.
@@ -1183,13 +1205,16 @@ bool Settings::saveChecked() const
     s.setValue(u"Setup/Completed"_s, onboardingComplete);
     s.setValue(u"Setup/CapturePending"_s, onboardingCapturePending);
     s.setValue(u"Launcher/DoubleCtrl"_s, doubleCtrl);
+    s.setValue(u"Launcher/DoubleTapAction"_s, doubleTapAction);
     s.setValue(u"Launcher/DoubleTapKey"_s, doubleTapKey);
     s.setValue(u"Launcher/DoubleCtrlKey"_s, doubleCtrlKey);
     s.setValue(u"Launcher/DoubleCtrlPauseInGames"_s, doubleCtrlPauseInGames);
     s.setValue(u"Launcher/DoubleCtrlPauseInFullScreen"_s, doubleCtrlPauseInFullScreen);
     s.setValue(u"Launcher/DoubleCtrlExcludedApps"_s, doubleCtrlExcludedApps);
     s.setValue(u"Launcher/Hotkey"_s, hotkey);
+    s.setValue(u"Launcher/PanelHotkey"_s, panelHotkey);
     s.setValue(u"Launcher/AdminTapHinted"_s, adminTapHinted);
+    s.setValue(u"Launcher/AdminDialogHinted"_s, adminDialogHinted);
     s.setValue(u"Launcher/ShortcutAgain"_s, shortcutAgain);
     s.setValue(u"Launcher/Renderer"_s, renderer);
     s.setValue(u"Proxy/Mode"_s, proxyMode);
@@ -1218,7 +1243,10 @@ bool Settings::saveChecked() const
     s.setValue(u"Launcher/FolderMenuFavorites"_s, folderMenuFavorites);
     s.setValue(u"Launcher/FolderMenuRecent"_s, folderMenuRecent);
     s.setValue(u"Launcher/FolderMenuWindows"_s, folderMenuWindows);
+    s.setValue(u"Launcher/FolderMenuRecentInline"_s, folderMenuRecentInline);
+    s.setValue(u"Launcher/FolderMenuWindowsInline"_s, folderMenuWindowsInline);
     s.setValue(u"Launcher/FolderMenuItemSearch"_s, folderMenuItemSearch);
+    s.setValue(u"Launcher/FolderMenuItemCopyPath"_s, folderMenuItemCopyPath);
     s.setValue(u"Launcher/FolderMenuItemCmd"_s, folderMenuItemCmd);
     s.setValue(u"Launcher/FolderMenuItemPowerShell"_s, folderMenuItemPowerShell);
     s.setValue(u"Launcher/FolderMenuItemFavorite"_s, folderMenuItemFavorite);
@@ -1226,6 +1254,7 @@ bool Settings::saveChecked() const
     s.setValue(u"Launcher/FolderMenuHotkey"_s, folderMenuHotkey);
     s.setValue(u"Launcher/FolderMenuOpusBefore"_s, folderMenuOpusBefore);
     s.setValue(u"Favorites/DropPie"_s, dropPie);
+    s.setValue(u"Favorites/DropPieKeyTakenTold"_s, dropPieKeyTakenTold);
     s.setValue(u"Results/FoldersFirst"_s, foldersFirst);
     if (preferredTypes == defaultPreferredTypes())
         s.remove(kPreferredTypesKey);
@@ -1244,21 +1273,28 @@ bool Settings::saveChecked() const
     s.setValue(u"Results/Sort"_s, sort);
     s.setValue(u"Results/StartList"_s, startList);
     s.setValue(u"Results/RecentItems"_s, recentItems);
+    s.setValue(u"Results/MergeFileScope"_s, mergeFileScope);
+    s.setValue(u"Launcher/QueryHistoryKeys"_s, queryHistoryKeys);
     s.setValue(u"Results/FavoritesOnStart"_s, favoritesOnStart);
     s.setValue(u"Launcher/ClearOnOpen"_s, clearOnOpen);
+    s.setValue(u"Launcher/EnglishOnOpen"_s, englishOnOpen);
     s.setValue(u"Results/NumberKeys"_s, numberKeys);
     s.setValue(u"Results/NumberHints"_s, numberHints);
     s.setValue(u"Results/ShortcutHelp"_s, shortcutHelp);
     s.setValue(u"Results/FooterHints"_s, footerHints);
+    s.setValue(u"Results/PureSearch"_s, pureSearch);
     s.setValue(u"Results/PreviewWith"_s, previewWith);
     s.setValue(u"Results/PreviewHotkey"_s, previewHotkey);
+    s.setValue(u"Results/PreviewFollowsPointer"_s, previewFollowsPointer);
     s.setValue(u"Appearance/Theme"_s, theme);
     s.setValue(u"Appearance/Language"_s, language);
     s.setValue(u"Appearance/Transparency"_s, transparency);
     s.setValue(u"Appearance/TaskbarIcon"_s, taskbarIcon);
     s.remove(u"Appearance/SearchLogo"_s); // retired exterior decoration; inline logos are always present
     s.setValue(u"Appearance/UiSize"_s, uiSize);
+    s.setValue(u"Appearance/UiFont"_s, uiFont);
     s.setValue(u"Appearance/Corners"_s, corners);
+    s.setValue(u"Appearance/UiStyle"_s, uiStyle);
     s.setValue(u"Update/Automatic"_s, autoUpdate);
     s.setValue(u"Backup/Folder"_s, backupFolder);
     s.setValue(u"Index/ExcludedPaths"_s, excludedPaths);
@@ -1335,6 +1371,7 @@ bool Settings::saveChecked() const
     s.setValue(u"Mcp/PluginActions"_s, mcpPluginActions);
     s.setValue(u"Mcp/Settings"_s, mcpSettings);
     s.setValue(u"Plugins/DeveloperMode"_s, pluginDeveloperMode);
+    s.setValue(u"Plugins/BuiltinsExpanded"_s, pluginBuiltinsExpanded);
     auto pluginConfigs = plugins;
     auto web = std::find_if(pluginConfigs.begin(), pluginConfigs.end(), [](const PluginConfig& c) { return c.id == webplugin::kId; });
     if (web == pluginConfigs.end()) {

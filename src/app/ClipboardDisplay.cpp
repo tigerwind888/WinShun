@@ -33,7 +33,7 @@ QVariant call(Clipboard* object, const QString& name, const QVariantList& values
     static const QStringList allowed {
         u"heldRow"_s, u"paste"_s, u"quickPaste"_s, u"copy"_s, u"dragOut"_s, u"copyText"_s,
         u"togglePin"_s, u"remove"_s, u"undo"_s, u"moveToGroup"_s, u"canMove"_s, u"moveRow"_s,
-        u"addGroup"_s, u"renameGroup"_s, u"toggleSelected"_s, u"selectRange"_s, u"clearSelection"_s,
+        u"addGroup"_s, u"enterGroup"_s, u"renameGroup"_s, u"toggleSelected"_s, u"selectRange"_s, u"clearSelection"_s,
         u"selectAll"_s, u"cycleCategory"_s, u"cycleSeparator"_s, u"dismiss"_s, u"wantKeys"_s,
         u"turnOn"_s, u"preview"_s, u"menuItems"_s, u"categoryMenuItems"_s, u"trigger"_s,
         u"triggerCategory"_s, u"groupNameRequested"_s};
@@ -112,6 +112,7 @@ ClipboardDisplay::ClipboardDisplay(Clipboard* clipboard, QQuickWindow* window, P
     connect(clipboard, &Clipboard::listChanged, this, [this] { event(u"listChanged"_s); });
     connect(clipboard, &Clipboard::pinyinHintRequested, this, [this] { event(u"pinyinHintRequested"_s); });
     connect(clipboard, &Clipboard::contextMenuKeyPressed, this, [this] { event(u"contextMenuKeyPressed"_s); });
+    connect(clipboard, &Clipboard::groupSearchRequested, this, [this] { event(u"groupSearchRequested"_s); });
     connect(clipboard, &Clipboard::placed, this, [this] { event(u"placed"_s); });
 }
 
@@ -213,6 +214,9 @@ void ClipboardDisplay::accept()
         m_decoder = {};
         connect(socket, &QLocalSocket::readyRead, this, &ClipboardDisplay::receive);
         connect(socket, &QLocalSocket::disconnected, this, &ClipboardDisplay::disconnectPeer);
+        // Text takes its default font when QML is constructed. Send this
+        // before the child builds its window, rather than in later state updates.
+        send({{u"type"_s, u"font"_s}, {u"family"_s, QGuiApplication::font().family()}});
         receive();
     }
 }
@@ -298,6 +302,7 @@ void ClipboardDisplay::dispatch(const QJsonObject& message)
     }
     if (type == u"highlight") {
         m_clipboard->items()->setHighlightColor(QColor(message.value(u"color"_s).toString()));
+        m_clipboard->items()->setHighlightWeight(message.value(u"weight"_s).toInt(700));
         return;
     }
     if (type == u"image") {
@@ -362,7 +367,7 @@ void ClipboardDisplay::synchronize()
         {u"room"_s, m_placement->room()}, {u"above"_s, m_placement->above()},
         {u"dark"_s, QGuiApplication::styleHints()->colorScheme() == Qt::ColorScheme::Dark},
         {u"uiSize"_s, SystemTheme::uiSize()}, {u"language"_s, QLocale().name()},
-        {u"rounded"_s, win::roundedCorners()}, {u"backdrop"_s, SystemTheme::backdrop()}});
+        {u"rounded"_s, win::roundedCorners()}, {u"uiStyle"_s, SystemTheme::uiStyle()}, {u"backdrop"_s, SystemTheme::backdrop()}});
     ClipModel* model = m_clipboard->items();
     const auto roles = model->roleNames();
     std::vector<QJsonObject> rows;

@@ -40,6 +40,10 @@ constexpr qsizetype kPieceChars = 2000; // a longer line goes in pieces (one row
 constexpr int kLargestPicture = 4096; // pixels on the longer side; larger ones are scaled down as decoded
 constexpr int kThumbnailPx = 512;
 constexpr int kFolderItemsCounted = 10000;
+// How long a followed row (the pointer on it, the arrow keys on it) stays
+// before a preview handler starts on its file: with the launcher's own 100 ms
+// for the pointer (Main.qml), about Windows' hover time.
+constexpr std::chrono::milliseconds kFollowedHandlerWait {300};
 
 // Kinds Windows Imaging Component reads, with the codecs it comes with or a
 // common add-on (HEIF, WebP, AVIF, RAW image extensions from the Store).
@@ -193,8 +197,15 @@ private:
 };
 
 FilePreview::FilePreview(QObject* parent)
+    : FilePreview(u"preview"_s, false, parent)
+{
+}
+
+FilePreview::FilePreview(QString imageScheme, bool embedded, QObject* parent)
     : QObject(parent)
-    , m_worker(new ComWorker)
+    , m_imageScheme(std::move(imageScheme))
+    , m_embedded(embedded)
+    , m_builtInOnly(embedded)
     , m_host(std::make_unique<PreviewHost>())
     , m_images(std::make_shared<Images>())
 {
@@ -204,7 +215,7 @@ FilePreview::FilePreview(QObject* parent)
     connect(&m_slowTimer, &QTimer::timeout, this, [this] {
         setSlow(true);
         // Taking a while: the window now, saying so, rather than nothing at all.
-        if (m_open && !m_external && m_kind == Loading && (!m_window || !m_window->isVisible()))
+        if (m_open && !m_external && m_kind == Loading && !m_embedded && (!m_window || !m_window->isVisible()))
             showWindow({});
     });
     // Seer 2.8 has the window Win顺 talks to, takes the file and shows
@@ -280,7 +291,7 @@ void FilePreview::setTextExtensions(QStringList extensions)
 
 QString FilePreview::iconUrl() const
 {
-    return m_item.path.isEmpty() ? QString() : FileIconProvider::iconUrl(m_item.path, m_item.isDir);
+    return m_item.path.isEmpty() || m_item.inPlace() ? QString() : FileIconProvider::iconUrl(m_item.path, m_item.isDir);
 }
 
 bool FilePreview::showsElsewhere() const
@@ -295,7 +306,7 @@ bool FilePreview::isShowing(const QString& path) const
 
 void FilePreview::show(const Item& item)
 {
-    if (!m_builtInOnly) {
+    if (!m_builtInOnly && !item.inPlace()) { // QuickLook and Seer show files only
         if (const std::optional<extpreview::Engine> engine = extpreview::running()) {
             if (m_open && !m_external)
                 close(); // ours, opened while none ran
@@ -352,7 +363,8 @@ void FilePreview::follow(const std::optional<Item>& item)
         return;
     if (m_external) {
         // As QuickLook does on Explorer's selection: the next file, while it is up.
-        if (item && m_item.path.compare(item->path, Qt::CaseInsensitive) != 0 && extpreview::switchTo(*m_external, item->path))
+        if (item && !item->inPlace() && m_item.path.compare(item->path, Qt::CaseInsensitive) != 0
+            && extpreview::switchTo(*m_external, item->path))
             m_item = *item;
         return;
     }
@@ -368,8 +380,16 @@ void FilePreview::follow(const std::optional<Item>& item)
         emit contentChanged();
         return;
     }
-    if (m_item.path.compare(item->path, Qt::CaseInsensitive) != 0)
-        load(*item);
+    if (!m_item.same(*item))
+        load(*item, true);
+}
+
+void FilePreview::postponeHandler()
+{
+    // The pointer went on to another row before the one followed started its
+    // handler: it did not stay; the row it rests on next is followed instead.
+    if (!m_handlerNotBefore.hasExpired())
+        m_handlerNotBefore = QDeadlineTimer(kFollowedHandlerWait);
 }
 
 void FilePreview::close()
@@ -390,11 +410,16 @@ void FilePreview::close()
     if (m_window)
         m_window->hide();
     m_item = {};
+    m_kind = Loading;
+    m_summary.clear();
+    m_facts.clear();
+    m_message.clear();
     m_lines.setStringList({});
     m_lineNumbers.clear();
     setSelection(0, 0, 0, 0);
     m_images->set({}, {});
     m_imageUrl.clear();
+    setSlow(false);
     emit contentChanged();
 }
 
@@ -446,9 +471,10 @@ void FilePreview::setSlow(bool slow)
     emit slowChanged();
 }
 
-void FilePreview::load(const Item& item)
+void FilePreview::load(const Item& item, bool followed)
 {
     const quint64 generation = ++m_generation;
+    m_handlerNotBefore = followed ? QDeadlineTimer(kFollowedHandlerWait) : QDeadlineTimer();
     m_item = item;
     m_kind = Loading;
     m_message.clear();
@@ -465,13 +491,54 @@ void FilePreview::load(const Item& item)
     const bool noHandler = m_noHandlerFor.compare(item.path, Qt::CaseInsensitive) == 0;
     QPointer<FilePreview> self(this);
     const auto stale = [self, generation] { return !self || self->m_generation.load() != generation; };
-    m_worker->post([self, item, textTypes, noHandler, generation, stale] {
+    // Text as rows: a line a row, long ones in pieces (never splitting a
+    // surrogate pair).
+    const auto split = [](const QString& text, Loaded& loaded) {
+        const QStringList lines = text.split(u'\n');
+        int count = static_cast<int>(lines.size());
+        if (count > 1 && lines.last().isEmpty())
+            --count; // the end of the last line, not a line
+        loaded.lineCount = count;
+        for (int i = 0; i < count; ++i) {
+            const QString& line = lines[i];
+            qsizetype at = 0;
+            do {
+                qsizetype n = std::min(kPieceChars, line.size() - at);
+                if (at + n < line.size() && line[at + n - 1].isHighSurrogate())
+                    --n;
+                loaded.lines.append(line.mid(at, n));
+                loaded.numbers.append(at == 0 ? i + 1 : 0);
+                loaded.rows += std::max<int>(1, static_cast<int>((n + 99) / 100));
+                at += n;
+            } while (at < line.size());
+        }
+        return count;
+    };
+    if (!m_worker)
+        m_worker = new ComWorker; // made when first wanted: a page that never shows a preview has no thread for it
+    m_worker->post([self, item, textTypes, noHandler, generation, stale, split] {
         if (stale())
             return;
         auto loaded = std::make_shared<Loaded>();
         const std::wstring native = QString(item.path).replace(u'/', u'\\').toStdWString();
         WIN32_FILE_ATTRIBUTE_DATA data {};
-        if (!::GetFileAttributesExW(native.c_str(), GetFileExInfoStandard, &data)) {
+        if (!item.message.isEmpty()) {
+            loaded->message = item.message;
+        } else if (item.text) {
+            // A plugin's own text (GitHub #202): its start, as a text file's.
+            QString text = item.text->left(static_cast<qsizetype>(kTextBytes / 2));
+            text.replace(u"\r\n"_s, u"\n"_s);
+            text.replace(u'\r', u'\n');
+            if (text.isEmpty()) {
+                loaded->message = QCoreApplication::translate("ws::FilePreview", "插件没有提供内容");
+            } else {
+                loaded->kind = Text;
+                const int count = split(text, *loaded);
+                loaded->summary = (text.size() < item.text->size()
+                        ? QCoreApplication::translate("ws::FilePreview", "插件提供的文字 · 前 %1 行")
+                        : QCoreApplication::translate("ws::FilePreview", "插件提供的文字 · %1 行")).arg(count);
+            }
+        } else if (!::GetFileAttributesExW(native.c_str(), GetFileExInfoStandard, &data)) {
             loaded->message = QCoreApplication::translate("ws::FilePreview", "找不到这个文件，可能已被移动或删除");
         } else {
             const bool isDir = (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
@@ -520,24 +587,7 @@ void FilePreview::load(const Item& item)
                     done = true;
                 } else if (head.status == filetext::Status::Ok) {
                     loaded->kind = Text;
-                    const QStringList lines = head.text.split(u'\n');
-                    int count = static_cast<int>(lines.size());
-                    if (count > 1 && lines.last().isEmpty())
-                        --count; // the end of the last line, not a line
-                    loaded->lineCount = count;
-                    for (int i = 0; i < count; ++i) {
-                        const QString& line = lines[i];
-                        qsizetype at = 0;
-                        do { // in pieces, never splitting a surrogate pair
-                            qsizetype n = std::min(kPieceChars, line.size() - at);
-                            if (at + n < line.size() && line[at + n - 1].isHighSurrogate())
-                                --n;
-                            loaded->lines.append(line.mid(at, n));
-                            loaded->numbers.append(at == 0 ? i + 1 : 0);
-                            loaded->rows += std::max<int>(1, static_cast<int>((n + 99) / 100));
-                            at += n;
-                        } while (at < line.size());
-                    }
+                    const int count = split(head.text, *loaded);
                     QString encoding;
                     switch (head.encoding) {
                     case filetext::HeadEncoding::Utf8: encoding = u"UTF-8"_s; break;
@@ -599,6 +649,14 @@ void FilePreview::apply(quint64 generation, std::shared_ptr<Loaded> loaded)
 {
     if (generation != m_generation.load() || !m_open)
         return;
+    // A row only passed over does not start Word, PowerPoint or Excel on its
+    // file: going over big ones kept the PC busy and the preview behind
+    // (GitHub #224). Its handler once the row stayed; text and pictures at once.
+    if (loaded->kind == Handler && !m_handlerNotBefore.hasExpired()) {
+        QTimer::singleShot(m_handlerNotBefore.remainingTimeAsDuration(), this,
+            [this, generation, loaded] { apply(generation, loaded); });
+        return;
+    }
     m_slowTimer.stop();
     setSlow(false);
     m_kind = loaded->kind;
@@ -612,7 +670,7 @@ void FilePreview::apply(quint64 generation, std::shared_ptr<Loaded> loaded)
     m_textRows = loaded->rows;
     m_lines.setStringList(loaded->lines);
     const QString id = QString::number(generation);
-    m_imageUrl = loaded->image.isNull() ? QString() : u"image://preview/"_s + id;
+    m_imageUrl = loaded->image.isNull() ? QString() : u"image://%1/%2"_s.arg(m_imageScheme, id);
     m_images->set(id, std::move(loaded->image));
     QSize wanted;
     if (m_kind == Picture)
@@ -627,6 +685,8 @@ void FilePreview::apply(quint64 generation, std::shared_ptr<Loaded> loaded)
 
 void FilePreview::showWindow(QSize wanted)
 {
+    if (m_embedded)
+        return; // in its host's page, which is already there
     if (!m_window) {
         if (!m_makeWindow)
             return;
@@ -708,35 +768,31 @@ QRect FilePreview::placeBeside(QSize wanted)
             .boundedTo(bounded);
     };
 
-    // The side: the one chosen when the preview opened, while the launcher
-    // is where it was (the window jumping from side to side as the arrows
-    // go through small and large files is hard to follow); else the one
-    // with the most room for a document (not for this file, which may be
-    // a small picture before a long text). GitHub #186: never over the
-    // list while there is room beside it.
-    // (Its height is not where it is: it changes with the number of rows.)
-    const bool moved = m_sideFor.topLeft() != launcher.topLeft() || m_sideFor.width() != launcher.width();
-    if (moved) {
+    // Keep the chosen side through small launcher moves and content-size
+    // changes. placePreview decides when there is no longer enough room;
+    // a different monitor/work area starts a fresh placement (#186).
+    if (m_sideArea != area) {
         m_side = PreviewSide::None;
-        m_sideFor = launcher;
+        m_sideArea = area;
     }
     const QSize document = QSize(820, tallest * 85 / 100).boundedTo(QSize(area.width() - 2 * kGap, tallest));
     const PreviewPlacement place = placePreview(area, launcher, m_side, document, fit);
     m_side = place.side;
-    m_overLauncher = place.side == PreviewSide::Over;
+    m_overLauncher = place.rect.intersects(launcher);
     return place.rect;
 }
 
 bool FilePreview::screenRect(QQuickItem* item, int* left, int* top, int* right, int* bottom) const
 {
-    if (!item || !m_window)
+    QQuickWindow* window = item ? item->window() : nullptr; // ours, or the page's that holds it (embedded)
+    if (!window || !window->isVisible())
         return false;
     // Logical within the window to physical on the screen, by the window's
     // own scale (its monitor's), from where its client area is.
     POINT origin {0, 0};
-    if (!::ClientToScreen(reinterpret_cast<HWND>(m_window->winId()), &origin))
+    if (!::ClientToScreen(reinterpret_cast<HWND>(window->winId()), &origin))
         return false;
-    const qreal dpr = m_window->devicePixelRatio();
+    const qreal dpr = window->devicePixelRatio();
     const QPointF at = item->mapToScene(QPointF(0, 0));
     *left = origin.x + qRound(at.x() * dpr);
     *top = origin.y + qRound(at.y() * dpr);
@@ -758,23 +814,30 @@ void FilePreview::placeHandler()
         m_host->move(left, top, right, bottom);
 }
 
+std::optional<QRect> FilePreview::handlerRect() const
+{
+    return m_open && m_kind == Handler ? m_host->visibleRect() : std::nullopt;
+}
+
 void FilePreview::startHandler(quint64 generation, const QUuid& handler)
 {
-    int left, top, right, bottom;
-    if (!m_window || !screenRect(m_handlerArea, &left, &top, &right, &bottom)) {
-        // The area is laid out a moment later (the window just resized): then.
-        QMetaObject::invokeMethod(this, [this, generation, handler] {
-            if (generation != m_generation.load() || m_kind != Handler)
-                return;
-            int l, t, r, b;
-            if (screenRect(m_handlerArea, &l, &t, &r, &b))
-                m_host->show(generation, m_item.path, handler, l, t, r, b, reinterpret_cast<HWND>(m_window->winId()), m_dark);
-            else
-                handlerFailed(generation);
-        }, Qt::QueuedConnection);
+    // Over the area, owned by the window that holds it (ours, or the page's).
+    const auto start = [this, generation, handler] {
+        int left, top, right, bottom;
+        if (!screenRect(m_handlerArea, &left, &top, &right, &bottom))
+            return false;
+        m_host->show(generation, m_item.path, handler, left, top, right, bottom, reinterpret_cast<HWND>(m_handlerArea->window()->winId()), m_dark);
+        return true;
+    };
+    if (start())
         return;
-    }
-    m_host->show(generation, m_item.path, handler, left, top, right, bottom, reinterpret_cast<HWND>(m_window->winId()), m_dark);
+    // The area is laid out a moment later (the window just resized): then.
+    QMetaObject::invokeMethod(this, [this, generation, start] {
+        if (generation != m_generation.load() || m_kind != Handler)
+            return;
+        if (!start())
+            handlerFailed(generation);
+    }, Qt::QueuedConnection);
 }
 
 // The handler could not be made, would not take the file, or did not answer

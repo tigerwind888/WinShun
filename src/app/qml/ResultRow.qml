@@ -67,6 +67,7 @@ Item {
     required property string size // "1.2 MB", for the tip
     required property bool offline // on a network share that cannot be reached now: dimmed, tagged
     required property bool plugin // a plugin's row
+    required property bool windowResult
     required property string source // ... the plugin's name
     required property bool pluginCopies // ... with its own text to copy, or Enter copies: its copy button
     required property string folderAway // ... its second line while the keyboard is on another row; "": the folder line
@@ -80,32 +81,55 @@ Item {
     required property string switchError // why the last try failed; the second line in red
     required property bool switchReady // draws its switch (else an ordinary place, with its tag)
     property bool showModified: true
+    property bool compact: false
     property bool showSize: false
     readonly property bool sizeShown: showSize && size.length > 0
     readonly property bool modifiedShown: showModified && modified.length > 0
     property int hint: 0 // its number for the number keys (Ctrl+1…); 0 for none
-    property bool reserveHintSpace: false // all rows align, including unnumbered and temporarily hidden hints
+    property bool reserveHintSpace: false // a numbered row keeps the number's room, also while the hint is faded out; a row without a number sits flush left
     property string hintModifier: "Ctrl" // ... with this held
     property bool hintTaken: false // one of Win顺's own shortcuts has that chord: shown struck through
     property real hintOpacity: 1
     // The window's tip for a name or folder cut short (one for all its rows).
     property NameTip nameTip: null
+    // The window's devicePixelRatio, read once by the list's host (GitHub #111);
+    // the list's own Screen where the host gives none.
+    property real dpr: ListView.view ? ListView.view.Screen.devicePixelRatio : 1
+    // The style's file icon (Theme.typeIcon) for a file or folder by its kind;
+    // "": the system's icon (apps, programs, links, a place, a plugin's row).
+    readonly property string typeKind: Theme.typeIcon === null || isApp ? "" : isDir ? "folder" : SearchKeys.fileKind(path)
+    readonly property bool styledIcon: typeKind.length > 0
 
     readonly property bool contentMode: line > 0 // a content match (also mixed into 全部)
     readonly property bool current: ListView.isCurrentItem
     // With rows selected, the background marks them; the current row keeps only its accent pill.
     readonly property int selectedCount: ListView.view ? ListView.view.model.selectedCount : 0
     readonly property var results: ListView.view ? ListView.view.model : null // the ResultModel
-    readonly property bool showActions: current || area.containsMouse
+    // The narrow folder panel keeps filenames stable. Its actions remain
+    // available from the context menu and keyboard shortcuts.
+    readonly property bool showActions: !compact && (current || area.containsMouse)
+    // The buttons: a set the list lends while the row shows them
+    // (RowActionsPool, ResultActions), not one made in every row.
+    property RowActionsPool actionsPool: null
+    property Item borrowed: null
+    readonly property Item actions: borrowed !== null && borrowed.host === row ? borrowed : null
+    readonly property Item actionsArea: area // where a lent set sits
+    readonly property real actionsRightMargin: switchReady ? switchControl.width + Theme.actionsInset + 4 + levelSpace : Theme.actionsInset
     // ... and it has some: a plugin's row may have none, its badge then stays (GitHub #113).
-    readonly property bool actionsShown: showActions && actions.visibleChildren.length > 0
+    readonly property bool actionsShown: showActions && actions !== null && actions.count > 0
     // The volume's number and bar, left of its switch (their room kept before the level is read).
     readonly property bool levelShown: switchReady && switchId === "volume"
     readonly property real levelSpace: levelShown ? levelControl.width + levelControl.anchors.rightMargin : 0
+    // The switch and the volume bar are made the first time this row shows
+    // one, then kept: a reused row may well show one again.
+    property bool switchMade: false
+    property bool levelMade: false
+    onSwitchReadyChanged: if (switchReady) switchMade = true
+    onLevelShownChanged: if (levelShown) levelMade = true
     // Room kept on the right for the buttons, the badge or the label.
     readonly property real trailingSpace: (switchReady ? switchControl.width + switchControl.anchors.rightMargin + levelSpace
-                                                         + (showActions ? actions.width + 2 : 0)
-                                           : actionsShown ? actions.width + actions.anchors.rightMargin
+                                                         + (showActions && actions !== null ? actions.actionsWidth + 2 : 0)
+                                           : actionsShown ? actions.actionsWidth + actionsRightMargin
                                            : isApp ? badge.width + badge.anchors.rightMargin
                                            : trailing.width + trailing.anchors.rightMargin) + 10
     property bool deleteArmed: false // first click on delete; the second one deletes
@@ -123,24 +147,60 @@ Item {
     // the pixel grid on the GPU, in single precision: on a half pixel (where
     // centring often puts it at 150 %) the rounding goes either way from one
     // scroll position to the next, and the text jumps or stretches by a pixel.
-    function onPixel(y) { return Math.round(y * Screen.devicePixelRatio) / Screen.devicePixelRatio }
-    function upToPixel(y) { return Math.ceil(y * Screen.devicePixelRatio - 1e-6) / Screen.devicePixelRatio }
+    function onPixel(y) { return Math.round(y * dpr) / dpr }
+    function upToPixel(y) { return Math.ceil(y * dpr - 1e-6) / dpr }
 
-    onShowActionsChanged: if (!showActions) deleteArmed = false
+    onShowActionsChanged: {
+        if (!showActions)
+            deleteArmed = false
+        borrowActions()
+    }
+    function borrowActions() {
+        if (!actionsPool)
+            return
+        if (showActions) {
+            borrowed = actionsPool.take(row)
+        } else {
+            actionsPool.give(row)
+            borrowed = null
+        }
+    }
+    function giveActions() {
+        if (actionsPool)
+            actionsPool.give(row)
+        borrowed = null
+    }
+    Component.onCompleted: borrowActions()
+    ListView.onReused: borrowActions()
+    function deleteClicked() { // its delete button: the first click arms it, the second deletes
+        if (deleteArmed) {
+            deleteArmed = false
+            actionRequested(index, Launcher.Recycle)
+        } else {
+            deleteArmed = true
+            disarmTimer.restart()
+        }
+    }
     // Taken for another switch, the new one is there from the first frame: nothing slides between two.
     onSwitchIdChanged: {
-        switchControl.animated = false
-        levelControl.animated = false
+        const toggle = switchControl.item as ToggleSwitch
+        const level = levelControl.item as SwitchLevel
+        if (toggle)
+            toggle.animated = false
+        if (level)
+            level.animated = false
         Qt.callLater(() => {
-            switchControl.animated = true
-            levelControl.animated = true
+            if (toggle)
+                toggle.animated = true
+            if (level)
+                level.animated = true
         })
     }
     Connections {
         target: row.results
         function onSwitchNudged(id: string) {
             if (id === row.switchId)
-                switchControl.pulse()
+                (switchControl.item as ToggleSwitch)?.pulse()
         }
     }
     onPathChanged: { // delegate reused for another result
@@ -176,8 +236,14 @@ Item {
         if (nameTip && nameTip.source === row)
             nameTip.dismiss()
     }
-    ListView.onPooled: dropTip()
-    Component.onDestruction: dropTip()
+    ListView.onPooled: {
+        dropTip()
+        giveActions()
+    }
+    Component.onDestruction: {
+        dropTip()
+        giveActions()
+    }
 
     Timer {
         id: disarmTimer
@@ -185,41 +251,40 @@ Item {
         onTriggered: row.deleteArmed = false
     }
 
-    Rectangle {
+    // The style's highlight (Theme.rowHighlight). The current row's is the
+    // list's own, one for all its rows (Main.qml); here only the hover and,
+    // with several rows picked, the picked ones that are not current. Made
+    // the first time it shows, then only hidden: rows pass under a still
+    // mouse while the list scrolls (docs/pitfalls.md, ClipRow).
+    Hook {
         anchors.fill: parent
-        anchors.leftMargin: 6
-        anchors.rightMargin: 6
-        anchors.topMargin: 1
-        anchors.bottomMargin: 1
-        radius: Theme.largeControlRadius
-        color: row.selected || (row.current && row.selectedCount === 0) ? Theme.selection
-               : area.containsMouse ? Theme.hover : "transparent"
-    }
-
-    Rectangle { // accent pill on the current row, as in Windows 11 lists
-        visible: row.current
-        x: 7
-        anchors.verticalCenter: parent.verticalCenter
-        width: 3
-        height: 18
-        radius: Theme.smallRadius
-        color: Theme.accent
+        anchors.leftMargin: Theme.rowInset
+        anchors.rightMargin: Theme.rowInset
+        anchors.topMargin: Theme.edge(row.dpr)
+        anchors.bottomMargin: Theme.edge(row.dpr)
+        visible: !row.current && (row.selected || area.containsMouse)
+        lazy: true
+        part: Theme.rowHighlight
+        selected: row.selected
+        hovered: area.containsMouse
+        role: "list"
+        dpr: row.dpr
     }
 
     Item {
         id: iconSlot
         objectName: "resultIcon"
         opacity: row.offline || row.missing ? 0.6 : 1
-        x: 16 + (row.reserveHintSpace ? 28 : 0)
+        x: Theme.iconInset + (row.reserveHintSpace && row.hint > 0 ? 28 : 0)
         anchors.verticalCenter: parent.verticalCenter
-        width: 32 // 48 device pixels at 150 %, 64 at 200 %: sizes icons are drawn for
-        height: 32
+        width: row.compact ? 24 : 32 // 48 device pixels at 150 %, 64 at 200 %: sizes icons are drawn for
+        height: width
 
         Image {
             id: iconImage
-            visible: !thumbnailImage.ready
+            visible: !thumbnailImage.ready && !row.styledIcon
 
-            readonly property real dpr: Screen.devicePixelRatio
+            readonly property real dpr: row.dpr
             readonly property int pixels: Math.round(iconSlot.width * dpr)
 
             // Exactly as many device pixels as the icon has, sampled
@@ -232,7 +297,7 @@ Item {
             y: 1 / 64
             width: pixels / dpr
             height: pixels / dpr
-            source: row.icon
+            source: row.styledIcon ? "" : row.icon // the style draws it: the system's is not asked for
             sourceSize.width: pixels / dpr
             sourceSize.height: pixels / dpr
             smooth: false
@@ -240,8 +305,21 @@ Item {
             fillMode: Image.PreserveAspectFit
         }
 
+        Loader { // the style's own file icon (none in fluent: the system's above)
+            anchors.fill: parent
+            active: row.styledIcon && !thumbnailImage.ready
+            sourceComponent: Hook {
+                part: Theme.typeIcon
+                kind: row.typeKind
+                size: iconSlot.width
+                hueIndex: row.typeKind === "folder" ? -2 : -1
+                dpr: row.dpr
+            }
+        }
+
         FileThumbnail {
             id: thumbnailImage
+            dpr: row.dpr
             source: row.thumbnail
         }
     }
@@ -252,7 +330,7 @@ Item {
         opacity: row.offline || row.missing ? 0.6 : 1
         y: row.onPixel((row.height - height) / 2)
         anchors.left: iconSlot.right
-        anchors.leftMargin: 12
+        anchors.leftMargin: row.compact ? 8 : Theme.textStart - Theme.iconInset - iconSlot.width
         anchors.right: parent.right
         anchors.rightMargin: row.trailingSpace + (metadata.visible ? metadata.width + 16 : 0)
         spacing: 4
@@ -269,12 +347,12 @@ Item {
                 // without any. An app's (and a web search's) is short, its
                 // highlights its own.
                 text: row.results && !row.isApp
-                      ? row.results.elidedHtml(row.name, row.nameMatches, parent.width, font, row.results.highlightColor)
+                      ? row.results.elidedHtml(row.name, row.nameMatches, parent.width, font, row.results.highlightColor, row.results.highlightWeight)
                       : row.nameHtml
                 textFormat: Text.StyledText
                 elide: Text.ElideRight
                 color: Theme.text
-                font.pixelSize: Theme.uiTitle
+                font.pixelSize: row.compact ? 14 : Theme.uiTitle
             }
 
             Text { // content search: where the file lives, next to its name
@@ -288,7 +366,7 @@ Item {
                 textFormat: Text.PlainText
                 elide: Text.ElideMiddle
                 color: Theme.faint
-                font.pixelSize: Theme.uiCaption
+                font.pixelSize: row.compact ? 12 : Theme.uiCaption
             }
         }
 
@@ -304,13 +382,13 @@ Item {
             width: parent.width
             text: row.contentMode ? row.snippetHtml
                 : away ? row.folderAway
-                : marked ? row.results.elidedHtml(row.folder, row.folderMatches, width, font, row.results.highlightColor)
+                : marked ? row.results.elidedHtml(row.folder, row.folderMatches, width, font, row.results.highlightColor, row.results.highlightWeight)
                 : row.folder
             textFormat: row.contentMode || marked ? Text.StyledText : Text.PlainText
             elide: row.contentMode || marked || away ? Text.ElideRight : Text.ElideMiddle
             maximumLineCount: 1
             color: row.switchError.length > 0 ? Theme.danger : Theme.subtext
-            font.pixelSize: Theme.uiCaption
+            font.pixelSize: row.compact ? 12 : Theme.uiCaption
         }
     }
 
@@ -336,7 +414,7 @@ Item {
             text: row.size
             textFormat: Text.PlainText
             color: Theme.faint
-            font.pixelSize: Theme.uiCaption
+            font.pixelSize: row.compact ? 12 : Theme.uiCaption
         }
 
         Text {
@@ -349,7 +427,7 @@ Item {
             text: row.modified
             textFormat: Text.PlainText
             color: Theme.faint
-            font.pixelSize: Theme.uiCaption
+            font.pixelSize: row.compact ? 12 : Theme.uiCaption
         }
     }
 
@@ -367,7 +445,7 @@ Item {
             : row.favorite ? (row.favoriteKeyword.length > 0 ? qsTr("收藏 · %1").arg(row.favoriteKeyword) : qsTr("收藏"))
             : row.recent ? qsTr("最近") : ""
         color: Theme.faint
-        font.pixelSize: Theme.uiCaption
+        font.pixelSize: row.compact ? 12 : Theme.uiCaption
     }
 
     Rectangle {
@@ -388,9 +466,9 @@ Item {
             text: row.plugin ? row.source : row.missing ? qsTr("已不存在")
                 : row.favorite ? (row.favoriteKeyword.length > 0 ? qsTr("收藏 · %1").arg(row.favoriteKeyword) : qsTr("收藏"))
                 : row.recent ? qsTr("最近") : row.suggestion ? qsTr("建议") : row.web ? qsTr("网页")
-                : row.place ? qsTr("系统") : qsTr("应用")
+                : row.place ? qsTr("系统") : row.source
             color: Theme.accent
-            font.pixelSize: Theme.uiCaption
+            font.pixelSize: row.compact ? 12 : Theme.uiCaption
         }
     }
 
@@ -399,14 +477,14 @@ Item {
         objectName: "resultNumberSlot"
         visible: row.reserveHintSpace && row.hint > 0
         opacity: row.hintOpacity
-        x: row.onPixel(14)
+        x: row.onPixel(Theme.tok("hintX", 14)) // centred between the style's mark (or card edge) and the icon
         width: 24
         height: row.height
 
         CenteredNumber {
             objectName: "resultNumber"
             text: row.hint > 0 ? String(row.hint) : ""
-            font.pixelSize: Theme.uiTitle
+            font.pixelSize: row.compact ? 14 : Theme.uiTitle
             font.weight: Font.Medium
             font.strikeout: row.hintTaken
             color: row.hintTaken ? Theme.faint : row.current ? Theme.accent : Theme.subtext
@@ -474,111 +552,42 @@ Item {
 
         // Inside the MouseArea so that hovering a button still hovers the row.
         // A system switch, always there, at the same width in every state.
-        ToggleSwitch {
+        // Made only for a switch's row (nearly all rows have none).
+        Loader {
             id: switchControl
+            active: row.switchReady || row.switchMade
             visible: row.switchReady
             anchors.right: parent.right
-            anchors.rightMargin: 14
+            anchors.rightMargin: Theme.actionsInset
             anchors.verticalCenter: parent.verticalCenter
-            // The volume is never "自定义": its word ("开", "关") right against
-            // the bar's gap, not 自定义's width further.
-            mixable: !row.levelShown
-            wordAlign: Text.AlignRight
-            activeFocusOnTab: false
-            checked: row.switchOn === 1
-            mixed: row.switchOn === 2
-            unknown: row.switchOn < 0
-            busy: row.switchBusy
-            onToggled: row.switchClicked(row.index)
+            sourceComponent: ToggleSwitch {
+                dpr: row.dpr
+                // The volume is never "自定义": its word ("开", "关") right against
+                // the bar's gap, not 自定义's width further.
+                mixable: !row.levelShown
+                wordAlign: Text.AlignRight
+                activeFocusOnTab: false
+                checked: row.switchOn === 1
+                mixed: row.switchOn === 2
+                unknown: row.switchOn < 0
+                busy: row.switchBusy
+                onToggled: row.switchClicked(row.index)
+            }
         }
 
-        SwitchLevel { // the volume: its number and bar
+        Loader { // the volume: its number and bar
             id: levelControl
+            active: row.levelShown || row.levelMade
             visible: row.levelShown
             anchors.right: switchControl.left
             anchors.rightMargin: 12
             anchors.top: parent.top
             anchors.bottom: parent.bottom
-            value: row.switchLevel
-            muted: row.switchOn === 0
-            opacity: switchControl.opacity // dimmed with the switch while a write takes long
-        }
-
-        Row {
-            id: actions
-            visible: row.showActions
-            anchors.right: parent.right
-            anchors.rightMargin: row.switchReady ? switchControl.width + 14 + 4 + row.levelSpace : 14
-            anchors.verticalCenter: parent.verticalCenter
-            spacing: 2
-
-            RowAction {
-                id: switchPageAction
-                visible: row.switchReady
-                glyph: "" // Settings (gear)
-                tip: qsTr("打开设置")
-                tipShortcut: "Ctrl+Enter"
-                onClicked: row.actionRequested(row.index, Launcher.Reveal)
-            }
-
-            RowAction {
-                id: adminAction
-                objectName: "adminAction"
-                visible: row.elevatable && !row.switchReady
-                glyph: "" // Admin (shield)
-                tip: qsTr("以管理员身份运行")
-                tipShortcut: "Ctrl+Shift+Enter"
-                onClicked: row.actionRequested(row.index, Launcher.RunAsAdmin)
-            }
-            RowAction {
-                id: revealAction
-                visible: !row.switchReady && (!row.isApp || row.revealable)
-                glyph: "" // OpenFolder
-                tip: row.packagedApp ? qsTr("打开安装文件夹") : qsTr("打开所在位置")
-                tipShortcut: "Ctrl+Enter"
-                onClicked: row.actionRequested(row.index, Launcher.Reveal)
-            }
-            RowAction {
-                id: terminalAction
-                visible: !row.isApp // a file's or folder's: its folder in cmd
-                glyph: "" // CommandPrompt
-                tip: qsTr("在终端中打开")
-                onClicked: row.actionRequested(row.index, Launcher.OpenTerminal)
-            }
-            RowAction {
-                id: copyAction
-                visible: row.copyable && !row.switchReady // a desktop app copies its program; a packaged one has none
-                glyph: "" // Copy
-                tip: qsTr("复制")
-                tipShortcut: "Ctrl+C"
-                onClicked: row.actionRequested(row.index, Launcher.CopyItem)
-            }
-            RowAction {
-                id: copyPathAction
-                visible: !row.settingsAction && !row.switchReady && (!row.plugin || row.pluginCopies)
-                glyph: row.plugin ? "" : "copyPath" // Copy; else drawn by Glyph: a box holding "\\.."
-                tip: row.plugin ? qsTr("复制") : row.web ? qsTr("复制网址") : row.place ? qsTr("复制打开命令") : qsTr("复制完整路径")
-                tipShortcut: row.plugin ? "Ctrl+C" : "Ctrl+Shift+C"
-                onClicked: row.actionRequested(row.index, Launcher.CopyPath)
-            }
-            RowAction {
-                id: deleteAction
-                visible: !row.isApp // uninstalling is for Windows Settings
-                glyph: "" // Delete
-                tip: row.deleteArmed ? "" : qsTr("删除（点两次，移到回收站）")
-                text: !row.deleteArmed ? ""
-                      : row.selected && row.selectedCount > 1 ? qsTr("确认删除 %1 项").arg(row.selectedCount)
-                      : qsTr("确认删除")
-                danger: row.deleteArmed
-                onClicked: {
-                    if (row.deleteArmed) {
-                        row.deleteArmed = false
-                        row.actionRequested(row.index, Launcher.Recycle)
-                    } else {
-                        row.deleteArmed = true
-                        disarmTimer.restart()
-                    }
-                }
+            opacity: switchControl.item ? switchControl.item.opacity : 1 // dimmed with the switch while a write takes long
+            sourceComponent: SwitchLevel {
+                value: row.switchLevel
+                muted: row.switchOn === 0
+                dpr: row.dpr
             }
         }
     }
@@ -586,13 +595,7 @@ Item {
     // One tip for all the buttons: it glides from one to the next. The date
     // has one too: the time in full.
     HoverTip {
-        readonly property RowAction hovered: switchPageAction.tipWanted ? switchPageAction
-                                           : adminAction.tipWanted ? adminAction
-                                           : revealAction.tipWanted ? revealAction
-                                           : terminalAction.tipWanted ? terminalAction
-                                           : copyAction.tipWanted ? copyAction
-                                           : copyPathAction.tipWanted ? copyPathAction
-                                           : deleteAction.tipWanted ? deleteAction : null
+        readonly property RowAction hovered: row.actions !== null ? row.actions.hovered : null
         // Hover handlers on items under the row's mouse area get no hover: asked of the area instead.
         function under(item: Item): bool {
             return area.containsMouse && item.contains(item.mapFromItem(area, area.mouseX, area.mouseY))

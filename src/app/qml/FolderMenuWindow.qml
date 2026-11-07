@@ -1,7 +1,6 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
-import QtQuick.Controls.Basic
 import WinShun
 
 // One non-activating window preserves the source folder's focus across pages.
@@ -16,23 +15,50 @@ Window {
     property point popupAnchor
     property rect availableArea
     readonly property var entries: page === null ? folderMenu.entries : page.children
-    readonly property int padding: 4
+    readonly property real padding: Theme.menuPadding
     readonly property int itemHeight: Theme.menuItemHeight
-    readonly property real listHeight: entries.reduce((height, entry) => height + (entry.separator === true ? 9 : itemHeight), 0)
+    readonly property real dpr: Screen.devicePixelRatio
+    readonly property int sectionHeight: Theme.menuCaptionSize + 12
+    readonly property real listHeight: entries.reduce((height, entry) => height + (entry.separator === true ? 9 : entry.heading === true ? sectionHeight : itemHeight), 0)
     readonly property int headingHeight: page === null ? 0 : itemHeight + 5
     readonly property real maxHeight: Math.min(600, availableArea.height > 0 ? availableArea.height - 16 : 600)
 
     objectName: "folderMenuWindow"
     flags: Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.WindowDoesNotAcceptFocus
     color: Theme.menuBackground
-    width: availableArea.width > 0 ? Math.min(360, availableArea.width - 16) : 360
+    readonly property int preferredWidth: Theme.metrics.size === "compact" ? 300 : Theme.metrics.size === "roomy" ? 400 : 360
+    width: availableArea.width > 0 ? Math.min(preferredWidth, availableArea.width - 16) : preferredWidth
     height: Math.min(listHeight + 2 * padding + headingHeight, maxHeight)
     onHeightChanged: if (visible) place()
-    onHighlightedChanged: Qt.callLater(ensureVisible)
+    onHighlightedChanged: {
+        flick.currentIndex = highlighted // the list's highlight follows it
+        Qt.callLater(ensureVisible)
+    }
     onEntriesChanged: {
         hoveredEntry = null
         highlighted = -1
+        flick.currentIndex = -1
         flick.contentY = 0
+    }
+
+    // The highlight under an item chosen or pointed at (the style's
+    // rowHighlight, role "menu"). A part that knows the menu (declares
+    // `role`, or `inMenu` as brand's does) draws the item's fill; one that
+    // does not (a list's highlight) leaves it to the menu's own.
+    component MenuHighlight: Hook {
+        id: highlightPart
+        readonly property bool inMenu: item !== null && ("role" in item || "inMenu" in item)
+        part: Theme.rowHighlight
+        hovered: inMenu
+        role: "menu"
+        dpr: menu.dpr
+
+        Rectangle {
+            anchors.fill: parent
+            visible: !highlightPart.inMenu
+            radius: Theme.menuItemRadius
+            color: Theme.menuHover
+        }
     }
 
     function place() {
@@ -154,11 +180,10 @@ Window {
         Accessible.role: Accessible.MenuItem
         Accessible.name: qsTr("返回")
         Accessible.onPressAction: menu.back()
-        Rectangle {
+        MenuHighlight {
+            visible: backMouse.containsMouse
             width: heading.width
             height: menu.itemHeight
-            radius: Theme.controlRadius
-            color: backMouse.containsMouse ? Theme.menuHover : "transparent"
         }
         Glyph {
             x: 12
@@ -171,8 +196,8 @@ Window {
             x: 42
             y: (menu.itemHeight - height) / 2
             width: heading.width - x - 12
-            text: menu.page === null ? "" : menu.page.text
-            font.pixelSize: Theme.fontBody
+            text: menu.page === null ? "" : (menu.page.pageTitle ?? menu.page.text)
+            font.pixelSize: Theme.menuTextSize
             font.weight: Font.DemiBold
             color: Theme.text
             elide: Text.ElideRight
@@ -184,12 +209,13 @@ Window {
             hoverEnabled: true
             onClicked: menu.back()
         }
-        Rectangle {
+        Hook { // the style's seam, edge to edge
             anchors.bottom: parent.bottom
             x: -menu.padding
             width: menu.width
-            height: Theme.edge(Screen.devicePixelRatio)
-            color: Theme.divider
+            height: Theme.edge(menu.dpr)
+            part: Theme.separator
+            dpr: menu.dpr
         }
     }
     ListView {
@@ -203,42 +229,50 @@ Window {
         clip: true
         reuseItems: true
         model: menu.entries
-        ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+        // One highlight for the list, under the item chosen or pointed at:
+        // it jumps, or slides as the style says (Theme.rowSlide). Not
+        // managed by the view's own current item: menu.highlighted is.
+        currentIndex: -1
+        highlightMoveDuration: Theme.rowSlide
+        highlightMoveVelocity: -1
+        highlightResizeDuration: 0
+        highlightResizeVelocity: -1
+        highlight: Item {
+            width: flick.width
+            visible: flick.currentItem !== null && menu.highlighted >= 0
+            MenuHighlight { anchors.fill: parent }
+        }
         delegate: Item {
             id: entry
             required property var modelData
             required property int index
             readonly property bool separator: modelData.separator === true
             readonly property bool disabled: modelData.disabled === true
+            readonly property bool section: modelData.heading === true
             readonly property bool branch: modelData.children !== undefined
             readonly property string tooltip: modelData.tooltip ?? ""
             readonly property real trailingWidth: Math.min(detail.implicitWidth, 96) + (branch ? 20 : 0)
             objectName: "folderMenuEntry" + index
             width: flick.width
-            height: separator ? 9 : menu.itemHeight
+            height: separator ? 9 : section ? menu.sectionHeight : menu.itemHeight
             enabled: !disabled
             ListView.onPooled: {
                 if (menu.hoveredEntry === entry)
                     menu.hoveredEntry = null
             }
-            Accessible.role: Accessible.MenuItem
+            Accessible.role: section ? Accessible.Heading : Accessible.MenuItem
             Accessible.name: modelData.text ?? ""
             Accessible.description: tooltip
             Accessible.ignored: separator
             Accessible.onPressAction: menu.activate(entry.index)
-            Rectangle {
+            Hook { // the style's seam, edge to edge
                 visible: entry.separator
                 anchors.verticalCenter: parent.verticalCenter
                 x: -menu.padding
                 width: menu.width
-                height: Theme.edge(Screen.devicePixelRatio)
-                color: Theme.divider
-            }
-            Rectangle {
-                visible: !entry.separator && menu.highlighted === entry.index
-                anchors.fill: parent
-                radius: Theme.controlRadius
-                color: Theme.menuHover
+                height: Theme.edge(menu.dpr)
+                part: Theme.separator
+                dpr: menu.dpr
             }
             Image {
                 id: icon
@@ -253,7 +287,7 @@ Window {
                 fillMode: Image.PreserveAspectFit
             }
             Glyph {
-                visible: !entry.separator && !icon.visible
+                visible: !entry.separator && !entry.section && !icon.visible
                 x: 13
                 anchors.verticalCenter: parent.verticalCenter
                 glyph: entry.modelData.glyph ?? ""
@@ -261,13 +295,13 @@ Window {
                 color: entry.disabled ? Theme.faint : Theme.text
             }
             Text {
-                x: 42
+                x: entry.section ? 12 : 42
                 width: Math.max(0, entry.width - x - 14 - entry.trailingWidth - 12)
                 anchors.verticalCenter: parent.verticalCenter
                 text: entry.modelData.text ?? ""
                 elide: Text.ElideRight
                 color: entry.disabled ? Theme.faint : Theme.text
-                font.pixelSize: Theme.fontBody
+                font.pixelSize: entry.section ? Theme.menuCaptionSize : Theme.menuTextSize
             }
             Text {
                 id: detail
@@ -278,7 +312,7 @@ Window {
                 text: entry.modelData.detail ?? ""
                 elide: Text.ElideRight
                 color: Theme.faint
-                font.pixelSize: Theme.fontCaption
+                font.pixelSize: Theme.menuCaptionSize
             }
             Glyph {
                 visible: entry.branch
@@ -306,9 +340,20 @@ Window {
             }
         }
     }
-    HoverTip {
+    MenuPathTip {
+        host: menu
+        availableArea: menu.availableArea
         target: menu.hoveredText.length > 0 ? menu.hoveredEntry : null
         text: menu.hoveredText
     }
-    WindowEdge {}
+    ListScrollBar {
+        dpr: menu.dpr
+        visible: flick.contentHeight > flick.height
+        flickable: flick
+        x: menu.width - width
+        y: flick.y
+        height: flick.height
+    }
+
+    WindowEdge { body: false } // the menu's colour is the window's
 }

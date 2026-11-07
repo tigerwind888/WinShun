@@ -13,6 +13,8 @@
 //     [--web-form] [--compact]: exercise adding/editing web shortcuts, focus,
 //     validation and scrolling at 920x720 or the minimum 760x420 window.
 //     Add --renderer d3d11 for the GPU path (default: software).
+//     --style-picker checks all four styles, keyboard/pointer selection,
+//     persistence, and the minimum/default/wide settings layouts.
 //     --composited-frame shows Windows 10's square frame on any OS.
 //     --wsl-folders checks WSL folder identity and renders stopped/running
 //     cards; --english and --compact cover translation and minimum size.
@@ -32,7 +34,8 @@
 //   WinShun.exe --preview-results <folder> [--dark] [--scale 1.5] [--size compact|standard|roomy]
 //     The real result model and rows over made-up folders, with D3D11 native
 //     text; hint modes and local Qt modifier events. --rows-source <folder>
-//     compares a saved ResultRow.qml and IconNumber.qml from before an edit.
+//     compares a saved ResultRow.qml and IconNumber.qml from before an edit;
+//     --picked shoots rows 2 and 5 picked (the highlight of rows not current).
 //     --file-metadata --gallery-image <demo.png> also exports the production
 //     search panel and resized clipboard with demo entries for screenshots.
 //     --file-metadata --file-gallery checks the real Main.qml gallery with
@@ -50,6 +53,11 @@
 //     checks the continuation in the box, panel and gallery without busy waits.
 //     --content-pane checks all five detail tabs with real text/spreadsheet
 //     fixtures, selection races, filtering, report scopes and native preview.
+//     --foreground-memory measures private bytes, working sets, object counts,
+//     search and panel-opening times using Main.qml and 2,000 fixture names.
+//     --require-lazy-panel also checks deferred creation and reuse;
+//     --preload-panel makes the panel ahead, hidden, as the app does. Windows
+//     stay offscreen and inactive; no global input or working-set trimming.
 //
 //   WinShun.exe --preview-ai-cards <folder> [--dark] [--scale 1.5]
 //     The screens for AI changing settings (SettingsConfirm.qml, SettingsNotice.qml)
@@ -64,6 +72,10 @@
 //     is tst_keyrouter.exe renamed SearchHost.exe; native uses the real Start
 //     menu. Neither mode writes the system clipboard or changes global hotkeys.
 //     [--runtime-plugins <folder>] [--settle-ms 3000] [--renderer d3d11]
+//     --live [--style …] [--dark] keeps it running on the real desktop at the
+//     screen's own scale, beside the user's Win顺, with a few made-up clips,
+//     taking commands from <folder>\cmd.txt until <folder>\stop exists
+//     (runLive in Preview.cpp): a real-window audit without stopping theirs.
 //     A separate production startup probe: real App::start, temporary profile,
 //     process-local HKCU redirection, no global shortcuts/service/shell setup.
 //     Optional clipboard recording reads but never changes the clipboard;
@@ -80,7 +92,8 @@
 //     --folder-typing opens a test-owned Explorer window over temporary files,
 //     exercises the real App/QML search, avoidance and focus-preserving selection,
 //     checks same-count result replacements, cancellation and nested results,
-//     and closes only that fixture.
+//     the box in the file list's corner once that window is too large to keep
+//     clear of (GitHub #203), and closes only that fixture.
 //     --file-dialog-window <HWND> --file-dialog-pid <PID>
 //     --file-dialog-sample <fixture.blend> --file-dialog-state <observer.json>
 //     Opt-in real dialog-bar search/selection test against an isolated Blender

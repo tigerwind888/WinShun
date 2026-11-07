@@ -1,5 +1,7 @@
 #include "KeyRouter.h"
 
+#include "QtKeys.h"
+
 #include <QtLogging>
 
 #include <array>
@@ -63,65 +65,6 @@ bool typesCharacter(UINT vk)
         || vk == VK_SPACE || vk == VK_PACKET;
 }
 
-// The key as Qt names it; 0 for those named after the character they type.
-int qtKey(UINT vk, bool extended, bool shift)
-{
-    if ((vk >= 'A' && vk <= 'Z') || (vk >= '0' && vk <= '9'))
-        return static_cast<int>(vk); // Qt::Key_A… and Qt::Key_0… have the same codes
-    if (vk >= VK_NUMPAD0 && vk <= VK_NUMPAD9)
-        return Qt::Key_0 + static_cast<int>(vk - VK_NUMPAD0);
-    if (vk >= VK_F1 && vk <= VK_F24)
-        return Qt::Key_F1 + static_cast<int>(vk - VK_F1);
-    switch (vk) {
-    case VK_SHIFT:
-    case VK_LSHIFT:
-    case VK_RSHIFT:
-        return Qt::Key_Shift;
-    case VK_CONTROL:
-    case VK_LCONTROL:
-    case VK_RCONTROL:
-        return Qt::Key_Control;
-    case VK_MENU:
-    case VK_LMENU:
-    case VK_RMENU:
-        return Qt::Key_Alt;
-    case VK_BACK:
-        return Qt::Key_Backspace;
-    case VK_TAB:
-        return shift ? Qt::Key_Backtab : Qt::Key_Tab; // as Qt spells Shift+Tab
-    case VK_RETURN:
-        return extended ? Qt::Key_Enter : Qt::Key_Return; // the number pad's is extended
-    case VK_ESCAPE:
-        return Qt::Key_Escape;
-    case VK_SPACE:
-        return Qt::Key_Space;
-    case VK_PRIOR:
-        return Qt::Key_PageUp;
-    case VK_NEXT:
-        return Qt::Key_PageDown;
-    case VK_END:
-        return Qt::Key_End;
-    case VK_HOME:
-        return Qt::Key_Home;
-    case VK_LEFT:
-        return Qt::Key_Left;
-    case VK_UP:
-        return Qt::Key_Up;
-    case VK_RIGHT:
-        return Qt::Key_Right;
-    case VK_DOWN:
-        return Qt::Key_Down;
-    case VK_INSERT:
-        return Qt::Key_Insert;
-    case VK_DELETE:
-        return Qt::Key_Delete;
-    case VK_APPS:
-        return Qt::Key_Menu;
-    default:
-        return 0;
-    }
-}
-
 // Whether the clipboard window acts on the key (ClipboardPage.qml, its
 // search field's TextInput); the rest goes on to the program in front.
 // `numberKeys`: the modifier that pastes a row with a digit.
@@ -180,6 +123,7 @@ bool wanted(const KeyRouter::Key& key, Qt::KeyboardModifier numberKeys)
         case 'X':
         case 'Y':
         case 'P':
+        case 'G': // find a clipboard group
             return !shift; // Ctrl+Shift+V and the like stay free for other programs' hotkeys
         case 'Z':
             return true; // undo, redo
@@ -244,6 +188,11 @@ void sendMask(ULONG_PTR mark = kOwnInput)
 }
 
 } // namespace
+
+bool KeyRouter::wantsKey(const Key& key, Qt::KeyboardModifier numberKeys, Policy policy)
+{
+    return policy == Policy::Menu ? wantedByMenu(key) : wanted(key, numberKeys);
+}
 
 KeyRouter::KeyRouter(
     HWND target, HWND window, Callbacks callbacks, Qt::KeyboardModifier numberKeys, unsigned ownDigits, Policy policy)
@@ -475,7 +424,7 @@ LRESULT KeyRouter::handleKey(int code, WPARAM message, LPARAM lParam)
         return next();
     }
     const Key key = translate(event, true, false);
-    if (!(m_policy == Policy::Menu ? wantedByMenu(key) : wanted(key, m_numberKeys))) {
+    if (!wantsKey(key, m_numberKeys, m_policy)) {
         count(NotWanted);
         return next();
     }
@@ -595,7 +544,7 @@ KeyRouter::Key KeyRouter::translate(const KBDLLHOOKSTRUCT& event, bool press, bo
     const bool shift = key.modifiers.testFlag(Qt::ShiftModifier);
     const bool ctrl = key.modifiers.testFlag(Qt::ControlModifier);
     const bool alt = key.modifiers.testFlag(Qt::AltModifier);
-    key.key = qtKey(vk, (event.flags & LLKHF_EXTENDED) != 0, shift);
+    key.key = qtKeyOf(vk, (event.flags & LLKHF_EXTENDED) != 0, shift);
     if (vk >= VK_NUMPAD0 && vk <= VK_DIVIDE)
         key.modifiers |= Qt::KeypadModifier;
     // What it types, in the keyboard layout of the program in front (the

@@ -1,6 +1,6 @@
 # Win顺 插件开发
 
-官方原生可选插件的最低宿主版本各自写在清单的 `minWinShun` 里（比如截图 0.18.0、资源管理器标签页 0.19.0），由主仓库发布脚本生成 `.wsplugin`，继续在现有 WinShun-plugins 仓库分发，条目为 `bundled: false`。内容提供者在“全部”里的前几行排在第一屏（前 3 条排在前 5 个名称结果之后），从 Win顺 0.19.0 起。插件库只对该仓库中逐一指定的入口程序及截图 DLL 开放原生包规则，社区投稿限制不变。已发布同版本包不得替换内容，改动时升插件版本，详见插件仓库的[维护者说明](https://github.com/LingCore/WinShun-plugins/blob/main/CONTRIBUTING.md#维护者)。
+官方原生可选插件的最低宿主版本各自写在清单的 `minWinShun` 里（比如截图 0.18.0、资源管理器标签页 0.19.0），由主仓库发布脚本生成 `.wsplugin`，继续在现有 WinShun-plugins 仓库分发，条目为 `bundled: false`。内容提供者在“全部”里的前几行排在第一屏（前 3 条排在前 5 个名称结果之后），从 Win顺 0.19.0 起。官方原生包继续按该仓库的入口白名单分发；社区 exe/dll 包按本文的未审核原生类别收录（待配套版本发布）。已发布同版本包不得替换内容，改动时升插件版本，详见插件仓库的[维护者说明](https://github.com/LingCore/WinShun-plugins/blob/main/CONTRIBUTING.md#维护者)。
 
 Win顺 的插件给搜索框加关键字命令、把结果混进列表。界面和插件一般都以普通用户权限运行（只有带 `elevated` 的插件，在 Win顺 以管理员身份运行、且你确认过时，才以管理员身份运行，见“权限”），读取 NTFS 索引的是独立服务；插件崩了、慢了都不拖累主程序。三种写法，一份协议：
 
@@ -47,6 +47,8 @@ English version: [plugins.en.md](plugins.en.md).
 ```
 
 输入 `npm lodash`，Enter 打开搜索页；只输入 `npm `（带空格）打开首页。`run` 还可以是 `{"program": "C:\\…\\code.exe", "args": "%s"}`、`{"folder": "%USERPROFILE%\\Downloads"}`、`{"search": {"query": "ext:pdf %s", "scope": "files"}}`（等于在搜索框里输入它），或 `{"items": [{"id": …, "title": …, "open": {"path": …}}]}`（固定清单，输入的词用来筛选）。
+
+零代码路径以 `%USERPROFILE%\Desktop`、`Documents`、`Downloads`、`Pictures`、`Music`、`Videos` 开头时，按 Windows 已知文件夹解析到当前设置的位置，支持迁移到其他盘、OneDrive 和网络目录，也支持后接子路径。`%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup` 同样读取 Windows 当前的启动文件夹。`run.folder`、`run.program`、工作目录和固定清单的 `open.path`、含变量的副标题使用相同规则。直接填写的绝对路径按填写的地址打开。
 
 ### 2. Python 一次性：几行脚本
 
@@ -110,9 +112,9 @@ Start-WinShunPlugin -Name 'me.ps' -OnQuery {
 
 | 文件 | 一次性 | 常驻 |
 |---|---|---|
-| `winshun.py` | `query()`、`settings()`、`item(...)`、`reply(items)`、`is_action()` / `action_request()` / `effects(...)` | `serve(on_query, on_action=None, on_settings=None)`；处理函数收到 `(q, plugin)`，`plugin.partial()`、`plugin.log()`、`plugin.notify_user()`、`plugin.toast()`、`plugin.progress()`、`plugin.refresh()`、`plugin.tool(name, **args)`、`plugin.settings` |
-| `WinShun.psm1` | `Get-WinShunQuery`、`Get-WinShunSettings`、`New-WinShunItem`、`Send-WinShunReply`、`Send-WinShunEffects` | `Start-WinShunPlugin -OnQuery {…} -OnAction {…}`、`Send-WinShunPartial`、`Write-WinShunLog`、`Send-WinShunNotify`、`Send-WinShunToast`、`Send-WinShunProgress`、`Invoke-WinShunTool` |
-| `winshun.h` | `winshun::onceQuery()`、`onceSettings()`、`once(items)`、`onceAction()` / `onceEffects()` | 派生 `winshun::Plugin`，重写 `query()`（和 `queryResult()`、`action()`、`settingsChanged()`、`initialized()`、`shuttingDown()`、`appearanceChanged()`），`serve()`；成员 `partial()`、`log()`、`notifyUser()`、`toast()`、`progress()`、`refresh()`、`tool()`、`settings()`；这些成员可以在别的线程里调（发送有锁） |
+| `winshun.py` | `query()`、`settings()`、`item(...)`、`reply(items)`、`is_action()` / `action_request()` / `effects(...)` | `serve(on_query, on_action=None, on_settings=None, on_details=None)`；处理函数收到 `(q, plugin)`，`plugin.partial()`、`plugin.log()`、`plugin.notify_user()`、`plugin.toast()`、`plugin.progress()`、`plugin.refresh()`、`plugin.tool(name, **args)`、`plugin.settings` |
+| `WinShun.psm1` | `Get-WinShunQuery`、`Get-WinShunSettings`、`New-WinShunItem`、`Send-WinShunReply`、`Send-WinShunEffects` | `Start-WinShunPlugin -OnQuery {…} -OnAction {…} -OnDetails {…}`、`Send-WinShunPartial`、`Write-WinShunLog`、`Send-WinShunNotify`、`Send-WinShunToast`、`Send-WinShunProgress`、`Invoke-WinShunTool` |
+| `winshun.h` | `winshun::onceQuery()`、`onceSettings()`、`once(items)`、`onceAction()` / `onceEffects()` | 派生 `winshun::Plugin`，重写 `query()`（和 `queryResult()`、`action()`、`settingsChanged()`、`initialized()`、`shuttingDown()`、`appearanceChanged()`、`details()`），`serve()`；成员 `partial()`、`log()`、`notifyUser()`、`toast()`、`progress()`、`refresh()`、`tool()`、`settings()`；这些成员可以在别的线程里调（发送有锁） |
 
 effects 的辅助：Python `winshun.hide() / keep() / notify(text) / copy(text) / set_query(text) / open_path(path) / open_url(url) / replace(items)`；PowerShell `New-WinShunEffect -Hide / -Keep / -Notify / -Copy / -SetQuery / -OpenPath / -OpenUrl / -Replace`；C++ `winshun::effect::hide()` 等。
 
@@ -185,6 +187,32 @@ effects 的辅助：Python `winshun.hide() / keep() / notify(text) / copy(text) 
 
 插件 ID 的 `.data` 结尾留给数据文件夹，不用于新插件；更新使用独立临时备份，保留其他插件和已有数据目录。旧版本留下的数据目录若含另一个插件的 `plugin.json`，删除数据会停止并说明冲突。
 
+## 原生插件的共享 Qt 契约（最低 0.22.0）
+
+原生插件可显式复用 Win顺 的 Qt，省去包内重复分发的运行时。缺省行为不变，未声明的插件仍自行部署依赖。
+
+```json
+{
+  "minWinShun": "0.22.0",
+  "runtime": {
+    "mode": "resident",
+    "program": "my-tool.exe",
+    "qt": "host",
+    "qtVersion": "6.12.0"
+  }
+}
+```
+
+- 只支持 Windows x64、MSVC、Release 动态链接 Qt；主次版本必须与宿主一致。可只写 `6.12`，写 `6.12.1` 则要求宿主补丁版本至少为 1。同一主次版本的后续补丁可用；宿主升级主次版本后，插件需更新契约并重新验证。
+- 保证 Qt Core、Gui、Qml、Quick，以及 QML `QtQuick`、`QtQuick.Controls.Basic`、`QtQuick.Layouts`；其他模块不在此契约内。插件仍独立进程、独立 QML 引擎，主要减少下载和磁盘成本，不承诺同比减少内存。
+- runner 在 `CreateProcess` 前为这个子进程配置 `PATH`、Qt 插件路径和 QML 导入路径，提供 `WS_QT_DIR`、`WS_QT_QML_DIR`，默认 Controls 样式为 Basic。普通静态导入 Qt 的 exe 也可直接启动，无需 `/DELAYLOAD`。不会修改系统、用户或 Win顺 主进程的环境变量。
+- 不要在包内混入另一版 Qt DLL、平台插件、QML 模块或覆盖共享路径的 `qt.conf`；Windows 优先搜索 exe 自身目录。自有的非 Qt 依赖照常放入插件目录。
+- 启动前检查版本及宿主部署是否完整；不兼容时显示具体原因和更新/重装建议，不尝试启动后再等待崩溃。
+- 首版不支持 `elevated` 与共享 Qt 同时使用，清单会明确报错。需要管理员权限的插件继续自带运行时；这里不静默降权，也不从可写便携目录加载管理员代码。
+- 社区 exe/dll 包可按“未审核的原生插件”投稿。插件库标明审核状态，安装及每次更新需确认；签名或 SHA256 校验只证明分发完整性，不代表代码已审核。
+
+契约参考：[Qt Windows 部署](https://doc.qt.io/qt-6/windows-deployment.html)、[Qt 插件版本检查](https://doc.qt.io/qt-6/deployment-plugins.html)、[Windows DLL 搜索顺序](https://learn.microsoft.com/en-us/windows/win32/dlls/dynamic-link-library-search-order)。
+
 ## 协议
 
 ### 一次性（once）
@@ -211,6 +239,8 @@ Win顺 → 插件：
 {"jsonrpc":"2.0","id":3,"method":"action","params":{"command":"kill","action":"kill","item":{…原样…},"text":"note"}}
 ← {"jsonrpc":"2.0","id":3,"result":{"effects":[{"type":"notify","text":"已结束 notepad"},{"type":"hide"}]}}
 {"jsonrpc":"2.0","id":4,"method":"action","params":{"command":"send","action":"files","trigger":"files","files":["C:\\…\\a.jpg","D:\\相册"],"item":{},"text":""}}   （右键菜单的 files 触发）
+{"jsonrpc":"2.0","id":6,"method":"details","params":{"item":{…原样…},"text":"invoice"}}   （内容详情、预览要看不是文件的行，见下面“内容详情与预览”）
+← {"jsonrpc":"2.0","id":6,"result":{"text":"From: …\nSubject: …\n\n…"}}  或  {"result":{"file":"C:\\…\\<id>.data\\details\\mail.msg"}}
 {"jsonrpc":"2.0","method":"settingsChanged","params":{"settings":{…}}}
 {"jsonrpc":"2.0","id":5,"method":"shutdown"}  ← {"jsonrpc":"2.0","id":5,"result":{}} 然后退出
 ```
@@ -241,7 +271,7 @@ C++ SDK 的 `initialized()` 在回答完 `initialize` 后调一次：`eager` 插
 截图插件 `winshun.capture` 就是这样一个插件：它自己开窗口、自己注册快捷键，Win顺 只在几个地方把事情交给它。下面这些都要常驻（`runtime.mode` 是 `resident`）并要 `ui` 权限，否则 manifest 校验不过。
 
 ```
-{"jsonrpc":"2.0","method":"appearance","params":{"locale":"zh","theme":"dark","themeSetting":"system","corners":"round","uiSize":"standard","transparency":"on","renderer":"d3d11"}}
+{"jsonrpc":"2.0","method":"appearance","params":{"locale":"zh","theme":"dark","themeSetting":"system","corners":"round","uiStyle":"brand","uiSize":"standard","transparency":"on","renderer":"d3d11","nativeLook":{"style":"brand","dark":true,"rounded":true,"menuRadius":10,"background":"#ff1d1d20","text":"#fff2f2f5","accentFill":"#ffa8402c","…":"…"}}}
 {"jsonrpc":"2.0","id":6,"method":"trayMenu","params":{}}
 ← {"jsonrpc":"2.0","id":6,"result":{"items":[{"id":"capture","title":"开始截图\tCtrl+Alt+A"},{"title":"延时截图","children":[{"id":"delay3","title":"3 秒","checked":true}]},{},{"id":"closePins","title":"关闭全部贴图","enabled":false}]}}
 {"jsonrpc":"2.0","method":"menu","params":{"id":"capture"}}
@@ -255,6 +285,7 @@ C++ SDK 的 `initialized()` 在回答完 `initialize` 后调一次：`eager` 插
 增强 OCR 由主程序按需安装，剪贴板与截图插件共用。宿主提供 `WS_COMPONENTS_DIR`，指向当前用户或便携配置的 `components`；不要往该目录写插件私有数据。`show_ocr_setup` 应用工具需要已有的 `ui` 权限，只打开设置中的安装入口，不替插件联网或自动下载。截图仍兼容程序旁边的旧版 / 离线版识别文件。
 
 - **外观**：`initialize` 的 `appearance` 和之后的 `appearance` 通知，是 Win顺 的界面语言和"外观"设置（主题设置、圆角、界面大小、透明效果、渲染方式）。插件的窗口照着画，就和 Win顺 一个样子；变了才发，只发给有 `ui` 权限的插件。通知里还有 `theme`，是正在用的主题（`light` / `dark`）：主题设成“跟随系统”时，Windows 换了深浅色设置没变，也会发。`winshun.h` 收到后 `locale()`、`theme()`、`appearance()` 就是新的，再调 `appearanceChanged()`。
+  - `uiStyle` 是界面风格（`fluent` / `brand` / `tactile`）。`nativeLook` 是这个风格算好的颜色和圆角，给不用 Win顺 QML 自己画界面的插件照着画（休息提醒就是这样）；旧版 Win顺 没有这一项，Win顺 刚启动、界面还没建好的那一下也可能没有，没有就按自己原来的样子画。颜色是 `#AARRGGBB` 字符串；圆角是逻辑像素，已经按"圆角/直角"设置算过（直角时都是 0）；`rounded` 是圆角设置本身，插件自己算的胶囊形（高度的一半）直角时也要变成 0；`dark` 是这套颜色对应的深浅色。字段：`style` `dark` `rounded`；圆角 `cardRadius` `controlRadius` `largeControlRadius` `smallControlRadius` `menuRadius` `menuItemRadius` `menuPadding`；颜色 `background` `layer` `page` `windowEdge` `divider` `text` `subtext` `faint` `hover` `pressed` `tagFill` `control` `controlHover` `controlBorder` `inputFocused` `menuBackground` `menuHover` `menuEdge` `accent`（字、图标、线）`accentFill`（白字底）`accentLine` `accentText`（彩色底上的字）`textSelection` `caret`（风格自己的光标色，没有时透明）`danger` `dangerFill`。开着透明效果时 `layer`、`hover` 等可能是半透明的，画在不透明的底上要先叠到 `background` 上。以后可能加字段，不认识的忽略。
 - **托盘子菜单**（`trayMenu`）：右键按下托盘图标时，Win顺 发 `trayMenu`，松开时菜单弹出，所以要马上回答（几毫秒）；赶不上的，下次弹菜单时用。子菜单在剪贴板那几项下面，标题是 manifest 的 `trayMenu`。`items` 每项 `{id, title, checked, enabled, children}`，`{}` 是分隔线，最多两层；`title` 里 `\t` 后面的字靠右显示（快捷键）；没有项就不出这个子菜单。用户选了一项，Win顺 发 `menu` 通知，`id` 是那一项的。
 - **图片**（`pictures`）：用户在剪贴板历史的图片上、结果里的图片文件上选"贴到屏幕"（`pin`）或"编辑"（`edit`），Win顺 发 `picture`。`file` 是图片文件；来自剪贴板历史时还有 `clipId`，有标注工程时有 `project`，`screenshot` 表示它是截的图。这些文件是 Win顺 的：读，不要改、不要删。几个插件都声明同一项时，交给第一个开着的。
 - **设置窗口**（`settingsWindow`）：卡片上的"设置"按钮发 `showSettings`；插件没在运行时按钮提示稍后再试。
@@ -273,6 +304,7 @@ C++ SDK 的 `initialized()` 在回答完 `initialize` 后调一次：`eager` 插
 | `clipboard_copy_entry` | `clipboard:write` | `id` | 剪贴板历史里的一条重新放到剪贴板，并移到最前 |
 | `show_launcher` | `ui` | `text` | 打开搜索框并填上这段文字 |
 | `web_search` | `winshun:open` | `text` | 用 Win顺 的默认网页搜索搜这段文字 |
+| `open_url` | `winshun:open` | `url` | 用默认浏览器（或邮件程序）以用户的普通权限打开一个 `http`、`https` 或 `mailto` 链接；`open_item` 只开文件和文件夹。0.21.0 起 |
 
 ### 系统开关提供者
 
@@ -303,6 +335,7 @@ C++ SDK 的 `initialized()` 在回答完 `initialize` 后调一次：`eager` 插
   "preview": {"text": "…"},          // 悬停提示
   "actions": [{"id": "kill", "title": "结束", "key": "Enter"}],   // 覆盖命令级的
   "valid": true,                     // false：Enter 无效（提示行）
+  "details": true,                   // 不是文件的行：内容详情和预览要看它时，Win顺 发 details 来问（只对常驻插件；见“内容详情与预览”）
   "data": {"pid": 1234}              // 不透明，随 action 原样回来；AI 看不到它
 }
 ```
@@ -333,6 +366,32 @@ item 可选提供 `modified`、`created`（带时区的 ISO 8601 字符串或 Un
 在命令中声明 `"contentSearch": true`，可同时保留 `keyword`。宿主只在“内容”，或已开启内容检索的“全部”中派发 `query`，此时 `trigger` 为 `content`，`text` 为内容关键词；文件／文件夹搜索和独占的关键词列表不派发。关键词查询仍按原协议执行。此接口在 0.17.0 之后的版本才有；旧宿主不派发内容查询，只能用命令关键词。官方图片文字搜索插件打包时把 `minWinShun` 设为构建它的主程序版本。
 
 `filters` 除面板条件外，还包含 `contentEnabled`、`contentWords`、`contentPick`（选定目录）、`excludedExtensions`、`excludedFileNames`（通配符）。提供者应按整个文件验证关键词，返回稳定 id、原文件的 `open.path`、日期／大小及命中摘要。内容结果在“内容”里排在原生结果之后；在“全部”里，所有提供者的前 3 行排在前 5 个名称结果之后（最近、收藏和与输入完全同名的应用之后），其余仍在最后；重复应答或名称列表增长时，已有行的位置不变。每个提供者最多 200 行，不占普通推送的 3／6 行配额；已有原生文件结果会去重。空结果返回空数组，避免把设置提示混进内容列表。可参考 [图片文字搜索插件](../src/ocr-search-plugin/package/README.md)。
+
+### 内容详情与预览（#202）
+
+“内容”面板右侧的内容详情（摘要、匹配、文本、预览、报告）和预览窗（Alt+P、空格）也显示插件的行。
+
+**会打开文件的行**：`open.path` 是普通文件（盘符或 `\\服务器\共享` 开头的完整路径，没有 `args`、`cwd`）时，窗格和预览就把这一行当成这个文件，和文件自己的行一样：匹配高亮、文本、预览，摘要和报告也算它（列表里已有同一个文件时不重复）。内容检索提供者的行本来就是这样，不用改。在窗格或预览里点“打开”和在这一行按 Enter 一样，照样受 `processes` 权限约束。
+
+**不是文件的行**（一封邮件、一条记录）：常驻插件在 item 里写 `"details": true`。内容详情开着（匹配、文本、预览页）或预览窗开着、选中这一行时，Win顺 发一次请求：
+
+```
+{"jsonrpc":"2.0","id":7,"method":"details","params":{"item":{…原样…},"text":"invoice"}}
+← {"jsonrpc":"2.0","id":7,"result":{"text":"From: …\nSubject: …\n\n…"}}
+← {"jsonrpc":"2.0","id":7,"result":{"file":"C:\\Users\\…\\<id>.data\\details\\mail.msg"}}
+```
+
+`item` 是这一行的 item（和 `action` 里的一样），`text` 是输入的文字（和 `action` 的一样；内容搜索里是内容关键词）。回答到了，匹配、文本、预览照常显示，标题是这一行的标题。
+
+- `text`：最多用前 1,000,000 个字符，多的截掉，窗格标明“仅显示部分内容”。预览页提示到“文本”页看；预览窗显示开头的文字。
+- `file`：必须是插件自己数据文件夹（`initialize` 的 `dataDir`，即 `<id>.data`）里的普通文件。Win顺 打开它看它真正在哪里：相对路径、`..`、共享、设备路径、文件夹、指到文件夹外面的符号链接或 junction、还有别的硬链接的文件，都不认。读取照样受内容大小上限约束；预览用系统的预览处理程序（比如 .msg 用 Outlook 装的那个）。文件别马上删：同一行再选中时 Win顺 直接用上次的回答。
+- 两个都给时先用 `file`，`file` 不合格再用 `text`。都没有、回答出错（包括 SDK 回的“方法不存在”）或超过 `timeoutMs` 没回答时，窗格写“无法获取详情”，界面不等它；再选中这一行、或列表换了新结果时重问。
+- 节奏：键盘停下 120 毫秒才问；一次只有一个请求在路上，答完再问最新选中的那一行，过时的回答不会顶掉当前行（它留着备用）。回答按插件、item 和文字记在内存里（合计约 16 MB）。插件没在运行时不会为此启动它，直接显示“无法获取详情”。
+- 只认常驻插件；一次性和零代码插件的 `details` 忽略。同时有 `open.path` 和 `"details": true` 的行，以 `details` 为准。窗格里点“打开”或双击匹配行，等于在这一行按 Enter。摘要另外写“插件结果（不是文件，不计入报告）：N”。
+- 内容检索提供者（`contentSearch`）的结果原本只保留有 `open.path` 的行；声明了 `"details": true` 的行在“内容”里也保留（排序、去重照旧），别的没有文件的行（设置提示之类）仍不显示。
+- 不要新权限：Win顺 只读插件自己数据文件夹里的文件，显示给用户，不交给别的程序。
+- 兼容：宿主会发 `details` 时，`initialize` 的 `capabilities.details` 是 true。旧版 Win顺 不认识 `details` 字段，照常显示这一行，不会来问，不用为它写 `minWinShun`。
+- SDK：Python `item(..., details=True)`，`serve(on_query, on_details=…)`，`on_details(item, text, plugin)` 返回 `{"text": …}`、`{"file": …}` 或一个字符串（就是文字）；PowerShell `New-WinShunItem -Details`，`Start-WinShunPlugin -OnDetails { param($d, $plugin) … }`（`$d.item`、`$d.text`），返回值同上；C++ `Item(...).withDetails()`，重写 `std::optional<Json> details(const Json& item, const std::string& text)`。
 
 ### 图标
 
@@ -411,7 +470,7 @@ wsbench --mcp-host --plugins D:\plugins                                 # 把插
 - **超时 / 没有响应。** 一次查询的预算是 `timeoutMs`（常驻 1500、一次性 3000，最大 10000）；慢的工作先发 `query/partial` 或 `winshun/progress`，大头放后台线程。起进程本身约 15 ms（Defender 的开销），Python 几十毫秒，PowerShell 几百毫秒——所以 PowerShell 用常驻。
 - **常驻插件 print 了没反应。** 管道上 stdout 默认是块缓冲：每行后 flush（SDK 都做了；Python 还加了 `-u`）。
 - **Enter 什么都不做。** 行有 `"valid": false`，或者命令没有 `actions` 而插件的 `action` 没回。有 `open` 的行由 Win顺 自己打开，不发 `action`。
-- **想写文件。** 写 `WS_DATA_DIR`（`<id>.data`，卸载时问用户要不要一起删）；`strict` 沙箱的插件只能写那里。
+- **想写文件。** 写 `WS_DATA_DIR`（`<id>.data`，卸载时问用户要不要一起删）；`strict` 沙箱的插件只能写那里；它的 `TEMP`／`TMP` 指向 `<id>.data\tmp`（0.21 起；用户自己的临时文件夹低完整性写不了，SQLite 这类要临时文件的库会报 “unable to open database file”）。
 - **图标不显示。** 只认 PNG / JPG / ICO，路径要在插件文件夹里；SVG 不支持。
 - **关键字被占。** 和设置里"网页搜索"的关键字或别的插件撞了，用户设的赢，卡片上写明；改一个或让用户改。
 - **插件目录能被改吗。** `normal` 插件就是以你的身份运行，你能改的它都能改——这是开发者模式"改了脚本自动重载"的前提。要防插件改自己，用 `strict`。
